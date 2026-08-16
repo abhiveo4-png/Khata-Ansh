@@ -1,0 +1,6 @@
+{
+  "name": "TeleExpense AI - Smart Telegram Expense & Income Tracker",
+  "description": "Automatically track, categorize, and manage income and expenses from Telegram messages with multi-user shared family accounts, smart AI parsing, real-time sync, visual analytics, and budget tracking.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,38 @@
+[
+  {
+    "id": "user_ansh",
+    "name": "Demo Account",
+    "email": "demo@teleexpense.ai",
+    "linkCode": "838107",
+    "createdAt": "2026-08-16T15:18:05.721Z",
+    "linkedMembers": []
+  },
+  {
+    "id": "user_1786897121297_2j4l",
+    "name": "priya",
+    "email": "priyababali29@gmail.com",
+    "linkCode": "194315",
+    "createdAt": "2026-08-16T16:18:41.297Z",
+    "linkedMembers": []
+  },
+  {
+    "id": "user_1786898134161_9byn",
+    "name": "Ansh",
+    "email": "abhiveo4@gmail.com",
+    "linkCode": "513919",
+    "createdAt": "2026-08-16T16:35:34.161Z",
+    "linkedMembers": [
+      {
+        "id": "mem_838107368",
+        "name": "Ansh",
+        "customAlias": "Ansh (Owner)",
+        "role": "owner",
+        "telegramChatId": "838107368",
+        "telegramUsername": "ansh3293",
+        "linkedAt": "2026-08-16T16:36:03.542Z"
+      }
+    ],
+    "telegramChatId": "838107368",
+    "telegramUsername": "ansh3293"
+  }
+]

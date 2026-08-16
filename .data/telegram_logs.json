@@ -1,0 +1,143 @@
+[
+  {
+    "id": "log_1786882719942",
+    "timestamp": "2026-08-16T12:18:39.942Z",
+    "type": "incoming_message",
+    "user": "Simulator User",
+    "rawText": "500 petrol",
+    "parsedTransactions": [
+      {
+        "type": "expense",
+        "amount": 500,
+        "category": "Transportation & Fuel",
+        "description": "Petrol",
+        "date": "2026-08-16",
+        "paymentMethod": "UPI",
+        "tags": [
+          "petrol",
+          "fuel"
+        ]
+      }
+    ],
+    "botReply": "🔴 <b>EXPENSE ADDED</b>\n💰 <b>₹500</b> • Petrol\n📁 <i>Transportation & Fuel</i>\n📅 2026-08-16\n\n━━━━━━━━━━━━━━━━━━━━\n📊 <b>Total Balance:</b> ₹-1,400\n📈 <b>Income:</b> ₹0 | 📉 <b>Expense:</b> ₹1,400",
+    "status": "success"
+  },
+  {
+    "id": "log_1786882718490",
+    "timestamp": "2026-08-16T12:18:38.490Z",
+    "type": "incoming_message",
+    "user": "Simulator User",
+    "rawText": "300 zomato",
+    "parsedTransactions": [
+      {
+        "type": "expense",
+        "amount": 300,
+        "category": "Food & Dining",
+        "description": "Zomato",
+        "date": "2026-08-16",
+        "paymentMethod": "UPI"
+      }
+    ],
+    "botReply": "🔴 <b>EXPENSE ADDED</b>\n💰 <b>₹300</b> • Zomato\n📁 <i>Food & Dining</i>\n📅 2026-08-16\n\n━━━━━━━━━━━━━━━━━━━━\n📊 <b>Total Balance:</b> ₹-900\n📈 <b>Income:</b> ₹0 | 📉 <b>Expense:</b> ₹900",
+    "status": "success"
+  },
+  {
+    "id": "log_1786882682940",
+    "timestamp": "2026-08-16T12:18:02.940Z",
+    "type": "incoming_message",
+    "chatId": "838107368",
+    "user": "Ansh",
+    "rawText": "300 swiggy cash",
+    "parsedTransactions": [
+      {
+        "type": "expense",
+        "amount": 300,
+        "category": "Food & Dining",
+        "description": "Swiggy",
+        "date": "2026-08-16",
+        "paymentMethod": "Cash",
+        "tags": [
+          "swiggy",
+          "food"
+        ]
+      }
+    ],
+    "botReply": "🔴 <b>EXPENSE RECORDED</b>\n💰 <b>₹300</b>\n📁 <b>Category:</b> Food & Dining\n📝 <b>Note:</b> Swiggy\n📅 <b>Date:</b> 2026-08-16\n\n━━━━━━━━━━━━━━━━━━━━\n📊 <b>Total Balance:</b> ₹-600\n📉 <b>Total Spent:</b> ₹600",
+    "status": "success"
+  },
+  {
+    "id": "log_1786882442825",
+    "timestamp": "2026-08-16T12:14:02.825Z",
+    "type": "incoming_message",
+    "chatId": "838107368",
+    "user": "Ansh",
+    "rawText": "300 food",
+    "parsedTransactions": [
+      {
+        "type": "expense",
+        "amount": 300,
+        "category": "Food & Dining",
+        "description": "Food",
+        "date": "2026-08-16",
+        "paymentMethod": "UPI"
+      }
+    ],
+    "botReply": "🔴 <b>EXPENSE RECORDED</b>\n💰 <b>₹300</b>\n📁 <b>Category:</b> Food & Dining\n📝 <b>Note:</b> Food\n📅 <b>Date:</b> 2026-08-16\n\n━━━━━━━━━━━━━━━━━━━━\n📊 <b>Total Balance:</b> ₹-300\n📉 <b>Total Spent:</b> ₹300",
+    "status": "success"
+  },
+  {
+    "id": "log_1786882301048",
+    "timestamp": "2026-08-16T12:11:41.048Z",
+    "type": "webhook_setup",
+    "details": "Webhook successfully registered to: https://ais-dev-tqtvhllm5ccjbvvdxz44bm-657007980218.asia-east1.run.app/api/telegram/webhook",
+    "status": "success"
+  },
+  {
+    "id": "log_1786882224321",
+    "timestamp": "2026-08-16T12:10:24.321Z",
+    "type": "webhook_setup",
+    "details": "Webhook successfully registered to: https://ais-dev-tqtvhllm5ccjbvvdxz44bm-657007980218.asia-east1.run.app/api/telegram/webhook",
+    "status": "success"
+  },
+  {
+    "id": "log_1786882205910",
+    "timestamp": "2026-08-16T12:10:05.910Z",
+    "type": "parse_error",
+    "chatId": "838107368",
+    "user": "Ansh",
+    "rawText": "Delete",
+    "botReply": "❓ Could not detect an expense or income from: <i>\"Delete\"</i>\n\n💡 <b>Try formats like:</b>\n• <code>300 zomato</code>\n• <code>100 vegetable</code>\n• <code>income 10000 on 16 aug 2026</code>",
+    "status": "warning"
+  },
+  {
+    "id": "log_1786882149328",
+    "timestamp": "2026-08-16T12:09:09.328Z",
+    "type": "incoming_message",
+    "chatId": "838107368",
+    "user": "Ansh",
+    "rawText": "300 zomato",
+    "parsedTransactions": [
+      {
+        "type": "expense",
+        "amount": 300,
+        "category": "Food & Dining",
+        "description": "Zomato",
+        "date": "2026-08-16",
+        "paymentMethod": "UPI",
+        "tags": [
+          "food",
+          "delivery"
+        ]
+      }
+    ],
+    "botReply": "🔴 <b>EXPENSE RECORDED</b>\n💰 <b>₹300</b>\n📁 <b>Category:</b> Food & Dining\n📝 <b>Note:</b> Zomato\n📅 <b>Date:</b> 2026-08-16\n\n━━━━━━━━━━━━━━━━━━━━\n📊 <b>Total Balance:</b> ₹-300\n📉 <b>Total Spent:</b> ₹300",
+    "status": "success"
+  },
+  {
+    "id": "log_1786881716835",
+    "timestamp": "2026-08-16T12:01:56.835Z",
+    "type": "webhook_setup",
+    "details": "Webhook successfully registered to: https://ais-dev-tqtvhllm5ccjbvvdxz44bm-657007980218.asia-east1.run.app/api/telegram/webhook",
+    "status": "success"
+  }
+]

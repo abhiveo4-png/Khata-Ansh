@@ -1,0 +1,10 @@
+{
+  "botToken": "8805911705:AAFqlnYNiguHCdar15R3XX8JJkuI0nXNanc",
+  "botUsername": "khata_ansh_bot",
+  "botName": "khatabot",
+  "webhookUrl": "https://ais-dev-tqtvhllm5ccjbvvdxz44bm-657007980218.asia-east1.run.app/api/telegram/webhook",
+  "isWebhookSet": true,
+  "lastWebhookCheck": "2026-08-16T12:53:08.816Z",
+  "pendingUpdateCount": 0,
+  "isConnected": true
+}

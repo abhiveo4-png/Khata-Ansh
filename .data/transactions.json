@@ -1,0 +1,39 @@
+[
+  {
+    "id": "tx_1786882682515_qo7nqe",
+    "type": "expense",
+    "amount": 300,
+    "category": "Food & Dining",
+    "description": "Swiggy",
+    "date": "2026-08-16",
+    "time": "12:18",
+    "paymentMethod": "Cash",
+    "source": "telegram",
+    "telegramChatId": "838107368",
+    "telegramMessageId": 27,
+    "telegramUser": "Ansh",
+    "rawMessage": "300 swiggy cash",
+    "createdAt": "2026-08-16T12:18:02.520Z",
+    "tags": [
+      "swiggy",
+      "food"
+    ]
+  },
+  {
+    "id": "tx_1786882442339_xjke09",
+    "type": "expense",
+    "amount": 300,
+    "category": "Food & Dining",
+    "description": "Food",
+    "date": "2026-08-16",
+    "time": "12:14",
+    "paymentMethod": "UPI",
+    "source": "telegram",
+    "telegramChatId": "838107368",
+    "telegramMessageId": 15,
+    "telegramUser": "Ansh",
+    "rawMessage": "300 food",
+    "createdAt": "2026-08-16T12:14:02.396Z",
+    "tags": []
+  }
+]

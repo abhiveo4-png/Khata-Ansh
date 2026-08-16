@@ -1,0 +1,490 @@
+{
+  "transactions": [
+    {
+      "id": "tx_1786893703376_nxf8e3",
+      "userId": "user_ansh",
+      "type": "expense",
+      "amount": 250,
+      "category": "Uncategorized",
+      "description": "Kamla pasand",
+      "date": "2026-08-16",
+      "time": "15:21",
+      "paymentMethod": "UPI",
+      "source": "telegram",
+      "telegramChatId": "838107368",
+      "telegramMessageId": 55,
+      "telegramUser": "Ansh",
+      "rawMessage": "250 kamla pasand",
+      "createdAt": "2026-08-16T15:21:43.376Z",
+      "tags": []
+    }
+  ],
+  "budgets": [
+    {
+      "category": "Food & Dining",
+      "limit": 6000,
+      "period": "monthly"
+    },
+    {
+      "category": "Groceries & Sabzi",
+      "limit": 4000,
+      "period": "monthly"
+    },
+    {
+      "category": "Transportation & Fuel",
+      "limit": 3500,
+      "period": "monthly"
+    },
+    {
+      "category": "Bills & Utilities",
+      "limit": 3000,
+      "period": "monthly"
+    },
+    {
+      "category": "Shopping & Apparel",
+      "limit": 5000,
+      "period": "monthly"
+    },
+    {
+      "category": "Entertainment & Fun",
+      "limit": 2500,
+      "period": "monthly"
+    },
+    {
+      "category": "Healthcare & Fitness",
+      "limit": 2000,
+      "period": "monthly"
+    },
+    {
+      "category": "Investments & Savings",
+      "limit": 15000,
+      "period": "monthly"
+    }
+  ],
+  "categories": [
+    {
+      "id": "food_dining",
+      "name": "Food & Dining",
+      "type": "expense",
+      "icon": "Utensils",
+      "color": "#F97316",
+      "bgLight": "bg-orange-50 text-orange-700 border-orange-200",
+      "keywords": [
+        "zomato",
+        "swiggy",
+        "food",
+        "restaurant",
+        "dinner",
+        "lunch",
+        "breakfast",
+        "snack",
+        "cafe",
+        "starbucks",
+        "chai",
+        "tea",
+        "coffee",
+        "mcdonalds",
+        "kfc",
+        "burger",
+        "pizza",
+        "biryani",
+        "dhaba",
+        "dahi",
+        "curd",
+        "eating out"
+      ],
+      "isDefault": true
+    },
+    {
+      "id": "groceries",
+      "name": "Groceries & Sabzi",
+      "type": "expense",
+      "icon": "ShoppingCart",
+      "color": "#10B981",
+      "bgLight": "bg-emerald-50 text-emerald-700 border-emerald-200",
+      "keywords": [
+        "vegetable",
+        "vegetables",
+        "sabzi",
+        "grocery",
+        "groceries",
+        "supermarket",
+        "blinkit",
+        "zepto",
+        "instamart",
+        "bigbasket",
+        "milk",
+        "doodh",
+        "fruits",
+        "d-mart",
+        "ration",
+        "bread",
+        "eggs",
+        "paneer",
+        "chicken",
+        "mutton",
+        "atta",
+        "rice"
+      ],
+      "isDefault": true
+    },
+    {
+      "id": "transport",
+      "name": "Transportation & Fuel",
+      "type": "expense",
+      "icon": "Car",
+      "color": "#3B82F6",
+      "bgLight": "bg-blue-50 text-blue-700 border-blue-200",
+      "keywords": [
+        "petrol",
+        "diesel",
+        "fuel",
+        "uber",
+        "ola",
+        "rapido",
+        "auto",
+        "rickshaw",
+        "cab",
+        "metro",
+        "bus",
+        "train",
+        "flight",
+        "ticket",
+        "toll",
+        "parking",
+        "car wash",
+        "bike service",
+        "scooter"
+      ],
+      "isDefault": true
+    },
+    {
+      "id": "bills_utilities",
+      "name": "Bills & Utilities",
+      "type": "expense",
+      "icon": "Zap",
+      "color": "#EAB308",
+      "bgLight": "bg-amber-50 text-amber-700 border-amber-200",
+      "keywords": [
+        "electricity",
+        "bijli",
+        "wifi",
+        "internet",
+        "broadband",
+        "water",
+        "gas",
+        "cylinder",
+        "mobile",
+        "recharge",
+        "jio",
+        "airtel",
+        "vi",
+        "maintenance",
+        "house tax",
+        "dth",
+        "bill"
+      ],
+      "isDefault": true
+    },
+    {
+      "id": "shopping",
+      "name": "Shopping & Apparel",
+      "type": "expense",
+      "icon": "ShoppingBag",
+      "color": "#EC4899",
+      "bgLight": "bg-pink-50 text-pink-700 border-pink-200",
+      "keywords": [
+        "amazon",
+        "flipkart",
+        "myntra",
+        "clothes",
+        "shoes",
+        "electronics",
+        "shopping",
+        "meesho",
+        "zara",
+        "h&m",
+        "tshirt",
+        "jeans",
+        "watch",
+        "gadget",
+        "headphones",
+        "cosmetics",
+        "mall"
+      ],
+      "isDefault": true
+    },
+    {
+      "id": "housing_rent",
+      "name": "Rent & Housing",
+      "type": "expense",
+      "icon": "Home",
+      "color": "#8B5CF6",
+      "bgLight": "bg-purple-50 text-purple-700 border-purple-200",
+      "keywords": [
+        "rent",
+        "kiraya",
+        "room rent",
+        "pg",
+        "flat rent",
+        "deposit",
+        "house",
+        "furniture",
+        "plumber",
+        "electrician",
+        "maid",
+        "kamwali",
+        "cook"
+      ],
+      "isDefault": true
+    },
+    {
+      "id": "entertainment",
+      "name": "Entertainment & Fun",
+      "type": "expense",
+      "icon": "Film",
+      "color": "#06B6D4",
+      "bgLight": "bg-cyan-50 text-cyan-700 border-cyan-200",
+      "keywords": [
+        "movie",
+        "cinema",
+        "pvr",
+        "inox",
+        "netflix",
+        "prime",
+        "spotify",
+        "hotstar",
+        "gaming",
+        "steam",
+        "party",
+        "concert",
+        "club",
+        "outing",
+        "trip",
+        "vacation",
+        "resort"
+      ],
+      "isDefault": true
+    },
+    {
+      "id": "healthcare",
+      "name": "Healthcare & Fitness",
+      "type": "expense",
+      "icon": "HeartPulse",
+      "color": "#EF4444",
+      "bgLight": "bg-rose-50 text-rose-700 border-rose-200",
+      "keywords": [
+        "medicine",
+        "doctor",
+        "hospital",
+        "clinic",
+        "pharmacy",
+        "medical",
+        "gym",
+        "protein",
+        "supplements",
+        "test",
+        "dentist",
+        "apollo",
+        "pharmeasy",
+        "health insurance"
+      ],
+      "isDefault": true
+    },
+    {
+      "id": "investment",
+      "name": "Investments & Savings",
+      "type": "expense",
+      "icon": "TrendingUp",
+      "color": "#14B8A6",
+      "bgLight": "bg-teal-50 text-teal-700 border-teal-200",
+      "keywords": [
+        "sip",
+        "mutual fund",
+        "stocks",
+        "share market",
+        "crypto",
+        "gold",
+        "fd",
+        "rd",
+        "ppf",
+        "nps",
+        "zerodha",
+        "groww",
+        "savings"
+      ],
+      "isDefault": true
+    },
+    {
+      "id": "education",
+      "name": "Education & Learning",
+      "type": "expense",
+      "icon": "GraduationCap",
+      "color": "#6366F1",
+      "bgLight": "bg-indigo-50 text-indigo-700 border-indigo-200",
+      "keywords": [
+        "fees",
+        "course",
+        "books",
+        "udemy",
+        "college",
+        "school",
+        "tuition",
+        "coaching",
+        "subscription",
+        "exam",
+        "certifications"
+      ],
+      "isDefault": true
+    },
+    {
+      "id": "other_expense",
+      "name": "Other Expense",
+      "type": "expense",
+      "icon": "MoreHorizontal",
+      "color": "#64748B",
+      "bgLight": "bg-slate-50 text-slate-700 border-slate-200",
+      "keywords": [
+        "misc",
+        "gift",
+        "donation",
+        "fine",
+        "penalty",
+        "cash out",
+        "other"
+      ],
+      "isDefault": true
+    },
+    {
+      "id": "salary",
+      "name": "Salary & Employment",
+      "type": "income",
+      "icon": "Briefcase",
+      "color": "#10B981",
+      "bgLight": "bg-emerald-50 text-emerald-700 border-emerald-200",
+      "keywords": [
+        "salary",
+        "income",
+        "stipend",
+        "paycheck",
+        "wages",
+        "bonus",
+        "appraisal",
+        "incentive",
+        "overtime",
+        "job"
+      ],
+      "isDefault": true
+    },
+    {
+      "id": "freelance_business",
+      "name": "Freelance & Business",
+      "type": "income",
+      "icon": "Laptop",
+      "color": "#0EA5E9",
+      "bgLight": "bg-sky-50 text-sky-700 border-sky-200",
+      "keywords": [
+        "freelance",
+        "client",
+        "consulting",
+        "project",
+        "business",
+        "profit",
+        "sales",
+        "upwork",
+        "fiverr",
+        "contract",
+        "invoice"
+      ],
+      "isDefault": true
+    },
+    {
+      "id": "investments_income",
+      "name": "Investment Returns & Dividends",
+      "type": "income",
+      "icon": "Coins",
+      "color": "#8B5CF6",
+      "bgLight": "bg-purple-50 text-purple-700 border-purple-200",
+      "keywords": [
+        "dividend",
+        "interest",
+        "capital gains",
+        "crypto profit",
+        "rental income",
+        "rent received",
+        "returns"
+      ],
+      "isDefault": true
+    },
+    {
+      "id": "cashback_refunds",
+      "name": "Cashback & Refunds",
+      "type": "income",
+      "icon": "BadgePercent",
+      "color": "#F59E0B",
+      "bgLight": "bg-amber-50 text-amber-700 border-amber-200",
+      "keywords": [
+        "cashback",
+        "refund",
+        "reward",
+        "gpay scratch",
+        "credit",
+        "reimbursement",
+        "returned"
+      ],
+      "isDefault": true
+    },
+    {
+      "id": "gift_income",
+      "name": "Gifts & Allowance",
+      "type": "income",
+      "icon": "Gift",
+      "color": "#EC4899",
+      "bgLight": "bg-pink-50 text-pink-700 border-pink-200",
+      "keywords": [
+        "gift",
+        "pocket money",
+        "allowance",
+        "papa sent",
+        "mom sent",
+        "shagun",
+        "prize",
+        "won"
+      ],
+      "isDefault": true
+    },
+    {
+      "id": "other_income",
+      "name": "Other Income",
+      "type": "income",
+      "icon": "Wallet",
+      "color": "#10B981",
+      "bgLight": "bg-emerald-50 text-emerald-700 border-emerald-200",
+      "keywords": [
+        "income",
+        "credit",
+        "received",
+        "credited",
+        "other"
+      ],
+      "isDefault": true
+    },
+    {
+      "id": "uncategorized",
+      "name": "Uncategorized",
+      "type": "both",
+      "icon": "HelpCircle",
+      "color": "#94A3B8",
+      "bgLight": "bg-slate-100 text-slate-700 border-slate-300",
+      "keywords": [
+        "undefined",
+        "uncategorized",
+        "unknown",
+        "misc",
+        "random"
+      ],
+      "isDefault": true,
+      "description": "Auto-assigned when item does not match existing categories or needs review"
+    }
+  ]
+}
