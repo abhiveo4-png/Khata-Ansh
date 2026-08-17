@@ -53,10 +53,10 @@ export const BudgetManager: React.FC<BudgetManagerProps> = ({
             <div className="w-8 h-8 rounded-xl bg-cyan-950/80 border border-cyan-500/40 text-cyan-400 flex items-center justify-center">
               <Target className="w-4 h-4" />
             </div>
-            <h3 className="font-bold text-base text-white font-display">QUANTUM BUDGET CAPS & TARGETS</h3>
+            <h3 className="font-bold text-base text-white font-display">CATEGORY BUDGET LIMITS</h3>
           </div>
           <p className="text-xs font-mono text-slate-400 mt-1">
-            Dynamic threshold tracking & over-limit detection algorithms
+            Har category ke kharche ki limit set karein aur overspend hone se bachein
           </p>
         </div>
 
@@ -68,17 +68,17 @@ export const BudgetManager: React.FC<BudgetManagerProps> = ({
                   setEditedBudgets(budgets);
                   setIsEditing(false);
                 }}
-                className="px-3 py-1.5 rounded-xl border border-slate-700 text-xs font-mono text-slate-400 hover:text-white hover:bg-slate-800"
+                className="px-3 py-1.5 rounded-xl border border-slate-700 text-xs font-mono text-slate-400 hover:text-white hover:bg-slate-800 cursor-pointer"
               >
-                ABORT
+                CANCEL
               </button>
               <button
                 onClick={handleSave}
                 disabled={isSaving}
-                className="px-3.5 py-1.5 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 text-xs font-mono font-bold flex items-center space-x-1 shadow-md shadow-cyan-950/50"
+                className="px-3.5 py-1.5 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 text-xs font-mono font-bold flex items-center space-x-1 shadow-md shadow-cyan-950/50 cursor-pointer"
               >
                 <Check className="w-3.5 h-3.5 stroke-[3]" />
-                <span>SAVE PARAMS</span>
+                <span>SAVE KAREIN</span>
               </button>
             </div>
           ) : (
@@ -87,10 +87,10 @@ export const BudgetManager: React.FC<BudgetManagerProps> = ({
                 setEditedBudgets(budgets);
                 setIsEditing(true);
               }}
-              className="px-3.5 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-xs font-mono text-cyan-300 flex items-center space-x-1.5"
+              className="px-3.5 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-xs font-mono text-cyan-300 flex items-center space-x-1.5 cursor-pointer"
             >
               <Edit2 className="w-3.5 h-3.5 text-cyan-400" />
-              <span>EDIT CAPS</span>
+              <span>BUDGET BADLEIN</span>
             </button>
           )}
         </div>
@@ -120,18 +120,18 @@ export const BudgetManager: React.FC<BudgetManagerProps> = ({
                 {isOver && (
                   <span className="px-2 py-0.5 rounded-md bg-rose-950/80 border border-rose-500/40 text-rose-300 text-[10px] font-mono font-bold flex items-center gap-1">
                     <ShieldAlert className="w-3 h-3" />
-                    EXCEEDED
+                    LIMIT EXCEEDED
                   </span>
                 )}
               </div>
 
               <div className="mt-3 flex items-baseline justify-between font-mono">
                 <div className="text-xs text-slate-400">
-                  CONSUMED: <span className="text-white font-bold">₹{spent.toLocaleString('en-IN')}</span>
+                  KHARCHA: <span className="text-white font-bold">₹{spent.toLocaleString('en-IN')}</span>
                 </div>
                 {isEditing ? (
                   <div className="flex items-center space-x-1">
-                    <span className="text-xs text-cyan-400">CAP: ₹</span>
+                    <span className="text-xs text-cyan-400">LIMIT: ₹</span>
                     <input
                       type="number"
                       value={b.limit}
@@ -141,7 +141,7 @@ export const BudgetManager: React.FC<BudgetManagerProps> = ({
                   </div>
                 ) : (
                   <div className="text-xs text-slate-400">
-                    CAP: <span className="text-cyan-400 font-bold">₹{limit.toLocaleString('en-IN')}</span>
+                    LIMIT: <span className="text-cyan-400 font-bold">₹{limit.toLocaleString('en-IN')}</span>
                   </div>
                 )}
               </div>
@@ -163,9 +163,9 @@ export const BudgetManager: React.FC<BudgetManagerProps> = ({
               </div>
 
               <div className="mt-2 flex items-center justify-between text-[10px] font-mono text-slate-400">
-                <span>{percent}% SATURATION</span>
+                <span>{percent}% KHARCH HUWA</span>
                 <span>
-                  {limit > spent ? `₹${(limit - spent).toLocaleString('en-IN')} HEADROOM` : `₹${(spent - limit).toLocaleString('en-IN')} OVERCAP`}
+                  {limit > spent ? `₹${(limit - spent).toLocaleString('en-IN')} BACHA HAI` : `₹${(spent - limit).toLocaleString('en-IN')} EXTRA KHARCH`}
                 </span>
               </div>
             </div>

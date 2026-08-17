@@ -55,9 +55,9 @@ export const TelegramLogsModal: React.FC<TelegramLogsModalProps> = ({
               <Terminal className="w-5 h-5" />
             </div>
             <div>
-              <h3 className="font-bold text-base text-white font-display">TELEGRAM WEBHOOK LOG TERMINAL</h3>
+              <h3 className="font-bold text-base text-white font-display">TELEGRAM WEBHOOK LOGS</h3>
               <p className="text-xs text-slate-400 font-mono">
-                Real-time payload inspection & ingestion telemetry
+                Telegram se aaye messages aur bot ke responses ka live record
               </p>
             </div>
           </div>
@@ -71,14 +71,14 @@ export const TelegramLogsModal: React.FC<TelegramLogsModalProps> = ({
 
         {/* Action bar */}
         <div className="px-6 py-2.5 bg-slate-950 border-b border-slate-800 flex items-center justify-between text-xs font-mono">
-          <span className="text-cyan-400">{logs.length} RAW PACKETS LOGGED</span>
+          <span className="text-cyan-400">{logs.length} MESSAGES RECORDED</span>
           <div className="flex items-center space-x-2">
             <button
               onClick={fetchLogs}
               className="px-2.5 py-1 rounded-lg border border-slate-800 hover:bg-slate-900 text-slate-300 flex items-center space-x-1 cursor-pointer"
             >
               <RefreshCw className={`w-3 h-3 ${isLoading ? 'animate-spin' : ''}`} />
-              <span>REFRESH</span>
+              <span>REFRESH KAREIN</span>
             </button>
             {logs.length > 0 && (
               <button
@@ -86,7 +86,7 @@ export const TelegramLogsModal: React.FC<TelegramLogsModalProps> = ({
                 className="px-2.5 py-1 rounded-lg border border-slate-800 hover:bg-rose-950/40 text-rose-400 flex items-center space-x-1 cursor-pointer"
               >
                 <Trash2 className="w-3 h-3" />
-                <span>PURGE LOGS</span>
+                <span>LOGS SAAF KAREIN</span>
               </button>
             )}
           </div>
@@ -96,7 +96,7 @@ export const TelegramLogsModal: React.FC<TelegramLogsModalProps> = ({
         <div className="p-6 space-y-3 max-h-[60vh] overflow-y-auto font-mono text-xs">
           {logs.length === 0 ? (
             <div className="py-12 text-center text-slate-500">
-              No webhook packets intercepted yet.
+              Abhi tak koi webhook message nahi aaya hai.
             </div>
           ) : (
             logs.map((log) => {
@@ -117,7 +117,7 @@ export const TelegramLogsModal: React.FC<TelegramLogsModalProps> = ({
                       ) : (
                         <AlertCircle className="w-3.5 h-3.5 text-rose-400" />
                       )}
-                      <span className="font-bold text-white uppercase">{log.status}</span>
+                      <span className="font-bold text-white uppercase">{log.status === 'success' ? 'Kamyab' : 'Error'}</span>
                       {log.action && (
                         <span className="px-1.5 py-0.5 rounded bg-cyan-950 border border-cyan-500/30 text-cyan-300 text-[10px]">
                           {log.action}
@@ -132,19 +132,19 @@ export const TelegramLogsModal: React.FC<TelegramLogsModalProps> = ({
                   <div className="mt-2 space-y-1 text-slate-300 text-[11px]">
                     {log.rawText && (
                       <p className="flex items-center gap-1">
-                        <span className="text-slate-500">PAYLOAD:</span>
+                        <span className="text-slate-500">MESSAGE:</span>
                         <span className="text-cyan-300 font-bold">"{log.rawText}"</span>
                       </p>
                     )}
                     {log.sender && (
                       <p className="flex items-center gap-1">
-                        <span className="text-slate-500">CLIENT:</span>
+                        <span className="text-slate-500">BHEJNE WALA:</span>
                         <span className="text-white">{log.sender}</span>
                       </p>
                     )}
                     {log.response && (
                       <p className="flex items-center gap-1">
-                        <span className="text-slate-500">REPLY:</span>
+                        <span className="text-slate-500">BOT JAWAB:</span>
                         <span className="text-slate-400">{log.response}</span>
                       </p>
                     )}
@@ -158,9 +158,9 @@ export const TelegramLogsModal: React.FC<TelegramLogsModalProps> = ({
         <div className="bg-slate-950 px-6 py-3 border-t border-slate-800 text-right">
           <button
             onClick={onClose}
-            className="px-4 py-2 bg-slate-900 border border-slate-700 hover:text-white text-slate-300 rounded-xl text-xs font-mono font-bold"
+            className="px-4 py-2 bg-slate-900 border border-slate-700 hover:text-white text-slate-300 rounded-xl text-xs font-mono font-bold cursor-pointer"
           >
-            DISMISS
+            BAND KAREIN
           </button>
         </div>
 

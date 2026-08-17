@@ -70,13 +70,13 @@ export const AiInsightsModal: React.FC<AiInsightsModalProps> = ({
             </div>
             <div>
               <div className="flex items-center space-x-2">
-                <h3 className="font-bold text-base text-white font-display">GEMINI NEURAL WEALTH MATRIX</h3>
+                <h3 className="font-bold text-base text-white font-display">GEMINI AI SMART INSIGHTS</h3>
                 <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-cyan-950 border border-cyan-500/40 text-cyan-300 font-bold">
                   AI 3.7 FLASH
                 </span>
               </div>
               <p className="text-xs text-slate-400 font-mono">
-                Predictive cashflow telemetry & optimization algorithms
+                Aapke kharche aur kamai ka AI analysis aur bachat ke tips
               </p>
             </div>
           </div>
@@ -93,8 +93,8 @@ export const AiInsightsModal: React.FC<AiInsightsModalProps> = ({
           {loading ? (
             <div className="py-16 text-center space-y-3">
               <Sparkles className="w-8 h-8 text-cyan-400 animate-spin mx-auto" />
-              <h4 className="text-sm font-semibold text-white font-display">SYNTHESIZING NEURAL TELEMETRY...</h4>
-              <p className="text-xs text-slate-400 font-mono">Gemini 3.7 Flash is evaluating cashflow vectors</p>
+              <h4 className="text-sm font-semibold text-white font-display">AI DATA ANALYZE KAR RAHA HAI...</h4>
+              <p className="text-xs text-slate-400 font-mono">Gemini 3.7 Flash aapke records check kar raha hai</p>
             </div>
           ) : insights ? (
             <>
@@ -102,7 +102,7 @@ export const AiInsightsModal: React.FC<AiInsightsModalProps> = ({
               <div className="bg-gradient-to-br from-[#0c1426] to-[#0f1b33] rounded-2xl p-5 border border-cyan-500/30 flex flex-col sm:flex-row items-center justify-between gap-4">
                 <div>
                   <span className="text-[10px] font-bold text-cyan-400 uppercase tracking-widest">
-                    SYSTEM HEALTH COEFFICIENT
+                    FINANCIAL HEALTH SCORE
                   </span>
                   <div className="flex items-baseline space-x-3 mt-1">
                     <span className="text-3xl font-extrabold text-white font-mono">
@@ -113,7 +113,7 @@ export const AiInsightsModal: React.FC<AiInsightsModalProps> = ({
                         ? 'bg-emerald-950 text-emerald-300 border-emerald-500/40'
                         : 'bg-amber-950 text-amber-300 border-amber-500/40'
                     }`}>
-                      {insights.verdict || 'OPTIMAL'}
+                      {insights.verdict || 'BOHOT ACCHA'}
                     </span>
                   </div>
                   <p className="text-xs text-slate-300 mt-2 leading-relaxed font-sans">
@@ -126,7 +126,7 @@ export const AiInsightsModal: React.FC<AiInsightsModalProps> = ({
               <div className="space-y-2.5">
                 <h4 className="text-[10px] font-bold uppercase tracking-wider text-cyan-400 flex items-center space-x-1.5">
                   <TrendingUp className="w-3.5 h-3.5 text-cyan-400" />
-                  <span>KEY CASHFLOW OBSERVATIONS</span>
+                  <span>KHAAS OBSERVATIONS</span>
                 </h4>
                 <div className="space-y-2">
                   {insights.keyInsights?.map((item, i) => (
@@ -145,7 +145,7 @@ export const AiInsightsModal: React.FC<AiInsightsModalProps> = ({
               <div className="space-y-2.5">
                 <h4 className="text-[10px] font-bold uppercase tracking-wider text-amber-400 flex items-center space-x-1.5">
                   <Lightbulb className="w-3.5 h-3.5 text-amber-400" />
-                  <span>AI OPTIMIZATION VECTORS</span>
+                  <span>BACHAT AUR SMART TIPS</span>
                 </h4>
                 <div className="space-y-2">
                   {insights.savingTips?.map((tip, i) => (
@@ -164,7 +164,7 @@ export const AiInsightsModal: React.FC<AiInsightsModalProps> = ({
             </>
           ) : (
             <div className="py-12 text-center text-xs text-slate-400">
-              No telemetry available.
+              Data available nahi hai.
             </div>
           )}
 
@@ -178,13 +178,13 @@ export const AiInsightsModal: React.FC<AiInsightsModalProps> = ({
             className="text-cyan-400 hover:text-cyan-300 font-bold flex items-center space-x-1 cursor-pointer"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
-            <span>RE-COMPUTE</span>
+            <span>FIR SE CHECK KAREIN</span>
           </button>
           <button
             onClick={onClose}
             className="px-4 py-2 bg-cyan-500 hover:bg-cyan-400 text-slate-950 rounded-xl font-bold transition-all cursor-pointer"
           >
-            CLOSE HUD
+            BAND KAREIN
           </button>
         </div>
 

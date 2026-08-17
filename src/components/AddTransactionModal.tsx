@@ -87,7 +87,7 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
         <div className="px-6 py-4 border-b border-slate-800 flex items-center justify-between bg-slate-950/80">
           <div className="flex items-center space-x-2">
             <Zap className="w-4 h-4 text-cyan-400" />
-            <h3 className="font-bold text-base text-white font-display">MANUAL TELEMETRY INGESTION</h3>
+            <h3 className="font-bold text-base text-white font-display">NAYA KHARCHA / INCOME JODEIN</h3>
           </div>
           <button
             onClick={onClose}
@@ -113,7 +113,7 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
                   : 'text-slate-400 hover:text-white'
               }`}
             >
-              🔴 OUTFLOW (-)
+              🔴 KHARCHA (EXPENSE)
             </button>
             <button
               type="button"
@@ -127,13 +127,13 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
                   : 'text-slate-400 hover:text-white'
               }`}
             >
-              🟢 INFLOW (+)
+              🟢 KAMAI (INCOME)
             </button>
           </div>
 
           {/* Amount Field */}
           <div>
-            <label className="block text-slate-400 uppercase tracking-wider mb-1">VALUATION (₹)</label>
+            <label className="block text-slate-400 uppercase tracking-wider mb-1">RASHMI / AMOUNT (₹)</label>
             <div className="relative">
               <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-cyan-400 font-bold text-base">₹</span>
               <input
@@ -150,7 +150,7 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
             
             {/* Quick Amount Chips */}
             <div className="flex items-center space-x-1.5 mt-2 overflow-x-auto no-scrollbar">
-              <span className="text-[10px] text-slate-500 mr-1">PRESETS:</span>
+              <span className="text-[10px] text-slate-500 mr-1">QUICK AMOUNT:</span>
               {AMOUNT_PRESETS.map((amt) => (
                 <button
                   type="button"
@@ -166,20 +166,20 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
 
           {/* Description */}
           <div>
-            <label className="block text-slate-400 uppercase tracking-wider mb-1">NOTE / MERCHANT DESCRIPTION</label>
+            <label className="block text-slate-400 uppercase tracking-wider mb-1">VIVARAN / DESCRIPTION (NOTE)</label>
             <input
               type="text"
               required
               value={description}
               onChange={(e) => setDescription(e.target.value)}
-              placeholder={type === 'expense' ? 'e.g. Zomato Dinner, Petrol, Grocery' : 'e.g. Salary, Freelance'}
+              placeholder={type === 'expense' ? 'Jaise: Doodh, Petrol, Zomato, Grocery' : 'Jaise: Salary, Freelance project, Rent mila'}
               className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-700 rounded-xl text-xs text-white focus:outline-hidden focus:border-cyan-400"
             />
           </div>
 
           {/* Category Selector */}
           <div>
-            <label className="block text-slate-400 uppercase tracking-wider mb-1">AI CATEGORY NODE</label>
+            <label className="block text-slate-400 uppercase tracking-wider mb-1">CATEGORY CHUNIYE</label>
             <select
               value={category}
               onChange={(e) => setCategory(e.target.value)}
@@ -198,7 +198,7 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
             <div>
               <label className="block text-slate-400 uppercase tracking-wider mb-1 flex items-center space-x-1">
                 <Calendar className="w-3.5 h-3.5 text-slate-500" />
-                <span>TIMESTAMP DATE</span>
+                <span>TAREEQ (DATE)</span>
               </label>
               <input
                 type="date"
@@ -212,7 +212,7 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
             <div>
               <label className="block text-slate-400 uppercase tracking-wider mb-1 flex items-center space-x-1">
                 <CreditCard className="w-3.5 h-3.5 text-slate-500" />
-                <span>PAYMENT PROTOCOL</span>
+                <span>PAYMENT METHOD</span>
               </label>
               <select
                 value={paymentMethod}
@@ -230,7 +230,7 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
 
           {/* Tags */}
           <div>
-            <label className="block text-slate-400 uppercase tracking-wider mb-1">METADATA TAGS (OPTIONAL)</label>
+            <label className="block text-slate-400 uppercase tracking-wider mb-1">TAGS (OPTIONAL)</label>
             <div className="flex items-center space-x-2">
               <input
                 type="text"
@@ -242,13 +242,13 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
                     handleAddTag();
                   }
                 }}
-                placeholder="Type tag & press enter"
+                placeholder="Tag likh kar enter karein"
                 className="flex-1 px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-xs text-white focus:outline-hidden focus:border-cyan-400"
               />
               <button
                 type="button"
                 onClick={handleAddTag}
-                className="px-3 py-2 bg-slate-900 border border-slate-700 hover:border-cyan-400 text-cyan-300 rounded-xl font-bold"
+                className="px-3 py-2 bg-slate-900 border border-slate-700 hover:border-cyan-400 text-cyan-300 rounded-xl font-bold cursor-pointer"
               >
                 ADD
               </button>
@@ -280,7 +280,7 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
             <button
               type="button"
               onClick={onClose}
-              className="px-4 py-2 rounded-xl border border-slate-700 text-slate-400 hover:text-white"
+              className="px-4 py-2 rounded-xl border border-slate-700 text-slate-400 hover:text-white cursor-pointer"
             >
               CANCEL
             </button>
@@ -290,11 +290,11 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
               className="px-5 py-2 bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold rounded-xl shadow-md transition-colors flex items-center space-x-1.5 cursor-pointer"
             >
               {isSubmitting ? (
-                <span>INGESTING...</span>
+                <span>SAVE HO RAHA HAI...</span>
               ) : (
                 <>
                   <Plus className="w-4 h-4 stroke-[3]" />
-                  <span>RECORD ENTRY</span>
+                  <span>ENTRY SAVE KAREIN</span>
                 </>
               )}
             </button>

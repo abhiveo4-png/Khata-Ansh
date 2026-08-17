@@ -9,7 +9,7 @@ export const DEFAULT_CATEGORIES: CategoryDef[] = [
     icon: 'Utensils',
     color: '#F97316', // Orange
     bgLight: 'bg-orange-50 text-orange-700 border-orange-200',
-    keywords: ['zomato', 'swiggy', 'food', 'restaurant', 'dinner', 'lunch', 'breakfast', 'snack', 'cafe', 'starbucks', 'chai', 'tea', 'coffee', 'mcdonalds', 'kfc', 'burger', 'pizza', 'biryani', 'dhaba', 'eating out'],
+    keywords: ['zomato', 'swiggy', 'food', 'khana', 'restaurant', 'dinner', 'lunch', 'breakfast', 'nashta', 'snack', 'cafe', 'starbucks', 'chai', 'tea', 'coffee', 'mcdonalds', 'kfc', 'burger', 'pizza', 'biryani', 'dhaba', 'eating out', 'thali', 'samosa', 'maggi', 'momos', 'pani puri', 'golgappe', 'sweet', 'mithai', 'party'],
   },
   {
     id: 'groceries',
@@ -18,7 +18,7 @@ export const DEFAULT_CATEGORIES: CategoryDef[] = [
     icon: 'ShoppingCart',
     color: '#10B981', // Emerald
     bgLight: 'bg-emerald-50 text-emerald-700 border-emerald-200',
-    keywords: ['vegetable', 'vegetables', 'sabzi', 'grocery', 'groceries', 'supermarket', 'blinkit', 'zepto', 'instamart', 'bigbasket', 'milk', 'doodh', 'fruits', 'd-mart', 'ration', 'bread', 'eggs', 'paneer', 'chicken', 'mutton'],
+    keywords: ['vegetable', 'vegetables', 'sabzi', 'grocery', 'groceries', 'supermarket', 'blinkit', 'zepto', 'instamart', 'bigbasket', 'milk', 'doodh', 'dahi', 'curd', 'fruits', 'fal', 'd-mart', 'ration', 'bread', 'eggs', 'anda', 'paneer', 'chicken', 'mutton', 'machli', 'oil', 'tel', 'aata', 'chawal', 'dal', 'cheeni', 'namak', 'masala'],
   },
   {
     id: 'transport',
@@ -27,7 +27,7 @@ export const DEFAULT_CATEGORIES: CategoryDef[] = [
     icon: 'Car',
     color: '#3B82F6', // Blue
     bgLight: 'bg-blue-50 text-blue-700 border-blue-200',
-    keywords: ['petrol', 'diesel', 'fuel', 'uber', 'ola', 'rapido', 'auto', 'rickshaw', 'cab', 'metro', 'bus', 'train', 'flight', 'ticket', 'toll', 'parking', 'car wash', 'bike service', 'scooter'],
+    keywords: ['petrol', 'diesel', 'fuel', 'uber', 'ola', 'rapido', 'auto', 'rickshaw', 'cab', 'metro', 'bus', 'train', 'flight', 'ticket', 'toll', 'parking', 'car wash', 'bike service', 'scooter', 'bhada', 'gadi', 'cng'],
   },
   {
     id: 'bills_utilities',
@@ -36,7 +36,7 @@ export const DEFAULT_CATEGORIES: CategoryDef[] = [
     icon: 'Zap',
     color: '#EAB308', // Yellow
     bgLight: 'bg-amber-50 text-amber-700 border-amber-200',
-    keywords: ['electricity', 'bijli', 'wifi', 'internet', 'broadband', 'water', 'gas', 'cylinder', 'mobile', 'recharge', 'jio', 'airtel', 'vi', 'maintenance', 'house tax', 'dth', 'bill'],
+    keywords: ['electricity', 'bijli', 'bijli bill', 'wifi', 'internet', 'broadband', 'water', 'pani', 'gas', 'cylinder', 'mobile', 'recharge', 'jio', 'airtel', 'vi', 'maintenance', 'house tax', 'dth', 'bill', 'light bill'],
   },
   {
     id: 'shopping',
@@ -45,7 +45,7 @@ export const DEFAULT_CATEGORIES: CategoryDef[] = [
     icon: 'ShoppingBag',
     color: '#EC4899', // Pink
     bgLight: 'bg-pink-50 text-pink-700 border-pink-200',
-    keywords: ['amazon', 'flipkart', 'myntra', 'clothes', 'shoes', 'electronics', 'shopping', 'meesho', 'zara', 'h&m', 'tshirt', 'jeans', 'watch', 'gadget', 'headphones', 'cosmetics', 'mall'],
+    keywords: ['amazon', 'flipkart', 'myntra', 'clothes', 'kapde', 'shoes', 'juta', 'electronics', 'shopping', 'meesho', 'zara', 'h&m', 'tshirt', 'jeans', 'watch', 'ghadi', 'gadget', 'headphones', 'cosmetics', 'mall', 'saree', 'kurta'],
   },
   {
     id: 'housing_rent',
@@ -54,7 +54,7 @@ export const DEFAULT_CATEGORIES: CategoryDef[] = [
     icon: 'Home',
     color: '#8B5CF6', // Purple
     bgLight: 'bg-purple-50 text-purple-700 border-purple-200',
-    keywords: ['rent', 'kiraya', 'room rent', 'pg', 'flat rent', 'deposit', 'house', 'furniture', 'plumber', 'electrician', 'maid', 'kamwali', 'cook'],
+    keywords: ['rent', 'kiraya', 'room rent', 'pg', 'flat rent', 'deposit', 'house', 'makan', 'furniture', 'plumber', 'electrician', 'maid', 'kamwali', 'cook', 'bai'],
   },
   {
     id: 'entertainment',
@@ -63,7 +63,7 @@ export const DEFAULT_CATEGORIES: CategoryDef[] = [
     icon: 'Film',
     color: '#06B6D4', // Cyan
     bgLight: 'bg-cyan-50 text-cyan-700 border-cyan-200',
-    keywords: ['movie', 'cinema', 'pvr', 'inox', 'netflix', 'prime', 'spotify', 'hotstar', 'gaming', 'steam', 'party', 'concert', 'club', 'outing', 'trip', 'vacation', 'resort'],
+    keywords: ['movie', 'cinema', 'film', 'pvr', 'inox', 'netflix', 'prime', 'spotify', 'hotstar', 'gaming', 'steam', 'party', 'concert', 'club', 'outing', 'trip', 'ghoomna', 'vacation', 'resort'],
   },
   {
     id: 'healthcare',
@@ -72,7 +72,7 @@ export const DEFAULT_CATEGORIES: CategoryDef[] = [
     icon: 'HeartPulse',
     color: '#EF4444', // Red
     bgLight: 'bg-rose-50 text-rose-700 border-rose-200',
-    keywords: ['medicine', 'doctor', 'hospital', 'clinic', 'pharmacy', 'medical', 'gym', 'protein', 'supplements', 'test', 'dentist', 'apollo', 'pharmeasy', 'health insurance'],
+    keywords: ['medicine', 'dawa', 'dawai', 'doctor', 'hospital', 'clinic', 'pharmacy', 'medical', 'gym', 'protein', 'supplements', 'test', 'dentist', 'apollo', 'pharmeasy', 'health insurance', 'bimari', 'dawaiya'],
   },
   {
     id: 'investment',
@@ -81,7 +81,7 @@ export const DEFAULT_CATEGORIES: CategoryDef[] = [
     icon: 'TrendingUp',
     color: '#14B8A6', // Teal
     bgLight: 'bg-teal-50 text-teal-700 border-teal-200',
-    keywords: ['sip', 'mutual fund', 'stocks', 'share market', 'crypto', 'gold', 'fd', 'rd', 'ppf', 'nps', 'zerodha', 'groww', 'savings'],
+    keywords: ['sip', 'mutual fund', 'stocks', 'share market', 'crypto', 'gold', 'sona', 'fd', 'rd', 'ppf', 'nps', 'zerodha', 'groww', 'savings', 'bachat', 'invest'],
   },
   {
     id: 'education',
@@ -90,7 +90,7 @@ export const DEFAULT_CATEGORIES: CategoryDef[] = [
     icon: 'GraduationCap',
     color: '#6366F1', // Indigo
     bgLight: 'bg-indigo-50 text-indigo-700 border-indigo-200',
-    keywords: ['fees', 'course', 'books', 'udemy', 'college', 'school', 'tuition', 'coaching', 'subscription', 'exam', 'certifications'],
+    keywords: ['fees', 'course', 'books', 'kitab', 'udemy', 'college', 'school', 'tuition', 'coaching', 'subscription', 'exam', 'certifications', 'padhai'],
   },
   {
     id: 'other_expense',
@@ -99,7 +99,7 @@ export const DEFAULT_CATEGORIES: CategoryDef[] = [
     icon: 'MoreHorizontal',
     color: '#64748B', // Slate
     bgLight: 'bg-slate-50 text-slate-700 border-slate-200',
-    keywords: ['misc', 'gift', 'donation', 'fine', 'penalty', 'cash out', 'other'],
+    keywords: ['misc', 'gift', 'donation', 'daan', 'fine', 'penalty', 'challan', 'cash out', 'other', 'kharcha', 'kharch'],
   },
 
   // Income Categories
@@ -110,7 +110,7 @@ export const DEFAULT_CATEGORIES: CategoryDef[] = [
     icon: 'Briefcase',
     color: '#10B981', // Emerald
     bgLight: 'bg-emerald-50 text-emerald-700 border-emerald-200',
-    keywords: ['salary', 'income', 'stipend', 'paycheck', 'wages', 'bonus', 'appraisal', 'incentive', 'overtime', 'job'],
+    keywords: ['salary', 'tankhwa', 'income', 'stipend', 'paycheck', 'wages', 'bonus', 'appraisal', 'incentive', 'overtime', 'job', 'kamai'],
   },
   {
     id: 'freelance_business',

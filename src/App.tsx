@@ -1,30 +1,15 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { 
-  Plus, 
   Bot, 
-  Sparkles, 
-  Download, 
-  Activity, 
-  Send, 
-  CheckCircle2, 
-  AlertCircle, 
-  Layers, 
+  FileText,
+  FolderPlus,
   PieChart, 
   Target, 
-  FileText,
-  HelpCircle,
   RefreshCw,
-  FolderPlus,
-  KeyRound,
-  UserCheck,
-  Radio,
-  Cpu,
-  Zap,
-  Terminal,
   Lock
 } from 'lucide-react';
 import { Transaction, FinancialSummary, BotConfig, CategoryBudget, UserProfile, CategoryDef } from './types';
-import { safeFetchJson, getActiveUserId, setActiveUserId, setAuthSession } from './utils/api';
+import { safeFetchJson, setActiveUserId, setAuthSession } from './utils/api';
 import { DEFAULT_CATEGORIES } from './utils/categories';
 import { Header } from './components/Header';
 import { OverviewCards } from './components/OverviewCards';
@@ -297,12 +282,8 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-[#070a13] text-slate-100 flex flex-col font-sans selection:bg-cyan-500/30 selection:text-cyan-200 relative overflow-x-hidden">
+    <div className="min-h-screen bg-[#090d16] text-slate-100 flex flex-col font-sans selection:bg-indigo-500/30 selection:text-indigo-200">
       
-      {/* Background Cyber Ambient Lights */}
-      <div className="fixed top-0 left-1/4 w-96 h-96 bg-cyan-500/5 rounded-full blur-3xl pointer-events-none" />
-      <div className="fixed bottom-0 right-1/4 w-96 h-96 bg-indigo-500/5 rounded-full blur-3xl pointer-events-none" />
-
       {/* Top Application Header */}
       <Header
         botConfig={botConfig}
@@ -317,9 +298,9 @@ export default function App() {
       />
 
       {/* Main Content Area */}
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6 relative z-10">
+      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
         
-        {/* Real-time Telemetry Status HUD */}
+        {/* Status Bar */}
         <FuturisticHud
           botConfig={botConfig}
           currentUser={currentUser}
@@ -331,127 +312,127 @@ export default function App() {
           onQuickSimulate={handleQuickSimulate}
         />
 
-        {/* Unauthenticated / Guest Vault Notice */}
+        {/* Unauthenticated / Guest Notice */}
         {!currentUser && (
-          <div className="bg-gradient-to-r from-indigo-950/70 via-[#0c1426] to-cyan-950/70 rounded-2xl p-5 border border-cyan-500/30 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-xl backdrop-blur-xl">
+          <div className="bg-[#0e1526] rounded-2xl p-5 border border-slate-800 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-lg">
             <div className="flex items-start sm:items-center space-x-3.5">
-              <div className="w-10 h-10 rounded-xl bg-cyan-950/80 border border-cyan-400/40 flex items-center justify-center text-cyan-300 shrink-0">
+              <div className="w-10 h-10 rounded-xl bg-slate-900 border border-slate-700 flex items-center justify-center text-slate-300 shrink-0">
                 <Lock className="w-5 h-5" />
               </div>
               <div>
-                <h3 className="font-bold text-sm text-white font-display">
-                  NO ACCOUNT CONNECTED
+                <h3 className="font-semibold text-sm text-white">
+                  Koi khata select nahi hai
                 </h3>
-                <p className="text-xs text-slate-400 font-mono mt-0.5">
-                  Sign in with your email or register a new vault to track private and family Telegram expenses.
+                <p className="text-xs text-slate-400 mt-0.5">
+                  Apne personal ya family Telegram khate se judne ke liye Login karein ya Naya Khata banayein.
                 </p>
               </div>
             </div>
             <button
               onClick={() => setIsAuthModalOpen(true)}
-              className="w-full sm:w-auto px-4 py-2 bg-gradient-to-r from-cyan-500 to-indigo-600 hover:from-cyan-400 hover:to-indigo-500 text-slate-950 font-bold rounded-xl text-xs font-mono shrink-0 shadow-lg cursor-pointer text-center"
+              className="w-full sm:w-auto px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-medium rounded-xl text-xs shrink-0 cursor-pointer text-center transition-all"
             >
-              LOG IN / OPEN VAULT
+              Login / Khata Kholein
             </button>
           </div>
         )}
 
-        {/* Telegram Linking Card for Current User */}
+        {/* Telegram Linking Banner for Current User */}
         {currentUser && !currentUser.telegramChatId && (
-          <div className="bg-gradient-to-r from-cyan-950/60 via-[#0c1426] to-indigo-950/60 rounded-2xl p-4 sm:p-5 text-white shadow-xl flex flex-col md:flex-row items-start md:items-center justify-between gap-4 border border-cyan-500/30 backdrop-blur-xl">
+          <div className="bg-[#0e1526] rounded-2xl p-4 sm:p-5 text-white shadow-md flex flex-col md:flex-row items-start md:items-center justify-between gap-4 border border-indigo-500/30">
             <div className="flex items-start sm:items-center space-x-3.5">
-              <div className="w-11 h-11 rounded-xl bg-cyan-950 border border-cyan-400/40 flex items-center justify-center shrink-0 text-cyan-300">
-                <Bot className="w-6 h-6 animate-pulse" />
+              <div className="w-11 h-11 rounded-xl bg-indigo-950/60 border border-indigo-500/40 flex items-center justify-center shrink-0 text-indigo-300">
+                <Bot className="w-6 h-6" />
               </div>
               <div>
                 <div className="flex items-center space-x-2">
-                  <h3 className="font-bold text-sm sm:text-base text-white font-display">
-                    BIND TELEGRAM GATEWAY FOR {currentUser.name.toUpperCase()}
+                  <h3 className="font-semibold text-sm sm:text-base text-white">
+                    {currentUser.name} ka Telegram jodein
                   </h3>
-                  <span className="px-2 py-0.5 rounded-full bg-amber-400/20 border border-amber-400/40 text-amber-300 text-[10px] font-mono font-bold">
-                    UNLINKED
+                  <span className="px-2 py-0.5 rounded-full bg-amber-950/60 border border-amber-400/40 text-amber-300 text-[10px] font-medium">
+                    Not Linked
                   </span>
                 </div>
-                <p className="text-xs text-slate-300 mt-1 font-mono">
-                  Open Telegram Bot <span className="font-bold text-cyan-300">@{botConfig?.botUsername || 'khata_ansh_bot'}</span> and send: <code className="bg-slate-950 px-2 py-0.5 rounded font-mono text-cyan-300 font-bold border border-cyan-500/30">/link {currentUser.linkCode || currentUser.telegramLinkCode}</code>
+                <p className="text-xs text-slate-300 mt-1">
+                  Telegram Bot <span className="font-semibold text-indigo-300">@{botConfig?.botUsername || 'khata_ansh_bot'}</span> par yeh message bhejein: <code className="bg-slate-950 px-2 py-0.5 rounded font-mono text-indigo-300 font-bold border border-slate-700">/link {currentUser.linkCode || currentUser.telegramLinkCode}</code>
                 </p>
               </div>
             </div>
             <div className="flex items-center space-x-2 shrink-0 w-full md:w-auto">
               <button
                 onClick={() => setIsAuthModalOpen(true)}
-                className="w-full md:w-auto px-4 py-2 bg-cyan-500 hover:bg-cyan-400 text-slate-950 rounded-xl text-xs font-mono font-bold shadow-md shadow-cyan-950/50 transition-all text-center cursor-pointer"
+                className="w-full md:w-auto px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-semibold shadow-sm transition-all text-center cursor-pointer"
               >
-                OPEN LINK HUB
+                Link Details Dekhein
               </button>
             </div>
           </div>
         )}
 
-        {/* Executive Summary Cards */}
+        {/* Summary Cards */}
         <OverviewCards summary={summary} />
 
-        {/* Cyber Navigation Matrix Tabs */}
-        <div className="flex items-center justify-between border-b border-slate-800/90 pb-0">
-          <div className="flex items-center space-x-2 sm:space-x-4 overflow-x-auto no-scrollbar">
+        {/* Navigation Tabs */}
+        <div className="flex items-center justify-between border-b border-slate-800 pb-0">
+          <div className="flex items-center space-x-2 sm:space-x-4 overflow-x-auto">
             
             <button
               onClick={() => setActiveTab('transactions')}
-              className={`pb-3.5 text-xs sm:text-sm font-bold font-display border-b-2 flex items-center space-x-2 transition-all shrink-0 cursor-pointer ${
+              className={`pb-3 text-xs sm:text-sm font-semibold border-b-2 flex items-center space-x-2 transition-all shrink-0 cursor-pointer ${
                 activeTab === 'transactions'
-                  ? 'border-cyan-400 text-cyan-300 text-shadow-glow'
+                  ? 'border-indigo-500 text-indigo-400'
                   : 'border-transparent text-slate-400 hover:text-slate-200'
               }`}
             >
               <FileText className="w-4 h-4" />
-              <span>TRANSACTIONS STREAM ({transactions.length})</span>
+              <span>Kharcha & Kamai ({transactions.length})</span>
             </button>
 
             <button
               onClick={() => setActiveTab('categories')}
-              className={`pb-3.5 text-xs sm:text-sm font-bold font-display border-b-2 flex items-center space-x-2 transition-all shrink-0 cursor-pointer ${
+              className={`pb-3 text-xs sm:text-sm font-semibold border-b-2 flex items-center space-x-2 transition-all shrink-0 cursor-pointer ${
                 activeTab === 'categories'
-                  ? 'border-cyan-400 text-cyan-300 text-shadow-glow'
+                  ? 'border-indigo-500 text-indigo-400'
                   : 'border-transparent text-slate-400 hover:text-slate-200'
               }`}
             >
               <FolderPlus className="w-4 h-4" />
-              <span>AI TAXONOMY ({categories.length})</span>
+              <span>Categories ({categories.length})</span>
             </button>
 
             <button
               onClick={() => setActiveTab('analytics')}
-              className={`pb-3.5 text-xs sm:text-sm font-bold font-display border-b-2 flex items-center space-x-2 transition-all shrink-0 cursor-pointer ${
+              className={`pb-3 text-xs sm:text-sm font-semibold border-b-2 flex items-center space-x-2 transition-all shrink-0 cursor-pointer ${
                 activeTab === 'analytics'
-                  ? 'border-cyan-400 text-cyan-300 text-shadow-glow'
+                  ? 'border-indigo-500 text-indigo-400'
                   : 'border-transparent text-slate-400 hover:text-slate-200'
               }`}
             >
               <PieChart className="w-4 h-4" />
-              <span>ANALYTICS MATRIX</span>
+              <span>Analytics & Charts</span>
             </button>
 
             <button
               onClick={() => setActiveTab('budgets')}
-              className={`pb-3.5 text-xs sm:text-sm font-bold font-display border-b-2 flex items-center space-x-2 transition-all shrink-0 cursor-pointer ${
+              className={`pb-3 text-xs sm:text-sm font-semibold border-b-2 flex items-center space-x-2 transition-all shrink-0 cursor-pointer ${
                 activeTab === 'budgets'
-                  ? 'border-cyan-400 text-cyan-300 text-shadow-glow'
+                  ? 'border-indigo-500 text-indigo-400'
                   : 'border-transparent text-slate-400 hover:text-slate-200'
               }`}
             >
               <Target className="w-4 h-4" />
-              <span>BUDGET CAPS</span>
+              <span>Monthly Budgets</span>
             </button>
           </div>
 
-          <div className="pb-3.5 hidden sm:flex items-center space-x-2">
+          <div className="pb-3 hidden sm:flex items-center space-x-2">
             <button
               onClick={() => {
                 fetchTransactions();
                 fetchCategories();
               }}
-              title="Refresh ledger & taxonomy"
-              className="p-1.5 rounded-xl border border-slate-800 bg-slate-900/80 text-slate-400 hover:text-cyan-300 hover:border-cyan-400/50 transition-all cursor-pointer"
+              title="Refresh ledger"
+              className="p-1.5 rounded-xl border border-slate-800 bg-slate-900 text-slate-400 hover:text-white hover:border-slate-600 transition-all cursor-pointer"
             >
               <RefreshCw className="w-3.5 h-3.5" />
             </button>
@@ -493,25 +474,25 @@ export default function App() {
 
       </main>
 
-      {/* Futuristic Cyber Footer */}
-      <footer className="bg-[#05070e] border-t border-slate-800/80 py-5 mt-14">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between text-xs font-mono text-slate-500 gap-3">
+      {/* Footer */}
+      <footer className="bg-[#0b1120] border-t border-slate-800/80 py-5 mt-14">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between text-xs text-slate-400 gap-3">
           <div className="flex items-center space-x-2">
-            <span className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse" />
-            <span>TELE-EXPENSE QUANTUM • GEMINI 3.7 FLASH & TELEGRAM BOT WEBHOOK ENGINE</span>
+            <span className="w-2 h-2 rounded-full bg-emerald-400" />
+            <span>TeleExpense AI • Telegram Bot + Gemini AI Khata Engine</span>
           </div>
-          <div className="flex items-center space-x-4 text-[11px]">
-            <button onClick={() => setIsAuthModalOpen(true)} className="hover:text-cyan-300 transition-colors">
-              MULTI-USER MATRIX
+          <div className="flex items-center space-x-4 text-xs">
+            <button onClick={() => setIsAuthModalOpen(true)} className="hover:text-white transition-colors cursor-pointer">
+              Accounts & Family
             </button>
-            <button onClick={() => setIsBotSetupOpen(true)} className="hover:text-cyan-300 transition-colors">
-              BOT GATEWAY
+            <button onClick={() => setIsBotSetupOpen(true)} className="hover:text-white transition-colors cursor-pointer">
+              Bot Config
             </button>
-            <button onClick={() => setIsLogsOpen(true)} className="hover:text-cyan-300 transition-colors">
-              WEBHOOK LOGS
+            <button onClick={() => setIsLogsOpen(true)} className="hover:text-white transition-colors cursor-pointer">
+              Webhook Logs
             </button>
-            <button onClick={() => setIsAiInsightsOpen(true)} className="hover:text-cyan-300 transition-colors">
-              AI WEALTH MATRIX
+            <button onClick={() => setIsAiInsightsOpen(true)} className="hover:text-white transition-colors cursor-pointer">
+              AI Insights
             </button>
           </div>
         </div>

@@ -12,12 +12,8 @@ import {
   CreditCard,
   ChevronDown,
   X,
-  AlertCircle,
   Banknote,
-  Smartphone,
-  SlidersHorizontal,
-  Terminal,
-  Zap
+  Smartphone
 } from 'lucide-react';
 import { Transaction, TransactionType, CategoryDef, PaymentMethod } from '../types';
 import { getCategoryByNameOrKeyword } from '../utils/categories';
@@ -56,7 +52,7 @@ export const TransactionList: React.FC<TransactionListProps> = ({
     transactions.forEach((t) => {
       if (t.telegramUser) set.add(t.telegramUser);
       else if (t.source === 'telegram') set.add('Telegram');
-      else set.add('Web / Manual');
+      else set.add('Web App');
     });
     return Array.from(set).sort();
   }, [transactions]);
@@ -77,7 +73,7 @@ export const TransactionList: React.FC<TransactionListProps> = ({
 
         // Member filter
         if (selectedMember !== 'all') {
-          const memberLabel = tx.telegramUser || (tx.source === 'telegram' ? 'Telegram' : 'Web / Manual');
+          const memberLabel = tx.telegramUser || (tx.source === 'telegram' ? 'Telegram' : 'Web App');
           if (memberLabel !== selectedMember) return false;
         }
 
@@ -143,31 +139,31 @@ export const TransactionList: React.FC<TransactionListProps> = ({
 
   const renderPaymentBadge = (pm?: PaymentMethod | string) => {
     const method = pm || 'UPI';
-    if (method.toLowerCase() === 'cash') {
+    if (method.toLowerCase() === 'cash' || method.toLowerCase() === 'nagad') {
       return (
-        <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-md text-[10px] font-mono font-bold bg-emerald-950/70 text-emerald-300 border border-emerald-500/30">
+        <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-md text-[11px] font-medium bg-emerald-950/60 text-emerald-300 border border-emerald-500/20">
           <Banknote className="w-3 h-3" />
-          <span>CASH</span>
+          <span>Cash</span>
         </span>
       );
     }
     if (method.toLowerCase() === 'card') {
       return (
-        <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-md text-[10px] font-mono font-bold bg-purple-950/70 text-purple-300 border border-purple-500/30">
+        <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-md text-[11px] font-medium bg-purple-950/60 text-purple-300 border border-purple-500/20">
           <CreditCard className="w-3 h-3" />
-          <span>CARD</span>
+          <span>Card</span>
         </span>
       );
     }
     if (method.toLowerCase().includes('bank')) {
       return (
-        <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-md text-[10px] font-mono font-bold bg-blue-950/70 text-blue-300 border border-blue-500/30">
-          <span>🏦 BANK</span>
+        <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-md text-[11px] font-medium bg-blue-950/60 text-blue-300 border border-blue-500/20">
+          <span>Bank Transfer</span>
         </span>
       );
     }
     return (
-      <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-md text-[10px] font-mono font-bold bg-cyan-950/70 text-cyan-300 border border-cyan-500/30">
+      <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-md text-[11px] font-medium bg-indigo-950/60 text-indigo-300 border border-indigo-500/20">
         <Smartphone className="w-3 h-3" />
         <span>UPI</span>
       </span>
@@ -175,25 +171,23 @@ export const TransactionList: React.FC<TransactionListProps> = ({
   };
 
   return (
-    <div className="bg-[#0c1222]/85 rounded-2xl border border-slate-800 backdrop-blur-xl shadow-2xl shadow-black/50 overflow-hidden relative">
-      <div className="absolute top-0 right-0 w-48 h-48 bg-indigo-500/5 rounded-full blur-3xl pointer-events-none" />
-
-      {/* Ledger Header & Futuristic Filter Matrix */}
+    <div className="bg-[#0e1526] rounded-2xl border border-slate-800 shadow-xl shadow-black/20 overflow-hidden">
+      
+      {/* Ledger Header & Filter Toolbar */}
       <div className="p-4 sm:p-5 border-b border-slate-800/80 space-y-4">
         
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
           <div>
             <div className="flex items-center space-x-2.5">
-              <span className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse" />
-              <h3 className="font-bold text-base text-white font-display tracking-tight flex items-center space-x-2">
-                <span>QUANTUM LEDGER STREAM</span>
-                <span className="px-2 py-0.5 rounded-full bg-indigo-950/80 border border-indigo-500/30 text-indigo-300 text-[11px] font-mono font-bold">
-                  {filteredTransactions.length} / {transactions.length} RECORDS
+              <h3 className="font-bold text-base text-white flex items-center space-x-2">
+                <span>Kharcha & Kamai History</span>
+                <span className="px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 text-xs font-medium">
+                  {filteredTransactions.length} of {transactions.length}
                 </span>
               </h3>
             </div>
-            <p className="text-xs text-slate-400 font-mono mt-1">
-              Decentralized multi-source ingestion via Telegram bot & manual terminal
+            <p className="text-xs text-slate-400 mt-0.5">
+              Telegram Bot aur Web App se add kiye gaye transactions ka hisaab
             </p>
           </div>
 
@@ -201,30 +195,30 @@ export const TransactionList: React.FC<TransactionListProps> = ({
             {transactions.length > 0 && (
               <button
                 onClick={() => {
-                  if (confirm('Are you sure you want to purge all transaction records?')) {
+                  if (confirm('Kya aap sach me saare transactions delete karna chahte hain?')) {
                     onClearAll();
                   }
                 }}
-                className="text-xs font-mono text-slate-400 hover:text-rose-400 px-3 py-1.5 rounded-xl border border-slate-800 hover:border-rose-500/40 hover:bg-rose-950/20 transition-all"
+                className="text-xs text-slate-400 hover:text-rose-400 px-3 py-1.5 rounded-xl border border-slate-800 hover:border-rose-500/30 hover:bg-rose-950/20 transition-all cursor-pointer"
               >
-                PURGE ALL
+                Sab Delete Karein
               </button>
             )}
           </div>
         </div>
 
         {/* Filter Toolbar */}
-        <div className={`grid grid-cols-1 sm:grid-cols-2 ${uniqueMembers.length > 1 ? 'lg:grid-cols-6' : 'lg:grid-cols-5'} gap-2.5 text-xs font-mono`}>
+        <div className={`grid grid-cols-1 sm:grid-cols-2 ${uniqueMembers.length > 1 ? 'lg:grid-cols-6' : 'lg:grid-cols-5'} gap-2.5 text-xs`}>
           
-          {/* Cyber Search Input */}
+          {/* Search Input */}
           <div className="lg:col-span-2 relative">
-            <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-cyan-400" />
+            <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
             <input
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search note, category, member, amount..."
-              className="w-full pl-8 pr-3 py-2 bg-slate-950/90 border border-slate-700/80 rounded-xl text-xs text-cyan-200 placeholder:text-slate-500 focus:outline-hidden focus:border-cyan-400 focus:ring-1 focus:ring-cyan-400/40"
+              placeholder="Khojein: kharcha, category, amount..."
+              className="w-full pl-8 pr-3 py-2 bg-slate-950 border border-slate-700/80 rounded-xl text-xs text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/30"
             />
             {searchQuery && (
               <button
@@ -241,11 +235,11 @@ export const TransactionList: React.FC<TransactionListProps> = ({
             <select
               value={selectedType}
               onChange={(e) => setSelectedType(e.target.value as any)}
-              className="w-full px-3 py-2 bg-slate-950/90 border border-slate-700/80 rounded-xl text-xs text-slate-200 focus:outline-hidden focus:border-cyan-400"
+              className="w-full px-3 py-2 bg-slate-950 border border-slate-700/80 rounded-xl text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
             >
-              <option value="all">ALL CASHFLOW</option>
-              <option value="income">🟢 INFLOW ONLY</option>
-              <option value="expense">🔴 OUTFLOW ONLY</option>
+              <option value="all">Sabhi Types</option>
+              <option value="income">🟢 Kamai (Income)</option>
+              <option value="expense">🔴 Kharcha (Expense)</option>
             </select>
           </div>
 
@@ -255,9 +249,9 @@ export const TransactionList: React.FC<TransactionListProps> = ({
               <select
                 value={selectedMember}
                 onChange={(e) => setSelectedMember(e.target.value)}
-                className="w-full px-3 py-2 bg-indigo-950/60 border border-indigo-500/40 rounded-xl text-xs text-cyan-300 font-bold focus:outline-hidden focus:border-cyan-400"
+                className="w-full px-3 py-2 bg-slate-950 border border-slate-700/80 rounded-xl text-xs text-cyan-300 focus:outline-none focus:border-indigo-500"
               >
-                <option value="all">👥 ALL MEMBERS ({uniqueMembers.length})</option>
+                <option value="all">👥 Sabhi Members ({uniqueMembers.length})</option>
                 {uniqueMembers.map((m) => (
                   <option key={m} value={m}>
                     👤 {m}
@@ -272,9 +266,9 @@ export const TransactionList: React.FC<TransactionListProps> = ({
             <select
               value={selectedCategory}
               onChange={(e) => setSelectedCategory(e.target.value)}
-              className="w-full px-3 py-2 bg-slate-950/90 border border-slate-700/80 rounded-xl text-xs text-slate-200 focus:outline-hidden focus:border-cyan-400"
+              className="w-full px-3 py-2 bg-slate-950 border border-slate-700/80 rounded-xl text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
             >
-              <option value="all">ALL CATEGORIES</option>
+              <option value="all">Sabhi Categories</option>
               {uniqueCategories.map((c) => (
                 <option key={c} value={c}>
                   {c}
@@ -288,12 +282,12 @@ export const TransactionList: React.FC<TransactionListProps> = ({
             <select
               value={dateFilter}
               onChange={(e) => setDateFilter(e.target.value as any)}
-              className="w-full px-3 py-2 bg-slate-950/90 border border-slate-700/80 rounded-xl text-xs text-slate-200 focus:outline-hidden focus:border-cyan-400"
+              className="w-full px-3 py-2 bg-slate-950 border border-slate-700/80 rounded-xl text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
             >
-              <option value="all">ALL TIMEFRAMES</option>
-              <option value="today">TODAY</option>
-              <option value="yesterday">YESTERDAY</option>
-              <option value="this_month">THIS MONTH</option>
+              <option value="all">Sabhi Tareeq</option>
+              <option value="today">Aaj (Today)</option>
+              <option value="yesterday">Kal (Yesterday)</option>
+              <option value="this_month">Is Mahine (This Month)</option>
             </select>
           </div>
 
@@ -301,13 +295,13 @@ export const TransactionList: React.FC<TransactionListProps> = ({
 
         {/* Active filter pill reset */}
         {hasActiveFilters && (
-          <div className="flex items-center space-x-2 text-xs font-mono">
-            <span className="text-slate-400">ACTIVE FILTERS APPLIED</span>
+          <div className="flex items-center space-x-2 text-xs">
+            <span className="text-slate-400">Filters active hain</span>
             <button
               onClick={resetFilters}
-              className="text-cyan-400 hover:text-cyan-300 font-bold underline"
+              className="text-indigo-400 hover:text-indigo-300 font-medium underline cursor-pointer"
             >
-              RESET ALL
+              Reset karein
             </button>
           </div>
         )}
@@ -318,24 +312,24 @@ export const TransactionList: React.FC<TransactionListProps> = ({
       {filteredTransactions.length === 0 ? (
         <div className="py-16 text-center px-4">
           <div className="w-12 h-12 rounded-2xl bg-slate-900 border border-slate-800 text-slate-500 mx-auto flex items-center justify-center mb-3">
-            <Filter className="w-6 h-6 text-cyan-400/60" />
+            <Filter className="w-6 h-6 text-slate-400" />
           </div>
-          <h4 className="text-sm font-semibold text-slate-200 font-display">NO TELEMETRY MATCH</h4>
-          <p className="text-xs text-slate-400 font-mono max-w-sm mx-auto mt-1">
+          <h4 className="text-sm font-semibold text-slate-200">Koi transaction nahi mila</h4>
+          <p className="text-xs text-slate-400 max-w-sm mx-auto mt-1">
             {hasActiveFilters
-              ? 'Adjust query criteria or reset filter parameters.'
-              : 'Dispatch a Telegram message (e.g. "300 dahi cash" or "500 petrol upi") to log an entry.'}
+              ? 'Filter criteria badlein ya filters reset karein.'
+              : 'Telegram bot par message bhejein (jaise "300 dahi cash" ya "500 petrol upi") naya kharcha record karne ke liye.'}
           </p>
         </div>
       ) : (
         <div className="divide-y divide-slate-800/60 overflow-x-auto">
           
-          {/* Cyber Table Header */}
-          <div className="hidden md:grid grid-cols-12 gap-4 px-6 py-2.5 bg-slate-950/70 text-[10px] font-mono font-bold uppercase tracking-widest text-slate-400 border-b border-slate-800/80">
-            <div className="col-span-4">NOTE / RAW PAYLOAD</div>
-            <div className="col-span-3">AI CATEGORY</div>
-            <div className="col-span-3">PAYMENT & TELEMETRY</div>
-            <div className="col-span-2 text-right">VALUATION / OP</div>
+          {/* Table Header */}
+          <div className="hidden md:grid grid-cols-12 gap-4 px-6 py-2.5 bg-slate-950/60 text-xs font-semibold text-slate-400 border-b border-slate-800">
+            <div className="col-span-4">Vivaran (Description)</div>
+            <div className="col-span-3">Category</div>
+            <div className="col-span-3">Payment & Tareeq</div>
+            <div className="col-span-2 text-right">Rashi (Amount)</div>
           </div>
 
           {/* List Items */}
@@ -348,7 +342,7 @@ export const TransactionList: React.FC<TransactionListProps> = ({
             return (
               <div
                 key={tx.id}
-                className={`grid grid-cols-1 md:grid-cols-12 gap-3 md:gap-4 px-5 md:px-6 py-3.5 hover:bg-slate-800/40 transition-colors items-center text-xs relative ${
+                className={`grid grid-cols-1 md:grid-cols-12 gap-3 md:gap-4 px-5 md:px-6 py-3.5 hover:bg-slate-800/30 transition-colors items-center text-xs relative ${
                   isUncategorized ? 'bg-amber-950/10 border-l-2 border-amber-400' : ''
                 }`}
               >
@@ -358,8 +352,8 @@ export const TransactionList: React.FC<TransactionListProps> = ({
                   <div
                     className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 border ${
                       isIncome 
-                        ? 'bg-emerald-950/80 border-emerald-500/40 text-emerald-400 shadow-xs shadow-emerald-950' 
-                        : 'bg-slate-900 border-slate-700/80 text-rose-400 shadow-xs'
+                        ? 'bg-emerald-950/70 border-emerald-500/30 text-emerald-400' 
+                        : 'bg-slate-900 border-slate-700/80 text-rose-400'
                     }`}
                   >
                     {isIncome ? (
@@ -370,11 +364,10 @@ export const TransactionList: React.FC<TransactionListProps> = ({
                   </div>
                   <div className="min-w-0">
                     <div className="flex items-center space-x-2">
-                      <span className="font-semibold text-white truncate font-display text-sm">{tx.description}</span>
+                      <span className="font-semibold text-white truncate text-sm">{tx.description}</span>
                     </div>
                     {tx.rawMessage && (
-                      <div className="text-[11px] text-cyan-300/80 font-mono mt-0.5 truncate max-w-xs flex items-center gap-1">
-                        <Terminal className="w-2.5 h-2.5 text-cyan-400 shrink-0" />
+                      <div className="text-[11px] text-slate-400 mt-0.5 truncate max-w-xs flex items-center gap-1">
                         <span>"{tx.rawMessage}"</span>
                       </div>
                     )}
@@ -385,12 +378,12 @@ export const TransactionList: React.FC<TransactionListProps> = ({
                 <div className="md:col-span-3 relative">
                   <button
                     onClick={() => setActiveCategoryDropdownTxId(isDropdownOpen ? null : tx.id)}
-                    className={`inline-flex items-center space-x-1.5 px-2.5 py-1 rounded-xl text-[11px] font-mono font-medium border transition-all cursor-pointer ${
+                    className={`inline-flex items-center space-x-1.5 px-2.5 py-1 rounded-xl text-[11px] font-medium border transition-all cursor-pointer ${
                       isUncategorized
                         ? 'bg-amber-950/60 text-amber-300 border-amber-400/50 hover:bg-amber-900/60'
-                        : 'bg-slate-900 text-slate-200 border-slate-700 hover:border-cyan-400/60'
+                        : 'bg-slate-900 text-slate-200 border-slate-700 hover:border-slate-500'
                     }`}
-                    title="Click to change AI Category"
+                    title="Category badalne ke liye click karein"
                   >
                     <span 
                       className="w-2 h-2 rounded-full shrink-0" 
@@ -402,17 +395,17 @@ export const TransactionList: React.FC<TransactionListProps> = ({
 
                   {/* Popover Dropdown for Category Changer */}
                   {isDropdownOpen && (
-                    <div className="absolute left-0 top-full mt-1.5 z-40 bg-[#090d19] border border-cyan-500/30 rounded-2xl shadow-2xl shadow-black/80 p-2 w-60 max-h-60 overflow-y-auto animate-in fade-in zoom-in duration-150 backdrop-blur-xl">
-                      <div className="text-[10px] font-mono font-bold text-cyan-400 px-2 py-1 uppercase tracking-wider border-b border-slate-800 mb-1">
-                        RECLASSIFY CATEGORY:
+                    <div className="absolute left-0 top-full mt-1.5 z-40 bg-[#0b1120] border border-slate-700 rounded-xl shadow-2xl p-2 w-60 max-h-60 overflow-y-auto">
+                      <div className="text-[11px] font-semibold text-slate-400 px-2 py-1 uppercase tracking-wider border-b border-slate-800 mb-1">
+                        Category Badlein:
                       </div>
                       {categories.map((c) => (
                         <button
                           key={c.id}
                           onClick={() => handleCategoryChange(tx.id, c.name)}
-                          className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs font-mono flex items-center space-x-2 transition-colors cursor-pointer ${
+                          className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs flex items-center space-x-2 transition-colors cursor-pointer ${
                             tx.category === c.name
-                              ? 'bg-cyan-950/70 text-cyan-300 font-bold border border-cyan-500/40'
+                              ? 'bg-indigo-950/80 text-indigo-300 font-semibold border border-indigo-500/40'
                               : 'text-slate-300 hover:bg-slate-800'
                           }`}
                         >
@@ -431,26 +424,26 @@ export const TransactionList: React.FC<TransactionListProps> = ({
                 <div className="md:col-span-3 flex flex-col space-y-1">
                   <div className="flex items-center space-x-2">
                     {renderPaymentBadge(tx.paymentMethod)}
-                    <span className="text-slate-300 font-mono text-[11px] flex items-center space-x-1">
+                    <span className="text-slate-300 text-[11px] flex items-center space-x-1">
                       <Calendar className="w-3 h-3 text-slate-500" />
                       <span>{formatRelativeDate(tx.date)}</span>
                     </span>
                   </div>
-                  <div className="flex flex-wrap items-center gap-1.5 text-[10px] font-mono text-slate-400">
+                  <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-slate-400">
                     {tx.telegramUser ? (
-                      <span className="inline-flex items-center text-cyan-300 bg-cyan-950/70 border border-cyan-500/30 px-1.5 py-0.5 rounded font-medium space-x-1">
+                      <span className="inline-flex items-center text-cyan-300 bg-cyan-950/60 border border-cyan-500/20 px-1.5 py-0.5 rounded text-[10px] space-x-1">
                         <User className="w-2.5 h-2.5 text-cyan-400" />
                         <span className="truncate max-w-[120px]">{tx.telegramUser}</span>
                       </span>
                     ) : tx.source === 'telegram' ? (
-                      <span className="inline-flex items-center text-indigo-400 space-x-0.5">
+                      <span className="inline-flex items-center text-indigo-400 space-x-0.5 text-[10px]">
                         <Bot className="w-3 h-3" />
-                        <span>TG_BOT</span>
+                        <span>Telegram Bot</span>
                       </span>
                     ) : (
-                      <span className="inline-flex items-center text-slate-400 bg-slate-900 border border-slate-800 px-1.5 py-0.5 rounded">
+                      <span className="inline-flex items-center text-slate-400 bg-slate-900 border border-slate-800 px-1.5 py-0.5 rounded text-[10px]">
                         <Laptop className="w-2.5 h-2.5 mr-1 text-slate-500" />
-                        <span>{tx.source || 'WEB_APP'}</span>
+                        <span>Web App</span>
                       </span>
                     )}
                     {tx.time && <span>• {tx.time}</span>}
@@ -461,7 +454,7 @@ export const TransactionList: React.FC<TransactionListProps> = ({
                 <div className="md:col-span-2 flex items-center justify-between md:justify-end space-x-3">
                   <div className="text-left md:text-right">
                     <span
-                      className={`text-sm font-extrabold font-mono tracking-tight ${
+                      className={`text-sm font-bold tracking-tight ${
                         isIncome ? 'text-emerald-400' : 'text-rose-400'
                       }`}
                     >
@@ -471,7 +464,7 @@ export const TransactionList: React.FC<TransactionListProps> = ({
 
                   <button
                     onClick={() => onDeleteTransaction(tx.id)}
-                    title="Delete record"
+                    title="Transaction delete karein"
                     className="p-1.5 text-slate-500 hover:text-rose-400 hover:bg-rose-950/40 rounded-xl transition-colors shrink-0 cursor-pointer"
                   >
                     <Trash2 className="w-3.5 h-3.5" />

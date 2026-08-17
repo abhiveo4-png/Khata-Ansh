@@ -126,9 +126,9 @@ export const TelegramBotSetupModal: React.FC<TelegramBotSetupModalProps> = ({
               <Bot className="w-5 h-5" />
             </div>
             <div>
-              <h3 className="font-bold text-base text-white font-display">TELEGRAM BOT GATEWAY LINK</h3>
+              <h3 className="font-bold text-base text-white font-display">TELEGRAM BOT CONNECT KAREIN</h3>
               <p className="text-xs text-slate-400 font-mono">
-                Real-time income & expense ingestion via Telegram Webhook
+                Telegram Webhook ke zariye direct kharcha aur kamai record karein
               </p>
             </div>
           </div>
@@ -149,13 +149,13 @@ export const TelegramBotSetupModal: React.FC<TelegramBotSetupModalProps> = ({
               <ShieldCheck className="w-5 h-5 text-emerald-400 shrink-0 mt-0.5" />
               <div className="text-xs text-emerald-200">
                 <p className="font-bold text-sm text-emerald-300 font-display">
-                  TELEGRAM BOT ONLINE & SYNCHRONIZED
+                  TELEGRAM BOT CONNECTED HAI & ACTIVE HAI
                 </p>
                 <p className="mt-1">
                   Bot username: <b className="text-cyan-300">@{botConfig.botUsername || 'Telegram Bot'}</b>
                 </p>
                 <p className="mt-0.5 text-slate-400">
-                  Messages received on Telegram are instantly classified by Gemini AI and ingested into your ledger stream.
+                  Telegram par bheja gaya koi bhi message (jaise "300 petrol upi") turant AI dwara samajh kar khate me jud jayega.
                 </p>
               </div>
             </div>
@@ -164,10 +164,10 @@ export const TelegramBotSetupModal: React.FC<TelegramBotSetupModalProps> = ({
               <AlertTriangle className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
               <div className="text-xs text-amber-200">
                 <p className="font-bold text-sm text-amber-300 font-display">
-                  BOT GATEWAY DISCONNECTED
+                  BOT DISCONNECTED HAI
                 </p>
                 <p className="mt-1">
-                  Follow the 2-minute setup protocol below to connect your free Telegram Bot.
+                  Neeche diye gaye 2-minute ke asaan steps se apna free Telegram bot connect karein.
                 </p>
               </div>
             </div>
@@ -186,7 +186,7 @@ export const TelegramBotSetupModal: React.FC<TelegramBotSetupModalProps> = ({
           {/* 3 Step Guide */}
           <div className="space-y-3">
             <h4 className="text-[10px] font-bold uppercase tracking-wider text-cyan-400">
-              GATEWAY CONFIGURATION PROTOCOL
+              BOT SETUP KE ASAAN STEPS:
             </h4>
 
             <div className="grid grid-cols-1 gap-2.5 text-xs">
@@ -195,7 +195,7 @@ export const TelegramBotSetupModal: React.FC<TelegramBotSetupModalProps> = ({
               <div className="bg-slate-900/80 rounded-xl p-3.5 border border-slate-800">
                 <div className="flex items-center justify-between">
                   <span className="font-bold text-white font-display">
-                    1. Generate Bot Token on Telegram
+                    1. Telegram par Bot Token banayein
                   </span>
                   <a
                     href="https://t.me/BotFather"
@@ -203,25 +203,25 @@ export const TelegramBotSetupModal: React.FC<TelegramBotSetupModalProps> = ({
                     rel="noreferrer"
                     className="text-cyan-400 hover:text-cyan-300 font-bold inline-flex items-center space-x-1"
                   >
-                    <span>Open @BotFather</span>
+                    <span>@BotFather kholein</span>
                     <ExternalLink className="w-3 h-3" />
                   </a>
                 </div>
                 <p className="text-slate-400 text-[11px] mt-1 font-mono">
-                  Send <code className="text-cyan-300 bg-slate-950 px-1 rounded">/newbot</code> to BotFather and copy your API Token.
+                  BotFather ko <code className="text-cyan-300 bg-slate-950 px-1 rounded">/newbot</code> command bhejein aur wahan se mila API Token copy karein.
                 </p>
               </div>
 
               {/* Step 2 */}
               <div className="bg-slate-900/80 rounded-xl p-3.5 border border-slate-800 space-y-2">
                 <span className="font-bold text-white font-display">
-                  2. Ingest Telegram Bot Token
+                  2. Telegram Bot Token yahan paste karein
                 </span>
                 <input
                   type="password"
                   value={tokenInput}
                   onChange={(e) => setTokenInput(e.target.value)}
-                  placeholder="Paste HTTP API Token (e.g. 123456789:ABCdef...)"
+                  placeholder="HTTP API Token paste karein (jaise: 123456789:ABCdef...)"
                   className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-cyan-300 text-xs font-mono focus:border-cyan-400 outline-hidden"
                 />
               </div>
@@ -230,11 +230,11 @@ export const TelegramBotSetupModal: React.FC<TelegramBotSetupModalProps> = ({
               <div className="bg-slate-900/80 rounded-xl p-3.5 border border-slate-800 space-y-2">
                 <div className="flex items-center justify-between">
                   <span className="font-bold text-white font-display">
-                    3. Target Webhook URL
+                    3. Webhook URL (Auto-generated)
                   </span>
                   <button
                     onClick={handleCopyWebhook}
-                    className="text-[11px] text-cyan-400 hover:text-cyan-300 flex items-center space-x-1"
+                    className="text-[11px] text-cyan-400 hover:text-cyan-300 flex items-center space-x-1 cursor-pointer"
                   >
                     {copied ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
                     <span>{copied ? 'Copied' : 'Copy'}</span>
@@ -254,19 +254,19 @@ export const TelegramBotSetupModal: React.FC<TelegramBotSetupModalProps> = ({
               <button
                 onClick={handleDeleteWebhook}
                 disabled={isSaving}
-                className="text-rose-400 hover:text-rose-300 text-xs flex items-center space-x-1"
+                className="text-rose-400 hover:text-rose-300 text-xs flex items-center space-x-1 cursor-pointer"
               >
                 <Trash2 className="w-3.5 h-3.5" />
-                <span>UNLINK WEBHOOK</span>
+                <span>BOT DISCONNECT KAREIN</span>
               </button>
             )}
 
             <div className="flex items-center space-x-2 ml-auto">
               <button
                 onClick={onClose}
-                className="px-4 py-2 rounded-xl border border-slate-700 text-slate-400 hover:text-white"
+                className="px-4 py-2 rounded-xl border border-slate-700 text-slate-400 hover:text-white cursor-pointer"
               >
-                CLOSE
+                BAND KAREIN
               </button>
               <button
                 onClick={handleSaveAndSetWebhook}
@@ -276,12 +276,12 @@ export const TelegramBotSetupModal: React.FC<TelegramBotSetupModalProps> = ({
                 {isSettingWebhook ? (
                   <>
                     <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                    <span>SYNCHRONIZING...</span>
+                    <span>CONNECT HO RAHA HAI...</span>
                   </>
                 ) : (
                   <>
                     <Zap className="w-3.5 h-3.5 stroke-[3]" />
-                    <span>BIND & ACTIVATE WEBHOOK</span>
+                    <span>BOT CONNECT KAREIN</span>
                   </>
                 )}
               </button>

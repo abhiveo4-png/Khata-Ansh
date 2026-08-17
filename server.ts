@@ -776,27 +776,28 @@ async function parseMessageWithGemini(
     categoryNames.push('Uncategorized');
   }
 
-  const prompt = `You are an expert financial transaction parser for an Indian personal ledger.
-Analyze the user's message (which can be in English, Hindi, or Hinglish, e.g. "300 dahi cash", "500 petrol upi", "income 15000 bank transfer", "bought t-shirt 800 card", "sabzi 120").
+  const prompt = `You are an expert financial transaction parser for an Indian personal ledger with full Hinglish & Hindi support.
+Analyze the user's message (which can be in English, Hindi, or Hinglish, e.g. "300 dahi cash", "500 petrol upi", "15000 salary bank me aayi", "1200 ki jeans kharidi card se", "sabzi 120 nagad", "dost ko 500 diye", "bhai se 2000 mile", "papa ne 5000 bheje", "kamla pasand 250", "400 zomato khana").
 
 Current date: ${currentDate}
 
 CRITICAL RULES:
-1. Extract every transaction.
+1. Extract every transaction (income or expense).
 2. Payment Method Detection:
-   - If user wrote "cash", "nagad", "rokda" -> paymentMethod: "Cash"
-   - If user wrote "upi", "gpay", "phonepe", "paytm", "bhim", "scan" -> paymentMethod: "UPI"
-   - If user wrote "card", "visa", "mastercard", "credit", "debit" -> paymentMethod: "Card"
-   - If user wrote "bank transfer", "net banking", "neft", "imps", "bank" -> paymentMethod: "Bank Transfer"
-   - If not specified, default to "UPI" (or "Cash" if implied by grocery/chai).
+   - If user wrote "cash", "nagad", "rokda", "haath me", "cash diya" -> paymentMethod: "Cash"
+   - If user wrote "upi", "gpay", "google pay", "phonepe", "paytm", "bhim", "scan", "qr" -> paymentMethod: "UPI"
+   - If user wrote "card", "visa", "mastercard", "credit", "debit", "swipe" -> paymentMethod: "Card"
+   - If user wrote "bank transfer", "net banking", "neft", "imps", "bank", "account me", "khate me" -> paymentMethod: "Bank Transfer"
+   - If not specified, default to "UPI" (or "Cash" if implied by small grocery/chai/sabzi).
 3. Category Assignment:
    - You MUST pick the best category from ONLY this exact list of the user's active categories:
    ${JSON.stringify(categoryNames)}
-   - CRITICAL REQUIREMENT: If the product/service does not clearly belong to any existing category, or if you are uncertain, you MUST set category to "Uncategorized".
-4. Clean description:
-   - "300 dahi cash" -> description: "Dahi", amount: 300, paymentMethod: "Cash"
-   - "500 petrol upi" -> description: "Petrol", amount: 500, paymentMethod: "UPI"
-   - "salary 50000 bank transfer" -> description: "Salary", amount: 50000, paymentMethod: "Bank Transfer"
+   - CRITICAL REQUIREMENT: If the item does not clearly belong to any existing category, or if you are uncertain, you MUST set category to "Uncategorized".
+4. Clean description (in clean Title Case):
+   - "300 dahi cash" -> description: "Dahi", amount: 300, paymentMethod: "Cash", type: "expense"
+   - "500 petrol upi" -> description: "Petrol", amount: 500, paymentMethod: "UPI", type: "expense"
+   - "salary 50000 bank transfer" -> description: "Salary", amount: 50000, paymentMethod: "Bank Transfer", type: "income"
+   - "papa ne 2000 pocket money di" -> description: "Pocket Money", amount: 2000, paymentMethod: "UPI", type: "income"
 
 User message:
 """
@@ -906,6 +907,9 @@ async function handleTelegramMessage(messageObj: any) {
 
   if (!rawText || !botToken) return;
 
+  // Always reload users from disk on every message so new registrations and links are immediately active
+  users = loadJson<UserProfile[]>(USERS_FILE, users);
+
   const lowerText = rawText.toLowerCase().trim();
   const command = rawText.split(' ')[0].toLowerCase();
   const commandArg = rawText.split(' ').slice(1).join(' ').trim();
@@ -913,20 +917,18 @@ async function handleTelegramMessage(messageObj: any) {
   // 1. Check for Linking Command (/link <code> or /start <code>)
   if (command === '/link' || (command === '/start' && commandArg && /^\d{6}$/.test(commandArg))) {
     const linkCode = commandArg.replace(/[^0-9]/g, '');
-    // Refresh users from file to ensure fresh state
-    users = loadJson<UserProfile[]>(USERS_FILE, users);
     const userToLink = users.find(u => u.linkCode === linkCode);
 
     if (userToLink) {
       // Clean up this chatId from all other users so there's no conflict
       for (const u of users) {
         if (u.id !== userToLink.id) {
-          if (u.telegramChatId === chatId) {
+          if (String(u.telegramChatId) === String(chatId)) {
             delete u.telegramChatId;
             delete u.telegramUsername;
           }
           if (u.linkedMembers) {
-            u.linkedMembers = u.linkedMembers.filter(m => m.telegramChatId !== chatId);
+            u.linkedMembers = u.linkedMembers.filter(m => String(m.telegramChatId) !== String(chatId));
           }
         }
       }
@@ -937,7 +939,7 @@ async function handleTelegramMessage(messageObj: any) {
 
       const isFirst = userToLink.linkedMembers.length === 0 && !userToLink.telegramChatId;
       const memberName = messageObj.from?.first_name || userName || (isFirst ? userToLink.name : 'Family Member');
-      const existingMemberIdx = userToLink.linkedMembers.findIndex(m => m.telegramChatId === chatId);
+      const existingMemberIdx = userToLink.linkedMembers.findIndex(m => String(m.telegramChatId) === String(chatId));
 
       if (existingMemberIdx >= 0) {
         userToLink.linkedMembers[existingMemberIdx].name = memberName;
@@ -965,14 +967,14 @@ async function handleTelegramMessage(messageObj: any) {
       await sendTelegramReply(
         botToken,
         chatId,
-        `🎉 <b>Connected to ${userToLink.name}'s Shared Account!</b>\n\nHello <b>${memberName}</b>! You are now connected to <b>${userToLink.name}'s</b> ledger (<b>${userToLink.email}</b>).\n👥 <b>Total Connected Members:</b> ${totalMembers}\n\n💡 <b>Now you can log expenses together:</b>\n• <code>500 sabzi cash</code>\n• <code>300 petrol upi</code>\n• <code>1200 groceries card</code>\n\nAll entries will automatically reflect in the shared dashboard!`
+        `🎉 <b>${userToLink.name} ke Shared Khate se Connect ho gaye!</b>\n\nNamaste <b>${memberName}</b>! Aap successfully <b>${userToLink.name}</b> ke ledger (<b>${userToLink.email}</b>) se jud gaye hain.\n👥 <b>Total Connected Members:</b> ${totalMembers}\n\n💡 <b>Ab aap kharcha ya kamai sidhe log kar sakte hain:</b>\n• <code>500 sabzi cash</code>\n• <code>300 petrol upi</code>\n• <code>1200 groceries card</code>\n\nAapke saare transactions shared web dashboard par live dikhenge!`
       );
       return;
     } else {
       await sendTelegramReply(
         botToken,
         chatId,
-        `❌ <b>Invalid Link Code.</b>\n\nPlease check your 6-digit code on the TeleExpense Dashboard (top right profile) and try again:\n<code>/link 123456</code>`
+        `❌ <b>Galat Link Code.</b>\n\nKripya TeleExpense Dashboard par apna 6-digit link code check karein aur dobara try karein:\n<code>/link 123456</code>`
       );
       return;
     }
@@ -980,21 +982,21 @@ async function handleTelegramMessage(messageObj: any) {
 
   // 2. Resolve User from Chat ID (Search in linkedMembers first, then primary ID)
   let targetUser = users.find(
-    u => u.linkedMembers && u.linkedMembers.some(m => m.telegramChatId === chatId)
+    u => u.linkedMembers && u.linkedMembers.some(m => String(m.telegramChatId) === String(chatId))
   );
   if (!targetUser) {
-    targetUser = users.find(u => u.telegramChatId === chatId);
+    targetUser = users.find(u => String(u.telegramChatId) === String(chatId));
   }
 
   // If unlinked user
   if (!targetUser) {
     // If only one user exists in system, offer quick auto-link
-    if (users.length === 1 && (!users[0].telegramChatId || users[0].telegramChatId === chatId)) {
+    if (users.length === 1 && (!users[0].telegramChatId || String(users[0].telegramChatId) === String(chatId))) {
       targetUser = users[0];
       if (!targetUser.linkedMembers) targetUser.linkedMembers = [];
       targetUser.telegramChatId = chatId;
       targetUser.telegramUsername = messageObj.from?.username || userName;
-      if (!targetUser.linkedMembers.some(m => m.telegramChatId === chatId)) {
+      if (!targetUser.linkedMembers.some(m => String(m.telegramChatId) === String(chatId))) {
         targetUser.linkedMembers.push({
           id: `mem_${chatId}`,
           name: userName || targetUser.name,
@@ -1010,7 +1012,7 @@ async function handleTelegramMessage(messageObj: any) {
       await sendTelegramReply(
         botToken,
         chatId,
-        `👋 <b>Welcome to TeleExpense AI Shared Ledger!</b>\n\nYour Telegram is not yet linked to an account.\n\n🔑 <b>Your Telegram Chat ID:</b> <code>${chatId}</code>\n\n<b>How to connect:</b>\n1. Open your TeleExpense Dashboard or ask the account owner for their 6-digit <b>Link Code</b>\n2. Reply here:\n<code>/link &lt;YOUR_CODE&gt;</code>\n\n<i>Example:</i> <code>/link 838107</code>\n\n💡 <i>Multiple family members or partners can link to the SAME account!</i>`
+        `👋 <b>TeleExpense AI Khate me Aapka Swagat Hai!</b>\n\nAapka Telegram account abhi kisi khate se link nahi hai.\n\n🔑 <b>Aapka Telegram Chat ID:</b> <code>${chatId}</code>\n\n<b>Connect kaise karein:</b>\n1. Apna TeleExpense Web Dashboard kholein aur 6-digit ka <b>Link Code</b> dekhein\n2. Yahan reply karein:\n<code>/link &lt;AAPKA_CODE&gt;</code>\n\n<i>Udaharan:</i> <code>/link 513919</code>\n\n💡 <i>Ek hi khate se multiple family members connect ho sakte hain!</i>`
       );
       return;
     }
@@ -1027,29 +1029,29 @@ async function handleTelegramMessage(messageObj: any) {
 
   // 3. Help & Commands
   if (command === '/start' || command === '/help') {
-    const welcomeMsg = `👋 <b>Namaste ${targetUser.name}! Welcome to TeleExpense AI</b> 💰
+    const welcomeMsg = `👋 <b>Namaste ${targetUser.name}! TeleExpense AI me aapka swagat hai</b> 💰
 
-Logged in as: <b>${targetUser.email}</b>
+Khata: <b>${targetUser.email}</b>
 
-📌 <b>Examples to try:</b>
+📌 <b>Kharcha ya Kamai add karne ke tareeqe:</b>
 • <code>300 dahi cash</code>
 • <code>500 petrol upi</code>
-• <code>100 vegetable</code>
+• <code>100 sabzi nagad</code>
 • <code>salary 50000 bank transfer</code>
-• <code>bought jeans 1200 card</code>
+• <code>1200 ki jeans card se</code>
 
-🗑️ <b>Delete Commands:</b>
-• <code>/undo</code> or <code>/delete</code> - Delete last transaction
-• <code>/delete 1</code> - Delete item #1 from /recent
-• <code>delete dahi</code> - Delete matching item
-• <code>/clearall</code> - Delete all transactions
+🗑️ <b>Delete karne ke commands:</b>
+• <code>/undo</code> ya <code>/delete</code> - Aakhri transaction delete karein
+• <code>/delete 1</code> - Recent list se #1 item delete karein
+• <code>delete dahi</code> ya <code>hatao petrol</code> - Name se delete karein
+• <code>/clearall</code> ya <code>sab delete karo</code> - Saare transactions clear karein
 
-📊 <b>Commands:</b>
-/balance - Check current total balance
-/summary - View monthly summary
-/recent - Last 5 transactions
-/categories - View your active categories
-/help - Show this guide`;
+📊 <b>Quick Commands:</b>
+/balance - Kul bacha hua balance check karein
+/summary - Mahine ki summary dekhein
+/recent - Aakhri 5 transactions dekhein
+/categories - Active categories ki list dekhein
+/help - Ye guide dobara dekhne ke liye`;
     await sendTelegramReply(botToken, chatId, welcomeMsg);
     return;
   }
@@ -1061,28 +1063,28 @@ Logged in as: <b>${targetUser.email}</b>
     await sendTelegramReply(
       botToken,
       chatId,
-      `📂 <b>Your Active Categories:</b>\n\n🔴 <b>Expense Categories:</b>\n${expenseCats}\n\n🟢 <b>Income Categories:</b>\n${incomeCats}\n\n💡 <i>You can add custom categories from your Web Dashboard anytime!</i>`
+      `📂 <b>Aapki Active Categories:</b>\n\n🔴 <b>Kharche (Expense Categories):</b>\n${expenseCats}\n\n🟢 <b>Kamai (Income Categories):</b>\n${incomeCats}\n\n💡 <i>Aap Web Dashboard se kabhi bhi nayi categories add ya edit kar sakte hain!</i>`
     );
     return;
   }
 
   // 5. Clear all command
-  if (command === '/clearall' || command === '/deleteall' || lowerText === 'clear all' || lowerText === 'sab delete karo') {
+  if (command === '/clearall' || command === '/deleteall' || lowerText === 'clear all' || lowerText === 'sab delete karo' || lowerText === 'sab hatao') {
     const count = userTransactions.length;
     if (count === 0) {
-      await sendTelegramReply(botToken, chatId, 'ℹ️ No transactions to delete.');
+      await sendTelegramReply(botToken, chatId, 'ℹ️ Delete karne ke liye koi transaction nahi hai.');
       return;
     }
     userTransactions.length = 0;
     saveUserData(userId, userStore);
-    await sendTelegramReply(botToken, chatId, `🗑️ <b>All ${count} transactions cleared successfully!</b>\n\n📊 <b>Total Balance:</b> ₹0`);
+    await sendTelegramReply(botToken, chatId, `🗑️ <b>Saare ${count} transactions successfully delete ho gaye!</b>\n\n📊 <b>Total Balance:</b> ₹0`);
     return;
   }
 
   // 6. Balance / Summary command
   if (command === '/balance' || command === '/summary') {
     const summary = calculateUserSummary(userId);
-    const summaryMsg = `📊 <b>${targetUser.name}'s Financial Summary</b>\n\n💰 <b>Net Balance:</b> ₹${summary.netSavings.toLocaleString('en-IN')}\n🟢 <b>Total Income:</b> ₹${summary.totalIncome.toLocaleString('en-IN')}\n🔴 <b>Total Expense:</b> ₹${summary.totalExpense.toLocaleString('en-IN')}\n📈 <b>Savings Rate:</b> ${summary.savingsRate}%\n📝 <b>Total Transactions:</b> ${summary.transactionCount}`;
+    const summaryMsg = `📊 <b>${targetUser.name} ka Financial Hisaab-Kitaab</b>\n\n💰 <b>Net Bacha Hua Balance:</b> ₹${summary.netSavings.toLocaleString('en-IN')}\n🟢 <b>Kul Income (Kamai):</b> ₹${summary.totalIncome.toLocaleString('en-IN')}\n🔴 <b>Kul Kharcha:</b> ₹${summary.totalExpense.toLocaleString('en-IN')}\n📈 <b>Bachat Rate:</b> ${summary.savingsRate}%\n📝 <b>Total Transactions:</b> ${summary.transactionCount}`;
     await sendTelegramReply(botToken, chatId, summaryMsg);
     return;
   }
@@ -1091,7 +1093,7 @@ Logged in as: <b>${targetUser.email}</b>
   if (command === '/recent') {
     const recent = userTransactions.slice(0, 5);
     if (recent.length === 0) {
-      await sendTelegramReply(botToken, chatId, 'ℹ️ No transactions recorded yet. Send something like <code>300 dahi cash</code>!');
+      await sendTelegramReply(botToken, chatId, 'ℹ️ Abhi tak koi transaction record nahi hua hai. Kuch add karne ke liye message bhejein jaise: <code>300 dahi cash</code>!');
       return;
     }
     const list = recent.map((t, idx) => {
@@ -1099,12 +1101,12 @@ Logged in as: <b>${targetUser.email}</b>
       const pm = t.paymentMethod ? `[${t.paymentMethod}]` : '';
       return `<b>[#${idx + 1}]</b> ${sign}₹${t.amount.toLocaleString('en-IN')} • <b>${t.description}</b> (${t.category}) ${pm} <i>${t.date}</i>`;
     }).join('\n');
-    await sendTelegramReply(botToken, chatId, `📝 <b>Recent Transactions:</b>\n\n${list}\n\n💡 <i>Tip: Send <code>/delete 1</code> to delete item #1</i>`);
+    await sendTelegramReply(botToken, chatId, `📝 <b>Haal hi ke Transactions:</b>\n\n${list}\n\n💡 <i>Tip: Item #1 ko delete karne ke liye <code>/delete 1</code> bhejein</i>`);
     return;
   }
 
   // 8. Delete / Undo commands
-  if (command === '/undo' || command === '/delete' || lowerText === 'undo' || lowerText === 'delete' || lowerText === 'delete last' || lowerText === 'hatao') {
+  if (command === '/undo' || command === '/delete' || lowerText === 'undo' || lowerText === 'delete' || lowerText === 'delete last' || lowerText === 'hatao' || lowerText === 'aakhri hatao') {
     const parts = rawText.split(/\s+/);
     if (parts.length > 1 && /^\d+$/.test(parts[1])) {
       const targetIndex = parseInt(parts[1], 10) - 1;
@@ -1115,17 +1117,17 @@ Logged in as: <b>${targetUser.email}</b>
         await sendTelegramReply(
           botToken,
           chatId,
-          `🗑️ <b>Deleted Transaction #${targetIndex + 1}:</b>\n₹${deleted.amount} • ${deleted.description} (${deleted.category})\n\n📊 <b>Updated Balance:</b> ₹${summary.netSavings.toLocaleString('en-IN')}`
+          `🗑️ <b>Transaction #${targetIndex + 1} Delete Ho Gaya:</b>\n₹${deleted.amount} • ${deleted.description} (${deleted.category})\n\n📊 <b>Updated Balance:</b> ₹${summary.netSavings.toLocaleString('en-IN')}`
         );
         return;
       } else {
-        await sendTelegramReply(botToken, chatId, `⚠️ Invalid index. Send <code>/recent</code> to view transaction numbers.`);
+        await sendTelegramReply(botToken, chatId, `⚠️ Galat number. Transaction list dekhne ke liye <code>/recent</code> bhejein.`);
         return;
       }
     }
 
     if (userTransactions.length === 0) {
-      await sendTelegramReply(botToken, chatId, 'ℹ️ No transactions found to delete.');
+      await sendTelegramReply(botToken, chatId, 'ℹ️ Delete karne ke liye koi transaction nahi mila.');
       return;
     }
     const deleted = userTransactions.shift();
@@ -1134,7 +1136,7 @@ Logged in as: <b>${targetUser.email}</b>
     await sendTelegramReply(
       botToken,
       chatId,
-      `🗑️ <b>Deleted Last Transaction:</b>\n₹${deleted?.amount} • ${deleted?.description} (${deleted?.category})\n\n📊 <b>Updated Balance:</b> ₹${summary.netSavings.toLocaleString('en-IN')}`
+      `🗑️ <b>Aakhri Transaction Delete Ho Gaya:</b>\n₹${deleted?.amount} • ${deleted?.description} (${deleted?.category})\n\n📊 <b>Updated Balance:</b> ₹${summary.netSavings.toLocaleString('en-IN')}`
     );
     return;
   }
@@ -1163,7 +1165,7 @@ Logged in as: <b>${targetUser.email}</b>
       await sendTelegramReply(
         botToken,
         chatId,
-        `🗑️ <b>Deleted Matching Transaction:</b>\n₹${deleted.amount} • ${deleted.description} (${deleted.category}) [${deleted.date}]\n\n📊 <b>Updated Balance:</b> ₹${summary.netSavings.toLocaleString('en-IN')}`
+        `🗑️ <b>Matching Transaction Delete Ho Gaya:</b>\n₹${deleted.amount} • ${deleted.description} (${deleted.category}) [${deleted.date}]\n\n📊 <b>Updated Balance:</b> ₹${summary.netSavings.toLocaleString('en-IN')}`
       );
       return;
     }
@@ -1174,7 +1176,7 @@ Logged in as: <b>${targetUser.email}</b>
     const parsedList = await parseMessageWithGemini(rawText, userCategories);
 
     if (parsedList.length === 0) {
-      const errorReply = `❓ Could not detect an expense or income from: <i>"${rawText}"</i>\n\n💡 <b>Try formats like:</b>\n• <code>300 dahi cash</code>\n• <code>500 petrol upi</code>\n• <code>income 15000 bank transfer</code>`;
+      const errorReply = `❓ <i>"${rawText}"</i> me se koi kharcha ya income samajh nahi aayi.\n\n💡 <b>Aise try karein:</b>\n• <code>300 dahi cash</code>\n• <code>500 petrol upi</code>\n• <code>salary 25000 bank transfer</code>\n• <code>100 sabzi nagad</code>`;
       await sendTelegramReply(botToken, chatId, errorReply);
       return;
     }
@@ -1209,27 +1211,27 @@ Logged in as: <b>${targetUser.email}</b>
 
     let replyText = '';
     const hasMultipleMembers = (targetUser.linkedMembers?.length || 0) > 1;
-    const memberTag = hasMultipleMembers ? `\n👤 <b>Logged by:</b> ${senderDisplayName}` : '';
+    const memberTag = hasMultipleMembers ? `\n👤 <b>Dala gaya:</b> ${senderDisplayName}` : '';
 
     if (parsedList.length === 1) {
       const item = parsedList[0];
       const isInc = item.type === 'income';
       const isUncat = item.category === 'Uncategorized';
-      replyText = `${isInc ? '🟢 <b>INCOME RECORDED</b>' : '🔴 <b>EXPENSE RECORDED</b>'}
+      replyText = `${isInc ? '🟢 <b>INCOME ADD HO GAYI</b>' : '🔴 <b>KHARCHA RECORD HO GAYA</b>'}
 💰 <b>₹${item.amount.toLocaleString('en-IN')}</b>
-📁 <b>Category:</b> ${item.category}${isUncat ? ' <i>(Needs Review on Web)</i>' : ''}
-📝 <b>Note:</b> ${item.description}${memberTag}
+📁 <b>Category:</b> ${item.category}${isUncat ? ' <i>(Web par Category assign karein)</i>' : ''}
+📝 <b>Vivaran:</b> ${item.description}${memberTag}
 💳 <b>Payment:</b> ${item.paymentMethod || 'UPI'}
-📅 <b>Date:</b> ${item.date}
+📅 <b>Tareeq:</b> ${item.date}
 
 ━━━━━━━━━━━━━━━━━━━━
-📊 <b>Shared Balance:</b> ₹${summary.netSavings.toLocaleString('en-IN')}
-${isInc ? `📈 <b>Total Income:</b> ₹${summary.totalIncome.toLocaleString('en-IN')}` : `📉 <b>Total Spent:</b> ₹${summary.totalExpense.toLocaleString('en-IN')}`}`;
+📊 <b>Net Bacha Balance:</b> ₹${summary.netSavings.toLocaleString('en-IN')}
+${isInc ? `📈 <b>Kul Income:</b> ₹${summary.totalIncome.toLocaleString('en-IN')}` : `📉 <b>Kul Kharcha:</b> ₹${summary.totalExpense.toLocaleString('en-IN')}`}`;
     } else {
       const itemsList = parsedList
         .map(p => `• ${p.type === 'income' ? '🟢 +' : '🔴 -'}₹${p.amount.toLocaleString('en-IN')} ${p.description} (${p.category}) [${p.paymentMethod}]`)
         .join('\n');
-      replyText = `✅ <b>${parsedList.length} TRANSACTIONS ADDED</b>${memberTag}\n\n${itemsList}\n\n━━━━━━━━━━━━━━━━━━━━\n📊 <b>Shared Balance:</b> ₹${summary.netSavings.toLocaleString('en-IN')}`;
+      replyText = `✅ <b>${parsedList.length} TRANSACTIONS ADD HO GAYE</b>${memberTag}\n\n${itemsList}\n\n━━━━━━━━━━━━━━━━━━━━\n📊 <b>Net Bacha Balance:</b> ₹${summary.netSavings.toLocaleString('en-IN')}`;
     }
 
     await sendTelegramReply(botToken, chatId, replyText);
@@ -1879,7 +1881,7 @@ app.post('/api/telegram/config', async (req, res) => {
   res.json({ success: true, config: botConfig });
 });
 
-// 6. Telegram Logs
+// 6. Telegram Logs & Simulator
 app.get('/api/telegram/logs', (req, res) => {
   res.json({ logs: telegramLogs });
 });
@@ -1888,6 +1890,26 @@ app.delete('/api/telegram/logs', (req, res) => {
   telegramLogs = [];
   saveJson(LOGS_FILE, telegramLogs);
   res.json({ success: true, count: 0 });
+});
+
+app.post('/api/telegram/simulate-message', async (req, res) => {
+  users = loadJson<UserProfile[]>(USERS_FILE, users);
+  const activeUser = getRequestUser(req) || users.find(u => u.telegramChatId) || users[0];
+  const { message } = req.body;
+  if (!message || !message.trim()) {
+    return res.status(400).json({ error: 'Message text is required' });
+  }
+
+  const simulatedChatId = activeUser?.telegramChatId || activeUser?.linkedMembers?.[0]?.telegramChatId || '838107368';
+  await handleTelegramMessage({
+    chat: { id: simulatedChatId },
+    from: { first_name: activeUser?.name || 'User', username: activeUser?.telegramUsername || 'webuser' },
+    text: message.trim(),
+  });
+
+  const targetId = activeUser ? activeUser.id : 'user_ansh';
+  const store = getUserData(targetId);
+  res.json({ success: true, transactions: store.transactions, summary: calculateUserSummary(targetId) });
 });
 
 // 7. AI Financial Insights Generator (User-Scoped)

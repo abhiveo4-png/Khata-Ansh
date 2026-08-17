@@ -210,13 +210,13 @@ export const CategoryManager: React.FC<CategoryManagerProps> = ({
         <div>
           <div className="flex items-center space-x-2.5">
             <span className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse" />
-            <h2 className="text-base font-bold text-white font-display">AI CATEGORY TAXONOMY & NEURAL MAPPINGS</h2>
+            <h2 className="text-base font-bold text-white font-display">AI CATEGORIES & KEYWORDS</h2>
             <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-cyan-950/80 border border-cyan-500/40 text-cyan-300">
-              {categories.length} NODES
+              {categories.length} CATEGORIES
             </span>
           </div>
           <p className="text-xs font-mono text-slate-400 mt-1 max-w-2xl">
-            Configure custom category rules and keywords. Telegram messages are parsed by Gemini AI and mapped automatically.
+            Apni pasand ke naye categories aur keywords banayein. Telegram par bheja gaya message AI auto-detect karke sahi category me daal dega.
           </p>
         </div>
 
@@ -237,7 +237,7 @@ export const CategoryManager: React.FC<CategoryManagerProps> = ({
                 filterType === 'expense' ? 'bg-rose-950 text-rose-300 font-bold border border-rose-500/40' : 'hover:text-white'
               }`}
             >
-              OUTFLOW
+              KHARCHA
             </button>
             <button
               onClick={() => setFilterType('income')}
@@ -245,7 +245,7 @@ export const CategoryManager: React.FC<CategoryManagerProps> = ({
                 filterType === 'income' ? 'bg-emerald-950 text-emerald-300 font-bold border border-emerald-500/40' : 'hover:text-white'
               }`}
             >
-              INFLOW
+              KAMAI
             </button>
           </div>
 
@@ -254,7 +254,7 @@ export const CategoryManager: React.FC<CategoryManagerProps> = ({
             className="inline-flex items-center space-x-1.5 px-3.5 py-2 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 text-xs font-mono font-bold shadow-md shadow-cyan-950/50 transition-all cursor-pointer"
           >
             <Plus className="w-3.5 h-3.5 stroke-[3]" />
-            <span>NEW NODE</span>
+            <span>NAYI CATEGORY</span>
           </button>
         </div>
       </div>
@@ -287,14 +287,14 @@ export const CategoryManager: React.FC<CategoryManagerProps> = ({
                         : 'bg-rose-950/60 text-rose-300 border-rose-500/30'
                     }`}
                   >
-                    {c.type.toUpperCase()}
+                    {c.type === 'income' ? 'KAMAI' : c.type === 'expense' ? 'KHARCHA' : 'BOTH'}
                   </span>
                 </div>
 
                 {/* Keywords Cloud */}
                 <div className="mt-3">
                   <div className="text-[10px] font-mono text-slate-500 uppercase tracking-wider mb-1">
-                    AI KEYWORDS:
+                    KEYWORDS (AI DETECTION):
                   </div>
                   <div className="flex flex-wrap gap-1 max-h-16 overflow-y-auto">
                     {c.keywords && c.keywords.length > 0 ? (
@@ -307,7 +307,7 @@ export const CategoryManager: React.FC<CategoryManagerProps> = ({
                         </span>
                       ))
                     ) : (
-                      <span className="text-[10px] text-slate-500 font-mono italic">No custom keywords</span>
+                      <span className="text-[10px] text-slate-500 font-mono italic">Koi keywords nahi</span>
                     )}
                   </div>
                 </div>
@@ -315,18 +315,18 @@ export const CategoryManager: React.FC<CategoryManagerProps> = ({
 
               {/* Actions Footer */}
               <div className="mt-4 pt-3 border-t border-slate-800/80 flex items-center justify-between text-xs font-mono">
-                <span className="text-[10px] text-slate-500">{c.isCustom ? 'USER DEFINED' : 'SYSTEM PRESET'}</span>
+                <span className="text-[10px] text-slate-500">{c.isCustom ? 'CUSTOM' : 'DEFAULT'}</span>
                 <div className="flex items-center space-x-1.5">
                   <button
                     onClick={() => openEditModal(c)}
-                    className="p-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-300 hover:text-cyan-300 hover:border-cyan-400 transition-colors"
+                    className="p-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-300 hover:text-cyan-300 hover:border-cyan-400 transition-colors cursor-pointer"
                   >
                     <Edit3 className="w-3.5 h-3.5" />
                   </button>
                   {c.isCustom && (
                     <button
                       onClick={() => handleDelete(c.id)}
-                      className="p-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-400 hover:text-rose-400 hover:border-rose-500 transition-colors"
+                      className="p-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-400 hover:text-rose-400 hover:border-rose-500 transition-colors cursor-pointer"
                     >
                       <Trash2 className="w-3.5 h-3.5" />
                     </button>
@@ -352,7 +352,7 @@ export const CategoryManager: React.FC<CategoryManagerProps> = ({
             <div className="flex items-center space-x-2 pb-3 border-b border-slate-800">
               <Sparkles className="w-5 h-5 text-cyan-400" />
               <h3 className="text-base font-bold text-white font-display">
-                {editingCategory ? 'EDIT CATEGORY NODE' : 'CREATE CATEGORY NODE'}
+                {editingCategory ? 'CATEGORY EDIT KAREIN' : 'NAYI CATEGORY BANAYEIN'}
               </h3>
             </div>
 
@@ -364,18 +364,18 @@ export const CategoryManager: React.FC<CategoryManagerProps> = ({
 
             <form onSubmit={handleSubmit} className="mt-4 space-y-4 font-mono text-xs">
               <div>
-                <label className="block text-slate-400 uppercase tracking-wider mb-1">Category Name</label>
+                <label className="block text-slate-400 uppercase tracking-wider mb-1">Category Ka Naam</label>
                 <input
                   type="text"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
-                  placeholder="e.g. Gym & Supplements, Crypto Staking"
+                  placeholder="jaise: Gym, Crypto, Books, Rent"
                   className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-white focus:outline-hidden focus:border-cyan-400 text-sm"
                 />
               </div>
 
               <div>
-                <label className="block text-slate-400 uppercase tracking-wider mb-1">Flow Type</label>
+                <label className="block text-slate-400 uppercase tracking-wider mb-1">Type Chunein</label>
                 <div className="grid grid-cols-3 gap-2">
                   {(['expense', 'income', 'both'] as const).map((t) => (
                     <button
@@ -388,14 +388,14 @@ export const CategoryManager: React.FC<CategoryManagerProps> = ({
                           : 'border-slate-800 text-slate-400 hover:bg-slate-900'
                       }`}
                     >
-                      {t}
+                      {t === 'expense' ? 'Kharcha' : t === 'income' ? 'Kamai' : 'Dono (Both)'}
                     </button>
                   ))}
                 </div>
               </div>
 
               <div>
-                <label className="block text-slate-400 uppercase tracking-wider mb-1.5">Color Tag</label>
+                <label className="block text-slate-400 uppercase tracking-wider mb-1.5">Color Chunein</label>
                 <div className="flex flex-wrap gap-2">
                   {AVAILABLE_COLORS.map((c) => (
                     <button
@@ -415,17 +415,17 @@ export const CategoryManager: React.FC<CategoryManagerProps> = ({
 
               <div>
                 <label className="block text-slate-400 uppercase tracking-wider mb-1">
-                  AI Detection Keywords (Comma Separated)
+                  AI Pehchan Ke Keywords (Comma dekar likhein)
                 </label>
                 <input
                   type="text"
-                  placeholder="e.g. whey, creatine, gym, fitness, protein"
+                  placeholder="jaise: gym, whey, fitness, trainer"
                   value={keywordsText}
                   onChange={(e) => setKeywordsText(e.target.value)}
                   className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-cyan-200 focus:outline-hidden focus:border-cyan-400 text-xs"
                 />
                 <p className="text-[10px] text-slate-500 mt-1">
-                  Gemini AI will automatically tag transactions with these keywords to this node.
+                  Telegram message me inme se koi word aate hi Gemini AI is category me add kar dega.
                 </p>
               </div>
 
@@ -433,16 +433,16 @@ export const CategoryManager: React.FC<CategoryManagerProps> = ({
                 <button
                   type="button"
                   onClick={() => setIsModalOpen(false)}
-                  className="px-4 py-2 rounded-xl border border-slate-700 text-slate-400 hover:text-white"
+                  className="px-4 py-2 rounded-xl border border-slate-700 text-slate-400 hover:text-white cursor-pointer"
                 >
                   CANCEL
                 </button>
                 <button
                   type="submit"
                   disabled={isSubmitting}
-                  className="px-5 py-2 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold shadow-md shadow-cyan-950"
+                  className="px-5 py-2 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold shadow-md shadow-cyan-950 cursor-pointer"
                 >
-                  {isSubmitting ? 'SAVING...' : 'SAVE NODE'}
+                  {isSubmitting ? 'SAVING...' : 'SAVE KAREIN'}
                 </button>
               </div>
             </form>

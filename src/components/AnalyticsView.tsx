@@ -97,10 +97,10 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({ transactions }) =>
               <div className="w-8 h-8 rounded-xl bg-cyan-950/80 border border-cyan-500/40 text-cyan-400 flex items-center justify-center">
                 <PieIcon className="w-4 h-4" />
               </div>
-              <h4 className="font-bold text-sm text-white font-display">OUTFLOW SPECTRUM</h4>
+              <h4 className="font-bold text-sm text-white font-display">KHARCHE KA BATWARA (CATEGORY WISE)</h4>
             </div>
             <span className="text-xs font-mono text-cyan-400 font-bold">
-              ₹{totalExpense.toLocaleString('en-IN')} TOTAL
+              ₹{totalExpense.toLocaleString('en-IN')} KUL KHARCHA
             </span>
           </div>
 
@@ -173,10 +173,10 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({ transactions }) =>
               <div className="w-8 h-8 rounded-xl bg-indigo-950/80 border border-indigo-500/40 text-indigo-400 flex items-center justify-center">
                 <BarChart3 className="w-4 h-4" />
               </div>
-              <h4 className="font-bold text-sm text-white font-display">CASHFLOW VELOCITY MATRIX</h4>
+              <h4 className="font-bold text-sm text-white font-display">ROZ KA KHARCHA AUR KAMAI (TREND)</h4>
             </div>
             <span className="text-xs font-mono text-indigo-300">
-              ACTIVE TIMELINE
+              PICHLI DATES
             </span>
           </div>
 
@@ -203,11 +203,11 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({ transactions }) =>
                         <div className="bg-[#090d18] border border-indigo-500/40 rounded-xl p-3 shadow-2xl text-xs font-mono">
                           <p className="font-bold text-white mb-1.5">{label}</p>
                           <p className="text-emerald-400 flex items-center justify-between gap-4">
-                            <span>INFLOW:</span>
+                            <span>KAMAI:</span>
                             <span className="font-bold">₹{(payload[0]?.value as number || 0).toLocaleString('en-IN')}</span>
                           </p>
                           <p className="text-rose-400 flex items-center justify-between gap-4 mt-1">
-                            <span>OUTFLOW:</span>
+                            <span>KHARCHA:</span>
                             <span className="font-bold">₹{(payload[1]?.value as number || 0).toLocaleString('en-IN')}</span>
                           </p>
                         </div>
@@ -218,7 +218,7 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({ transactions }) =>
                 />
                 <Legend 
                   wrapperStyle={{ paddingTop: 10, fontSize: 11, fontFamily: 'JetBrains Mono' }}
-                  formatter={(value) => <span className="text-slate-300">{value === 'income' ? 'INFLOW (+)' : 'OUTFLOW (-)'}</span>}
+                  formatter={(value) => <span className="text-slate-300">{value === 'income' ? 'Kamai (+)' : 'Kharcha (-)'}</span>}
                 />
                 <Bar dataKey="income" fill="#10B981" radius={[4, 4, 0, 0]} maxBarSize={32} />
                 <Bar dataKey="expense" fill="#F43F5E" radius={[4, 4, 0, 0]} maxBarSize={32} />
@@ -230,7 +230,7 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({ transactions }) =>
         <div className="mt-4 pt-3 border-t border-slate-800 flex items-center justify-between text-xs font-mono text-slate-400">
           <span className="flex items-center gap-1.5">
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-            REAL-TIME QUANTUM SAMPLING
+            LIVE DATA UPDATED
           </span>
           <span className="text-cyan-400">DAILY ACCRUAL TRACKER</span>
         </div>
