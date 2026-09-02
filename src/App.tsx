@@ -96,37 +96,14 @@ export default function App() {
     }
   }, []);
 
-  // Fetch transactions and summary with Auto-Recovery from Local Storage
+  // Fetch transactions and summary
   const fetchTransactions = useCallback(async () => {
     const activeUid = currentUser?.id || getActiveUserId() || 'user_ansh';
     const { data } = await safeFetchJson<{ transactions?: Transaction[]; summary?: FinancialSummary }>('/api/transactions');
     
     if (data?.transactions) {
-      if (data.transactions.length > 0) {
-        setTransactions(data.transactions);
-        setCachedTransactions(activeUid, data.transactions);
-      } else {
-        // Backend returned 0 transactions - check if Render container restarted and wiped ephemeral data!
-        const cached = getCachedTransactions(activeUid);
-        if (cached && cached.length > 0) {
-          console.log(`[Auto-Recovery] Render cold restart detected. Restoring ${cached.length} transactions from browser cache...`);
-          // Auto-sync back to server
-          const { data: restoreData } = await safeFetchJson<{ transactions?: Transaction[]; summary?: FinancialSummary }>(
-            '/api/transactions/restore-backup',
-            {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ rows: cached, replaceExisting: true }),
-            }
-          );
-          if (restoreData?.transactions && restoreData.transactions.length > 0) {
-            setTransactions(restoreData.transactions);
-            if (restoreData.summary) setSummary(restoreData.summary);
-            return;
-          }
-        }
-        setTransactions([]);
-      }
+      setTransactions(data.transactions);
+      setCachedTransactions(activeUid, data.transactions);
     }
     if (data?.summary) {
       setSummary(data.summary);
@@ -252,7 +229,12 @@ export default function App() {
       body: JSON.stringify(txData),
     });
     if (data?.transaction) {
-      setTransactions((prev) => [data.transaction!, ...prev]);
+      setTransactions((prev) => {
+        const next = [data.transaction!, ...prev];
+        const activeUid = currentUser?.id || getActiveUserId() || 'user_ansh';
+        setCachedTransactions(activeUid, next);
+        return next;
+      });
       if (data.summary) {
         setSummary(data.summary);
       }
@@ -264,7 +246,12 @@ export default function App() {
       method: 'DELETE',
     });
     if (data?.success) {
-      setTransactions((prev) => prev.filter((t) => t.id !== id));
+      setTransactions((prev) => {
+        const next = prev.filter((t) => t.id !== id);
+        const activeUid = currentUser?.id || getActiveUserId() || 'user_ansh';
+        setCachedTransactions(activeUid, next);
+        return next;
+      });
       if (data.summary) {
         setSummary(data.summary);
       }
@@ -279,7 +266,12 @@ export default function App() {
       body: JSON.stringify(updatedTx),
     });
     if (data?.transaction) {
-      setTransactions((prev) => prev.map((t) => (t.id === updatedTx.id ? data.transaction! : t)));
+      setTransactions((prev) => {
+        const next = prev.map((t) => (t.id === updatedTx.id ? data.transaction! : t));
+        const activeUid = currentUser?.id || getActiveUserId() || 'user_ansh';
+        setCachedTransactions(activeUid, next);
+        return next;
+      });
       if (data.summary) {
         setSummary(data.summary);
       }
@@ -300,6 +292,8 @@ export default function App() {
   const handleClearAll = async () => {
     const { data } = await safeFetchJson<{ success?: boolean; summary?: FinancialSummary }>('/api/transactions', { method: 'DELETE' });
     if (data?.success) {
+      const activeUid = currentUser?.id || getActiveUserId() || 'user_ansh';
+      setCachedTransactions(activeUid, []);
       setTransactions([]);
       if (data.summary) {
         setSummary(data.summary);
