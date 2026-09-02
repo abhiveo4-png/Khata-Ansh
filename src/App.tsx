@@ -11,7 +11,7 @@ import {
   PiggyBank
 } from 'lucide-react';
 import { Transaction, FinancialSummary, BotConfig, CategoryBudget, UserProfile, CategoryDef } from './types';
-import { safeFetchJson, setActiveUserId, setAuthSession } from './utils/api';
+import { safeFetchJson, setActiveUserId, setAuthSession, getActiveUserId } from './utils/api';
 import { DEFAULT_CATEGORIES } from './utils/categories';
 import { Header } from './components/Header';
 import { OverviewCards } from './components/OverviewCards';
@@ -26,6 +26,7 @@ import { CategoryManager } from './components/CategoryManager';
 import { AuthModal } from './components/AuthModal';
 import { AiInsightsModal } from './components/AiInsightsModal';
 import { TelegramLogsModal } from './components/TelegramLogsModal';
+import { ExcelBackupRestoreModal } from './components/ExcelBackupRestoreModal';
 
 export default function App() {
   // Multi-user Profile State
@@ -59,7 +60,28 @@ export default function App() {
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [isAiInsightsOpen, setIsAiInsightsOpen] = useState(false);
   const [isLogsOpen, setIsLogsOpen] = useState(false);
+  const [isBackupModalOpen, setIsBackupModalOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+
+  // Helper for localStorage caching
+  const getCachedTransactions = (userId: string): Transaction[] => {
+    try {
+      const key = `teleexpense_tx_cache_${userId || 'default'}`;
+      const raw = localStorage.getItem(key);
+      return raw ? JSON.parse(raw) : [];
+    } catch {
+      return [];
+    }
+  };
+
+  const setCachedTransactions = (userId: string, txs: Transaction[]) => {
+    try {
+      const key = `teleexpense_tx_cache_${userId || 'default'}`;
+      localStorage.setItem(key, JSON.stringify(txs));
+    } catch {
+      // ignore
+    }
+  };
 
   // Fetch Current User & All Users
   const fetchUsers = useCallback(async () => {
@@ -73,16 +95,42 @@ export default function App() {
     }
   }, []);
 
-  // Fetch transactions and summary
+  // Fetch transactions and summary with Auto-Recovery from Local Storage
   const fetchTransactions = useCallback(async () => {
+    const activeUid = currentUser?.id || getActiveUserId() || 'user_ansh';
     const { data } = await safeFetchJson<{ transactions?: Transaction[]; summary?: FinancialSummary }>('/api/transactions');
+    
     if (data?.transactions) {
-      setTransactions(data.transactions);
+      if (data.transactions.length > 0) {
+        setTransactions(data.transactions);
+        setCachedTransactions(activeUid, data.transactions);
+      } else {
+        // Backend returned 0 transactions - check if Render container restarted and wiped ephemeral data!
+        const cached = getCachedTransactions(activeUid);
+        if (cached && cached.length > 0) {
+          console.log(`[Auto-Recovery] Render cold restart detected. Restoring ${cached.length} transactions from browser cache...`);
+          // Auto-sync back to server
+          const { data: restoreData } = await safeFetchJson<{ transactions?: Transaction[]; summary?: FinancialSummary }>(
+            '/api/transactions/restore-backup',
+            {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ rows: cached, replaceExisting: true }),
+            }
+          );
+          if (restoreData?.transactions && restoreData.transactions.length > 0) {
+            setTransactions(restoreData.transactions);
+            if (restoreData.summary) setSummary(restoreData.summary);
+            return;
+          }
+        }
+        setTransactions([]);
+      }
     }
     if (data?.summary) {
       setSummary(data.summary);
     }
-  }, []);
+  }, [currentUser]);
 
   // Fetch categories
   const fetchCategories = useCallback(async () => {
@@ -310,6 +358,7 @@ export default function App() {
         onOpenAddModal={() => setIsAddModalOpen(true)}
         onOpenAiInsights={() => setIsAiInsightsOpen(true)}
         onOpenLogs={() => setIsLogsOpen(true)}
+        onOpenBackupModal={() => setIsBackupModalOpen(true)}
         onExportCsv={handleExportCsv}
         onLogout={handleLogout}
       />
@@ -516,6 +565,7 @@ export default function App() {
             transactions={transactions}
             categories={categories}
             onUpdateBudgets={handleUpdateBudgets}
+            onRefreshTransactions={fetchTransactions}
             onCategoriesUpdated={(newCats, newBudge) => {
               setCategories(newCats);
               if (newBudge) {
@@ -538,6 +588,9 @@ export default function App() {
             <span>TeleExpense AI • Telegram Bot + Gemini AI Khata Engine</span>
           </div>
           <div className="flex items-center space-x-4 text-xs">
+            <button onClick={() => setIsBackupModalOpen(true)} className="text-cyan-400 hover:text-cyan-300 font-mono transition-colors cursor-pointer">
+              Backup / Restore (Excel)
+            </button>
             <button onClick={() => setIsAuthModalOpen(true)} className="hover:text-white transition-colors cursor-pointer">
               Accounts & Family
             </button>
@@ -555,6 +608,22 @@ export default function App() {
       </footer>
 
       {/* Modals */}
+      <ExcelBackupRestoreModal
+        isOpen={isBackupModalOpen}
+        onClose={() => setIsBackupModalOpen(false)}
+        transactions={transactions}
+        categories={categories}
+        currentUser={currentUser}
+        onRestoreSuccess={(data) => {
+          if (data.transactions) setTransactions(data.transactions);
+          if (data.categories) setCategories(data.categories);
+          if (data.budgets) setBudgets(data.budgets);
+          if (data.summary) setSummary(data.summary);
+          fetchBudgets();
+          fetchTransactions();
+        }}
+      />
+
       <AuthModal
         isOpen={isAuthModalOpen}
         onClose={() => setIsAuthModalOpen(false)}

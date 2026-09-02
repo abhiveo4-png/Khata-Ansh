@@ -9,6 +9,7 @@ import {
   FileSpreadsheet,
   Search,
   Plus,
+  Trash2,
   Utensils,
   ShoppingCart,
   Car,
@@ -30,6 +31,7 @@ import {
 } from 'lucide-react';
 import { CategoryBudget, Transaction, CategoryDef } from '../types';
 import { formatCurrency } from '../utils/formatters';
+import { safeFetchJson } from '../utils/api';
 import { ExcelBudgetImportModal } from './ExcelBudgetImportModal';
 
 const ICON_MAP: Record<string, React.ElementType> = {
@@ -59,6 +61,7 @@ interface BudgetManagerProps {
   categories: CategoryDef[];
   onUpdateBudgets: (newBudgets: CategoryBudget[]) => Promise<void>;
   onCategoriesUpdated?: (newCategories: CategoryDef[], newBudgets?: CategoryBudget[]) => void;
+  onRefreshTransactions?: () => void;
 }
 
 export const BudgetManager: React.FC<BudgetManagerProps> = ({
@@ -67,6 +70,7 @@ export const BudgetManager: React.FC<BudgetManagerProps> = ({
   categories,
   onUpdateBudgets,
   onCategoriesUpdated,
+  onRefreshTransactions,
 }) => {
   const [isEditing, setIsEditing] = useState(false);
   const [editedBudgets, setEditedBudgets] = useState<CategoryBudget[]>(budgets);
@@ -74,6 +78,7 @@ export const BudgetManager: React.FC<BudgetManagerProps> = ({
   const [isExcelModalOpen, setIsExcelModalOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'exceeded' | 'warning' | 'safe' | 'unallocated'>('all');
+  const [deletingCatName, setDeletingCatName] = useState<string | null>(null);
 
   // Keep editedBudgets synchronized when prop updates
   useEffect(() => {
@@ -201,6 +206,51 @@ export const BudgetManager: React.FC<BudgetManagerProps> = ({
       onCategoriesUpdated(newCats, newBudge);
     }
     onUpdateBudgets(newBudge);
+  };
+
+  const handleDeleteCategory = async (categoryName: string, categoryId?: string) => {
+    if (categoryName.toLowerCase() === 'uncategorized') {
+      alert('Uncategorized fallback category ko delete nahi kiya ja sakta.');
+      return;
+    }
+
+    const confirmMsg = `Kya aap "${categoryName}" category ko delete karna chahte hain?\n\nIs category ka budget aur category list se record hat jayega. Purane transactions 'Uncategorized' me move ho jayenge.`;
+    if (!window.confirm(confirmMsg)) return;
+
+    setDeletingCatName(categoryName);
+    try {
+      const targetId = categoryId || categoryName;
+      const { data, error } = await safeFetchJson<{
+        success: boolean;
+        categories: CategoryDef[];
+        budgets: CategoryBudget[];
+      }>(`/api/categories/${encodeURIComponent(targetId)}`, {
+        method: 'DELETE',
+      });
+
+      if (error || !data?.success) {
+        alert(error || 'Category delete karne me error aaya.');
+        return;
+      }
+
+      // Update local and parent states
+      const updatedCats = data.categories || categories.filter(c => c.name.toLowerCase() !== categoryName.toLowerCase());
+      const updatedBudgets = data.budgets || budgets.filter(b => b.category.toLowerCase() !== categoryName.toLowerCase());
+
+      setEditedBudgets((prev) => prev.filter(b => b.category.toLowerCase() !== categoryName.toLowerCase()));
+
+      if (onCategoriesUpdated) {
+        onCategoriesUpdated(updatedCats, updatedBudgets);
+      }
+      if (onRefreshTransactions) {
+        onRefreshTransactions();
+      }
+    } catch (err: any) {
+      console.error('Delete category error', err);
+      alert('Failed to delete category: ' + err.message);
+    } finally {
+      setDeletingCatName(null);
+    }
   };
 
   return (
@@ -437,25 +487,39 @@ export const BudgetManager: React.FC<BudgetManagerProps> = ({
                   </div>
                 </div>
 
-                {isOver ? (
-                  <span className="px-2 py-0.5 rounded-md bg-rose-950/90 border border-rose-500/50 text-rose-300 text-[10px] font-mono font-bold flex items-center gap-1 shrink-0">
-                    <ShieldAlert className="w-3 h-3 text-rose-400" />
-                    EXCEEDED
-                  </span>
-                ) : isNear ? (
-                  <span className="px-2 py-0.5 rounded-md bg-amber-950/90 border border-amber-500/50 text-amber-300 text-[10px] font-mono font-bold flex items-center gap-1 shrink-0">
-                    <AlertCircle className="w-3 h-3 text-amber-400" />
-                    {percent}%
-                  </span>
-                ) : limit === 0 ? (
-                  <span className="px-2 py-0.5 rounded-md bg-slate-900 border border-slate-700 text-slate-400 text-[10px] font-mono font-bold shrink-0">
-                    NO LIMIT
-                  </span>
-                ) : (
-                  <span className="px-2 py-0.5 rounded-md bg-emerald-950/80 border border-emerald-500/40 text-emerald-300 text-[10px] font-mono font-bold shrink-0">
-                    ON TRACK
-                  </span>
-                )}
+                <div className="flex items-center space-x-1.5 shrink-0">
+                  {isOver ? (
+                    <span className="px-2 py-0.5 rounded-md bg-rose-950/90 border border-rose-500/50 text-rose-300 text-[10px] font-mono font-bold flex items-center gap-1 shrink-0">
+                      <ShieldAlert className="w-3 h-3 text-rose-400" />
+                      EXCEEDED
+                    </span>
+                  ) : isNear ? (
+                    <span className="px-2 py-0.5 rounded-md bg-amber-950/90 border border-amber-500/50 text-amber-300 text-[10px] font-mono font-bold flex items-center gap-1 shrink-0">
+                      <AlertCircle className="w-3 h-3 text-amber-400" />
+                      {percent}%
+                    </span>
+                  ) : limit === 0 ? (
+                    <span className="px-2 py-0.5 rounded-md bg-slate-900 border border-slate-700 text-slate-400 text-[10px] font-mono font-bold shrink-0">
+                      NO LIMIT
+                    </span>
+                  ) : (
+                    <span className="px-2 py-0.5 rounded-md bg-emerald-950/80 border border-emerald-500/40 text-emerald-300 text-[10px] font-mono font-bold shrink-0">
+                      ON TRACK
+                    </span>
+                  )}
+
+                  {/* Delete category button */}
+                  {b.category.toLowerCase() !== 'uncategorized' && (
+                    <button
+                      onClick={() => handleDeleteCategory(b.category, b.categoryDef?.id)}
+                      disabled={deletingCatName === b.category}
+                      title={`"${b.category}" category aur iska budget delete karein`}
+                      className="p-1 rounded-lg text-slate-500 hover:text-rose-400 hover:bg-rose-950/50 border border-transparent hover:border-rose-500/30 transition-all cursor-pointer"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
               </div>
 
               {/* Amount and Limit Details */}
@@ -464,7 +528,7 @@ export const BudgetManager: React.FC<BudgetManagerProps> = ({
                   SPENT: <span className="text-white font-bold">₹{spent.toLocaleString('en-IN')}</span>
                 </div>
                 {isEditing ? (
-                  <div className="flex items-center space-x-1">
+                  <div className="flex items-center space-x-1.5">
                     <span className="text-cyan-400 text-xs">LIMIT: ₹</span>
                     <input
                       type="number"

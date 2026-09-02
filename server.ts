@@ -5,8 +5,11 @@ import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI, Type } from '@google/genai';
 import dotenv from 'dotenv';
 import * as XLSX from 'xlsx';
+import pg from 'pg';
 
 dotenv.config();
+
+const { Pool } = pg;
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
@@ -14,8 +17,8 @@ const PORT = Number(process.env.PORT) || 3000;
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Persistence directory
-const DATA_DIR = path.join(process.cwd(), '.data');
+// Persistence directory (Supports custom persistent disk mount e.g. /var/data or /opt/render/project/src/.data)
+const DATA_DIR = process.env.DATA_DIR || process.env.PERSISTENT_DATA_DIR || path.join(process.cwd(), '.data');
 const USERS_DIR = path.join(DATA_DIR, 'users');
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 if (!fs.existsSync(USERS_DIR)) fs.mkdirSync(USERS_DIR, { recursive: true });
@@ -27,6 +30,27 @@ const LOGS_FILE = path.join(DATA_DIR, 'telegram_logs.json');
 // Global Legacy files (for auto-migration)
 const LEGACY_TX_FILE = path.join(DATA_DIR, 'transactions.json');
 const LEGACY_BUDGETS_FILE = path.join(DATA_DIR, 'budgets.json');
+
+// Optional PostgreSQL Database Pool (for Render PostgreSQL or Neon / Supabase)
+let pgPool: pg.Pool | null = null;
+let isPgConnected = false;
+const rawDbUrl = process.env.DATABASE_URL || process.env.PG_CONNECTION_STRING || process.env.POSTGRES_URL || '';
+
+if (rawDbUrl && rawDbUrl.trim()) {
+  try {
+    const isLocal = rawDbUrl.includes('localhost') || rawDbUrl.includes('127.0.0.1');
+    pgPool = new Pool({
+      connectionString: rawDbUrl,
+      ssl: isLocal ? false : { rejectUnauthorized: false },
+      max: 10,
+      idleTimeoutMillis: 30000,
+    });
+    console.log('[Storage] PostgreSQL Database URL detected. Ready to connect to PostgreSQL.');
+  } catch (err) {
+    console.error('[Storage] Error initializing Postgres pool:', err);
+    pgPool = null;
+  }
+}
 
 // Types
 export interface LinkedMember {
@@ -426,6 +450,114 @@ let botConfig: BotConfig = loadJson<BotConfig>(BOT_CONFIG_FILE, {
   botName: 'khatabot',
 });
 
+// Cache of loaded user data
+const userDataCache = new Map<string, UserDataStore>();
+
+// ---------------- PostgreSQL Write-Through & Hydration ----------------
+
+async function persistToPg(key: string, data: any): Promise<void> {
+  if (!pgPool) return;
+  try {
+    await pgPool.query(
+      `INSERT INTO teleexpense_store (key, data, updated_at)
+       VALUES ($1, $2, CURRENT_TIMESTAMP)
+       ON CONFLICT (key) DO UPDATE
+       SET data = EXCLUDED.data, updated_at = CURRENT_TIMESTAMP`,
+      [key, JSON.stringify(data)]
+    );
+  } catch (err: any) {
+    console.error(`[Storage] Postgres async write failed for ${key}:`, err.message);
+  }
+}
+
+async function initPgDatabase(): Promise<boolean> {
+  if (!pgPool) {
+    console.log(`[Storage] Using Local/Persistent Disk storage: ${DATA_DIR}`);
+    return false;
+  }
+  try {
+    const client = await pgPool.connect();
+    try {
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS teleexpense_store (
+          key VARCHAR(255) PRIMARY KEY,
+          data JSONB NOT NULL,
+          updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        );
+      `);
+      console.log('✅ [Storage] PostgreSQL teleexpense_store connected & verified successfully!');
+      isPgConnected = true;
+
+      // Hydrate memory and disk from PostgreSQL
+      const res = await client.query('SELECT key, data FROM teleexpense_store');
+      let pgHasData = false;
+      for (const row of res.rows) {
+        pgHasData = true;
+        if (row.key === 'users') {
+          if (Array.isArray(row.data) && row.data.length > 0) {
+            users = row.data;
+            saveJson(USERS_FILE, users);
+          }
+        } else if (row.key === 'bot_config') {
+          if (row.data) {
+            botConfig = { ...botConfig, ...row.data };
+            saveJson(BOT_CONFIG_FILE, botConfig);
+          }
+        } else if (row.key === 'telegram_logs') {
+          if (Array.isArray(row.data)) {
+            telegramLogs = row.data;
+            saveJson(LOGS_FILE, telegramLogs);
+          }
+        } else if (row.key.startsWith('user_data:')) {
+          const uid = row.key.replace('user_data:', '');
+          if (row.data) {
+            userDataCache.set(uid, row.data);
+            saveJson(getUserDataFilePath(uid), row.data);
+          }
+        }
+      }
+
+      // If Postgres was fresh and empty, seed current disk data into Postgres
+      if (!pgHasData) {
+        console.log('[Storage] Empty PostgreSQL database detected. Seeding data from local disk to Postgres...');
+        await persistToPg('users', users);
+        await persistToPg('bot_config', botConfig);
+        await persistToPg('telegram_logs', telegramLogs);
+        for (const [uid, store] of userDataCache.entries()) {
+          await persistToPg(`user_data:${uid}`, store);
+        }
+        const anshStore = getUserData('user_ansh');
+        await persistToPg('user_data:user_ansh', anshStore);
+      }
+      return true;
+    } finally {
+      client.release();
+    }
+  } catch (err: any) {
+    console.error('❌ [Storage] PostgreSQL connection/migration failed:', err.message);
+    isPgConnected = false;
+    return false;
+  }
+}
+
+function saveUsers(updatedUsers: UserProfile[]): void {
+  users = updatedUsers;
+  saveJson(USERS_FILE, users);
+  persistToPg('users', users).catch(() => {});
+}
+
+function saveBotConfig(updatedConfig: BotConfig): void {
+  botConfig = updatedConfig;
+  saveJson(BOT_CONFIG_FILE, botConfig);
+  persistToPg('bot_config', botConfig).catch(() => {});
+}
+
+function saveTelegramLogs(updatedLogs: TelegramLog[]): void {
+  telegramLogs = updatedLogs;
+  saveJson(LOGS_FILE, telegramLogs);
+  persistToPg('telegram_logs', telegramLogs).catch(() => {});
+}
+
 // Initialize default users if empty & migrate linkedMembers
 if (users.length === 0) {
   const defaultUser: UserProfile = {
@@ -467,9 +599,6 @@ function getUserDataFilePath(userId: string): string {
   return path.join(USERS_DIR, `${userId}.json`);
 }
 
-// Cache of loaded user data
-const userDataCache = new Map<string, UserDataStore>();
-
 function getUserData(userId: string): UserDataStore {
   if (userDataCache.has(userId)) {
     return userDataCache.get(userId)!;
@@ -493,6 +622,7 @@ function getUserData(userId: string): UserDataStore {
     const synced = syncBudgetsWithCategories(store);
     if (synced) {
       saveJson(filePath, store);
+      persistToPg(`user_data:${userId}`, store).catch(() => {});
     }
   } else {
     // Check if legacy files exist to migrate to primary user
@@ -513,6 +643,7 @@ function getUserData(userId: string): UserDataStore {
     };
     syncBudgetsWithCategories(store);
     saveJson(filePath, store);
+    persistToPg(`user_data:${userId}`, store).catch(() => {});
   }
 
   userDataCache.set(userId, store);
@@ -523,6 +654,7 @@ function saveUserData(userId: string, store: UserDataStore): void {
   userDataCache.set(userId, store);
   const filePath = getUserDataFilePath(userId);
   saveJson(filePath, store);
+  persistToPg(`user_data:${userId}`, store).catch(() => {});
 }
 
 // Helper to sanitize UserProfile removing sensitive credentials
@@ -1833,7 +1965,9 @@ app.delete('/api/categories/:id', (req, res) => {
   const store = getUserData(user.id);
   const { id } = req.params;
 
-  const targetCat = store.categories.find(c => c.id === id || c.name === id);
+  const targetCat = store.categories.find(
+    c => c.id === id || c.name === id || c.name.toLowerCase() === id.toLowerCase()
+  );
   if (!targetCat) {
     return res.status(404).json({ error: 'Category not found' });
   }
@@ -1844,17 +1978,17 @@ app.delete('/api/categories/:id', (req, res) => {
 
   // Move existing transactions to Uncategorized
   for (const t of store.transactions) {
-    if (t.category === targetCat.name) {
+    if (t.category.toLowerCase() === targetCat.name.toLowerCase() || t.category === targetCat.id) {
       t.category = 'Uncategorized';
     }
   }
 
-  store.categories = store.categories.filter(c => c.id !== targetCat.id);
+  store.categories = store.categories.filter(c => c.id !== targetCat.id && c.name.toLowerCase() !== targetCat.name.toLowerCase());
   store.budgets = store.budgets.filter(b => b.category.toLowerCase() !== targetCat.name.toLowerCase());
   syncBudgetsWithCategories(store);
   saveUserData(user.id, store);
 
-  res.json({ success: true, categories: store.categories, budgets: store.budgets });
+  res.json({ success: true, categories: store.categories, budgets: store.budgets, deletedCategory: targetCat.name });
 });
 
 // 3. Transactions CRUD APIs (Scoped to User)
@@ -2309,6 +2443,287 @@ app.get('/api/budgets/template', (req, res) => {
   }
 });
 
+// Full Ledger Backup Restore Function
+export function restoreTransactionsBackup(
+  userId: string,
+  rawRows: any[],
+  replaceExisting: boolean = false
+): {
+  restoredCount: number;
+  categoriesCreated: number;
+  transactions: Transaction[];
+  categories: CategoryDef[];
+  budgets: CategoryBudget[];
+  summary: any;
+} {
+  const store = getUserData(userId);
+  let restoredCount = 0;
+  let categoriesCreated = 0;
+
+  if (replaceExisting) {
+    store.transactions = [];
+  }
+
+  const existingTxIds = new Set(store.transactions.map(t => t.id));
+
+  for (const rawRow of rawRows) {
+    if (!rawRow || typeof rawRow !== 'object') continue;
+
+    // Normalize keys
+    const rowObj: Record<string, any> = {};
+    for (const k of Object.keys(rawRow)) {
+      rowObj[k.trim().toLowerCase().replace(/[\s_\-\(\)]+/g, '')] = rawRow[k];
+    }
+
+    // 1. Amount
+    let rawAmount = rowObj['amountinr'] ?? rowObj['amount'] ?? rowObj['rupaye'] ?? rowObj['amt'] ?? rowObj['paisa'] ?? rowObj['price'] ?? 0;
+    if (typeof rawAmount === 'string') {
+      rawAmount = rawAmount.replace(/[₹$,\s]/g, '');
+    }
+    const amount = Math.abs(parseFloat(rawAmount) || 0);
+    if (amount <= 0) continue; // Skip invalid rows
+
+    // 2. Type (income vs expense)
+    let rawType = String(rowObj['type'] ?? rowObj['kism'] ?? rowObj['transactiontype'] ?? rowObj['crdr'] ?? '').trim().toLowerCase();
+    let type: 'income' | 'expense' = 'expense';
+    if (
+      rawType.includes('income') || 
+      rawType.includes('kamai') || 
+      rawType.includes('credit') || 
+      rawType === 'cr' || 
+      rawType.includes('received') ||
+      rawType.includes('salary')
+    ) {
+      type = 'income';
+    }
+
+    // 3. Category
+    let category = String(rowObj['category'] ?? rowObj['kategori'] ?? rowObj['categoryname'] ?? '').trim();
+    if (!category) {
+      category = type === 'income' ? 'Salary & Employment' : 'Uncategorized';
+    }
+
+    // Auto-create category if missing
+    const catLower = category.toLowerCase();
+    let existingCat = store.categories.find(c => c.name.toLowerCase() === catLower || c.id === catLower);
+    if (!existingCat) {
+      const defaultMeta = getAutoCategoryMeta(category);
+      existingCat = {
+        id: `cat_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+        name: category.charAt(0).toUpperCase() + category.slice(1),
+        type: type === 'income' ? 'income' : 'expense',
+        icon: defaultMeta.icon,
+        color: defaultMeta.color,
+        keywords: defaultMeta.keywords,
+        isCustom: true,
+      };
+      store.categories.push(existingCat);
+      categoriesCreated++;
+    }
+
+    // 4. Date & Time
+    let dateStr = String(rowObj['date'] ?? rowObj['tareeq'] ?? rowObj['transactiondate'] ?? rowObj['createdat'] ?? '').trim();
+    let timeStr = String(rowObj['time'] ?? rowObj['waqt'] ?? '').trim();
+
+    // If date is an Excel serial number like 45536
+    if (!isNaN(Number(dateStr)) && Number(dateStr) > 20000 && Number(dateStr) < 70000) {
+      const excelEpoch = new Date(Date.UTC(1899, 11, 30));
+      const parsedDate = new Date(excelEpoch.getTime() + Number(dateStr) * 86400000);
+      dateStr = parsedDate.toISOString().split('T')[0];
+    } else if (dateStr) {
+      const parsed = new Date(dateStr);
+      if (!isNaN(parsed.getTime())) {
+        dateStr = parsed.toISOString().split('T')[0];
+        if (!timeStr) {
+          timeStr = parsed.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: false });
+        }
+      } else if (dateStr.includes('/')) {
+        const parts = dateStr.split('/');
+        if (parts.length === 3) {
+          if (parts[0].length === 4) {
+            dateStr = `${parts[0]}-${parts[1].padStart(2, '0')}-${parts[2].padStart(2, '0')}`;
+          } else {
+            dateStr = `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`;
+          }
+        }
+      }
+    }
+
+    if (!dateStr || dateStr.length < 8) {
+      dateStr = new Date().toISOString().split('T')[0];
+    }
+    if (!timeStr) {
+      timeStr = new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: false });
+    }
+
+    // 5. Description, Raw Message, Payment Method, Source
+    const description = String(rowObj['description'] ?? rowObj['details'] ?? rowObj['note'] ?? rowObj['particulars'] ?? category).trim();
+    const rawMessage = String(rowObj['rawmessage'] ?? rowObj['originalmessage'] ?? rowObj['telegrammessage'] ?? rowObj['message'] ?? '').trim();
+    const rawPayment = String(rowObj['paymentmethod'] ?? rowObj['mode'] ?? rowObj['paymode'] ?? 'UPI').trim().toLowerCase();
+    let paymentMethod: PaymentMethod = 'UPI';
+    if (rawPayment.includes('cash')) paymentMethod = 'Cash';
+    else if (rawPayment.includes('card') || rawPayment.includes('credit') || rawPayment.includes('debit')) paymentMethod = 'Card';
+    else if (rawPayment.includes('net banking')) paymentMethod = 'Net Banking';
+    else if (rawPayment.includes('bank') || rawPayment.includes('transfer') || rawPayment.includes('neft') || rawPayment.includes('rtgs') || rawPayment.includes('imps')) paymentMethod = 'Bank Transfer';
+    else if (rawPayment.includes('other')) paymentMethod = 'Other';
+
+    const source = String(rowObj['source'] ?? (rawMessage ? 'telegram' : 'manual')).trim() as 'telegram' | 'manual';
+    const telegramUser = String(rowObj['telegramuser'] ?? rowObj['user'] ?? rowObj['member'] ?? '').trim() || undefined;
+
+    // Tags
+    let tags: string[] = [];
+    const rawTags = rowObj['tags'] ?? rowObj['tag'];
+    if (Array.isArray(rawTags)) {
+      tags = rawTags.map(String);
+    } else if (typeof rawTags === 'string' && rawTags.trim()) {
+      tags = rawTags.split(',').map(t => t.trim()).filter(Boolean);
+    }
+
+    const txId = rowObj['id'] && !existingTxIds.has(String(rowObj['id']))
+      ? String(rowObj['id'])
+      : `tx_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+
+    const newTx: Transaction = {
+      id: txId,
+      userId,
+      type,
+      amount,
+      category: existingCat.name,
+      description: description || existingCat.name,
+      date: dateStr,
+      time: timeStr,
+      paymentMethod,
+      source: source === 'telegram' ? 'telegram' : 'manual',
+      rawMessage: rawMessage || undefined,
+      createdAt: `${dateStr}T${timeStr}:00.000Z`,
+      tags,
+      telegramUser,
+    };
+
+    store.transactions.unshift(newTx);
+    existingTxIds.add(newTx.id);
+    restoredCount++;
+  }
+
+  // Sort transactions chronologically
+  store.transactions.sort((a, b) => {
+    const timeA = new Date(`${a.date}T${a.time || '00:00'}`).getTime();
+    const timeB = new Date(`${b.date}T${b.time || '00:00'}`).getTime();
+    return timeB - timeA;
+  });
+
+  syncBudgetsWithCategories(store);
+  saveUserData(userId, store);
+
+  const summary = calculateUserSummary(userId);
+
+  return {
+    restoredCount,
+    categoriesCreated,
+    transactions: store.transactions,
+    categories: store.categories,
+    budgets: store.budgets,
+    summary,
+  };
+}
+
+// RESTORE TRANSACTIONS BACKUP ENDPOINT
+app.post('/api/transactions/restore-backup', (req, res) => {
+  try {
+    const user = getRequestUser(req);
+    if (!user) {
+      return res.status(401).json({ error: 'User session not found. Please log in.' });
+    }
+
+    const { rows, fileBase64, replaceExisting = false } = req.body;
+    let parsedRows: any[] = [];
+
+    if (Array.isArray(rows) && rows.length > 0) {
+      parsedRows = rows;
+    } else if (fileBase64) {
+      try {
+        const buffer = Buffer.from(fileBase64, 'base64');
+        const workbook = XLSX.read(buffer, { type: 'buffer' });
+        const sheetName = workbook.SheetNames[0];
+        const sheet = workbook.Sheets[sheetName];
+        parsedRows = XLSX.utils.sheet_to_json(sheet);
+      } catch (e: any) {
+        return res.status(400).json({ error: `Excel/CSV file parse error: ${e.message}` });
+      }
+    } else {
+      return res.status(400).json({ error: 'No transaction rows or fileBase64 provided' });
+    }
+
+    if (parsedRows.length === 0) {
+      return res.status(400).json({ error: 'Backup file me koi valid transaction data nahi mila' });
+    }
+
+    const result = restoreTransactionsBackup(user.id, parsedRows, replaceExisting);
+    return res.json({
+      success: true,
+      message: `${result.restoredCount} transactions successfully restore ho gaye hain! (${result.categoriesCreated} nayi categories create hui)`,
+      ...result,
+    });
+  } catch (err: any) {
+    console.error('Error restoring transactions backup:', err);
+    return res.status(500).json({ error: err?.message || 'Failed to restore transaction backup' });
+  }
+});
+
+// EXPORT COMPREHENSIVE BACKUP FILE (EXCEL / CSV)
+app.get('/api/transactions/export-backup', (req, res) => {
+  try {
+    const user = getRequestUser(req);
+    const store = getUserData(user ? user.id : 'default');
+    const format = req.query.format === 'csv' ? 'csv' : 'xlsx';
+
+    const transactionsData = store.transactions.map((t) => ({
+      'Date': t.date,
+      'Time': t.time || '12:00',
+      'Type': t.type.toUpperCase(),
+      'Amount (INR)': t.amount,
+      'Category': t.category,
+      'Description': t.description,
+      'Payment Method': t.paymentMethod || 'UPI',
+      'Source': t.source || 'manual',
+      'Raw Message': t.rawMessage || '',
+      'Telegram User': t.telegramUser || (user?.name || ''),
+      'Tags': Array.isArray(t.tags) ? t.tags.join(', ') : '',
+    }));
+
+    const categoriesData = store.categories.map((c) => ({
+      'Category': c.name,
+      'Type': c.type,
+      'Monthly Budget': store.budgets.find(b => b.category.toLowerCase() === c.name.toLowerCase())?.limit || 0,
+      'Keywords': c.keywords ? c.keywords.join(', ') : '',
+    }));
+
+    const workbook = XLSX.utils.book_new();
+    const wsTx = XLSX.utils.json_to_sheet(transactionsData);
+    XLSX.utils.book_append_sheet(workbook, wsTx, 'Transactions Ledger');
+
+    const wsCats = XLSX.utils.json_to_sheet(categoriesData);
+    XLSX.utils.book_append_sheet(workbook, wsCats, 'Categories & Budgets');
+
+    const fileName = `TeleExpense_Backup_${user?.name || 'Ledger'}_${new Date().toISOString().split('T')[0]}`;
+
+    if (format === 'csv') {
+      const csvContent = XLSX.utils.sheet_to_csv(wsTx);
+      res.setHeader('Content-Type', 'text/csv');
+      res.setHeader('Content-Disposition', `attachment; filename="${fileName}.csv"`);
+      return res.send(csvContent);
+    } else {
+      const buffer = XLSX.write(workbook, { bookType: 'xlsx', type: 'buffer' });
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      res.setHeader('Content-Disposition', `attachment; filename="${fileName}.xlsx"`);
+      return res.send(buffer);
+    }
+  } catch (err: any) {
+    console.error('Error exporting backup:', err);
+    return res.status(500).json({ error: 'Failed to export backup' });
+  }
+});
+
 // 5. Telegram Bot Config & Status
 app.get('/api/telegram/config', async (req, res) => {
   const currentToken = botConfig.botToken || process.env.TELEGRAM_BOT_TOKEN || '';
@@ -2483,8 +2898,53 @@ Provide an actionable, encouraging financial breakdown in clean JSON format:
   });
 });
 
+// 8. Storage Engine Status & Postgres Synchronization
+app.get('/api/storage/status', (req, res) => {
+  let totalTx = 0;
+  for (const store of userDataCache.values()) {
+    totalTx += store.transactions.length;
+  }
+
+  res.json({
+    engine: isPgConnected ? 'postgres' : 'disk',
+    isPostgresConnected: isPgConnected,
+    isPostgresConfigured: Boolean(rawDbUrl),
+    dataDir: DATA_DIR,
+    isCustomDataDir: Boolean(process.env.DATA_DIR || process.env.PERSISTENT_DATA_DIR),
+    usersCount: users.length,
+    cachedStoresCount: userDataCache.size,
+    totalTransactions: totalTx,
+    uptime: process.uptime(),
+  });
+});
+
+app.post('/api/storage/sync-now', async (req, res) => {
+  if (!pgPool) {
+    return res.status(400).json({
+      error: 'PostgreSQL database is not configured. Set DATABASE_URL in Render environment variables.'
+    });
+  }
+
+  try {
+    await persistToPg('users', users);
+    await persistToPg('bot_config', botConfig);
+    await persistToPg('telegram_logs', telegramLogs);
+    for (const [uid, store] of userDataCache.entries()) {
+      await persistToPg(`user_data:${uid}`, store);
+    }
+    return res.json({ success: true, message: 'Data successfully synchronized to PostgreSQL!' });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 // Vite & Static server setup
 async function startServer() {
+  // Initialize and connect PostgreSQL if DATABASE_URL is configured
+  if (pgPool) {
+    await initPgDatabase();
+  }
+
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
       server: { middlewareMode: true },
@@ -2501,6 +2961,11 @@ async function startServer() {
 
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`🚀 TeleExpense AI server running at http://0.0.0.0:${PORT}`);
+    if (isPgConnected) {
+      console.log('📦 Storage Engine: PostgreSQL Database (Persistent)');
+    } else {
+      console.log(`📁 Storage Engine: Persistent Disk / Local (${DATA_DIR})`);
+    }
   });
 }
 

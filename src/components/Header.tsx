@@ -11,7 +11,8 @@ import {
   LogIn,
   CheckCircle2,
   Copy,
-  Wallet
+  Wallet,
+  FileSpreadsheet
 } from 'lucide-react';
 import { BotConfig, UserProfile } from '../types';
 
@@ -24,6 +25,7 @@ interface HeaderProps {
   onOpenAiInsights: () => void;
   onOpenLogs: () => void;
   onExportCsv: () => void;
+  onOpenBackupModal?: () => void;
   onLogout?: () => void;
 }
 
@@ -36,6 +38,7 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenAiInsights,
   onOpenLogs,
   onExportCsv,
+  onOpenBackupModal,
   onLogout,
 }) => {
   const isBotActive = Boolean(
@@ -145,6 +148,17 @@ export const Header: React.FC<HeaderProps> = ({
               <CheckCircle2 className="w-3 h-3 text-emerald-400" />
             </button>
 
+            {/* Backup & Restore Excel/CSV Button */}
+            <button
+              onClick={onOpenBackupModal || onExportCsv}
+              className="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-xl text-xs font-medium bg-cyan-950/60 border border-cyan-500/40 hover:border-cyan-400 text-cyan-300 hover:text-white transition-all shadow-sm cursor-pointer"
+              title="Excel/CSV backup download karein ya naye khate me raw messages ke sath restore karein"
+            >
+              <FileSpreadsheet className="w-3.5 h-3.5 text-cyan-400" />
+              <span className="hidden sm:inline">Backup & Restore</span>
+              <span className="sm:hidden">Backup</span>
+            </button>
+
             {/* AI Insights Button */}
             <button
               onClick={onOpenAiInsights}
@@ -154,10 +168,10 @@ export const Header: React.FC<HeaderProps> = ({
               <span>AI Insights</span>
             </button>
 
-            {/* Export CSV */}
+            {/* Quick Export CSV Button */}
             <button
               onClick={onExportCsv}
-              title="Transactions Excel / CSV me download karein"
+              title="Quick CSV download"
               className="inline-flex items-center p-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-300 hover:text-white text-xs transition-colors cursor-pointer"
             >
               <Download className="w-3.5 h-3.5" />
