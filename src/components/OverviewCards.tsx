@@ -2,10 +2,12 @@ import React from 'react';
 import { 
   TrendingUp, 
   TrendingDown, 
-  Wallet, 
+  Coins, 
   ArrowUpRight, 
   ArrowDownRight,
-  PieChart
+  PieChart,
+  PiggyBank,
+  Zap
 } from 'lucide-react';
 import { FinancialSummary } from '../types';
 import { formatCurrency } from '../utils/formatters';
@@ -15,6 +17,7 @@ interface OverviewCardsProps {
 }
 
 export const OverviewCards: React.FC<OverviewCardsProps> = ({ summary }) => {
+  const investableSurplus = Math.max(0, summary.totalIncome - summary.totalExpense);
   const isPositiveSavings = summary.netSavings >= 0;
   const budgetPercentage = summary.monthlyBudget > 0 
     ? Math.min(100, Math.round((summary.totalExpense / summary.monthlyBudget) * 100))
@@ -77,39 +80,30 @@ export const OverviewCards: React.FC<OverviewCardsProps> = ({ summary }) => {
         </div>
       </div>
 
-      {/* 3. Net Savings */}
-      <div className="bg-[#0e1526] border border-slate-800 rounded-2xl p-4 sm:p-5 shadow-md shadow-black/20 hover:border-slate-700 transition-all">
+      {/* 3. Real-Time Investable Balance (Income - Kharcha = Investment) */}
+      <div className="bg-gradient-to-br from-[#0a1728] to-[#0e1526] border border-cyan-500/40 rounded-2xl p-4 sm:p-5 shadow-lg shadow-cyan-950/20 hover:border-cyan-400/60 transition-all">
         <div className="flex items-center justify-between">
-          <span className="text-xs font-semibold uppercase tracking-wider text-indigo-400">
-            Net Bachat (Savings)
+          <span className="text-xs font-semibold uppercase tracking-wider text-cyan-400 flex items-center gap-1.5">
+            <Zap className="w-3 h-3 text-cyan-400" />
+            Investable Balance
           </span>
-          <div className="w-8 h-8 rounded-xl bg-indigo-950/70 border border-indigo-500/20 text-indigo-400 flex items-center justify-center">
-            <Wallet className="w-4 h-4" />
+          <div className="w-8 h-8 rounded-xl bg-cyan-950/80 border border-cyan-500/30 text-cyan-400 flex items-center justify-center shadow-xs">
+            <PiggyBank className="w-4 h-4" />
           </div>
         </div>
 
         <div className="mt-3">
-          <div className={`text-2xl sm:text-3xl font-bold tracking-tight flex items-baseline ${
-            isPositiveSavings ? 'text-white' : 'text-amber-400'
-          }`}>
-            <span className="mr-1 text-xl font-normal">{summary.netSavings < 0 ? '-₹' : '₹'}</span>
-            <span>{Math.abs(summary.netSavings).toLocaleString('en-IN')}</span>
+          <div className="text-2xl sm:text-3xl font-bold text-cyan-300 tracking-tight flex items-baseline font-mono">
+            <span className="mr-1 text-xl font-normal text-cyan-400">₹</span>
+            <span>{investableSurplus.toLocaleString('en-IN')}</span>
           </div>
         </div>
 
         <div className="mt-3 flex items-center justify-between text-xs pt-2.5 border-t border-slate-800/80">
-          <span className={`inline-flex items-center font-medium px-2 py-0.5 rounded-md ${
-            summary.savingsRate >= 30 
-              ? 'bg-emerald-950/60 text-emerald-300 border border-emerald-500/30' 
-              : summary.savingsRate >= 10 
-              ? 'bg-indigo-950/60 text-indigo-300 border border-indigo-500/30' 
-              : 'bg-amber-950/60 text-amber-300 border border-amber-500/30'
-          }`}>
-            {summary.savingsRate}% Savings Rate
+          <span className="inline-flex items-center text-cyan-300 font-medium text-[11px] bg-cyan-950/60 px-2 py-0.5 rounded border border-cyan-500/30">
+            {summary.savingsRate}% Ready to Invest
           </span>
-          <span className="text-slate-400 text-[11px]">
-            {summary.transactionCount} Total
-          </span>
+          <span className="text-slate-400 text-[11px]">Income - Kharcha</span>
         </div>
       </div>
 
@@ -152,3 +146,4 @@ export const OverviewCards: React.FC<OverviewCardsProps> = ({ summary }) => {
     </div>
   );
 };
+

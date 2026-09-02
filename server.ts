@@ -4,6 +4,7 @@ import fs from 'fs';
 import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI, Type } from '@google/genai';
 import dotenv from 'dotenv';
+import * as XLSX from 'xlsx';
 
 dotenv.config();
 
@@ -329,10 +330,57 @@ const DEFAULT_BUDGETS: CategoryBudget[] = [
   { category: 'Transportation & Fuel', limit: 3500, period: 'monthly' },
   { category: 'Bills & Utilities', limit: 3000, period: 'monthly' },
   { category: 'Shopping & Apparel', limit: 5000, period: 'monthly' },
+  { category: 'Rent & Housing', limit: 12000, period: 'monthly' },
   { category: 'Entertainment & Fun', limit: 2500, period: 'monthly' },
   { category: 'Healthcare & Fitness', limit: 2000, period: 'monthly' },
   { category: 'Investments & Savings', limit: 15000, period: 'monthly' },
+  { category: 'Education & Learning', limit: 3000, period: 'monthly' },
+  { category: 'Other Expense', limit: 2000, period: 'monthly' },
 ];
+
+// Helper to keep categories and budgets 100% synchronized
+function syncBudgetsWithCategories(store: UserDataStore): boolean {
+  let changed = false;
+  if (!store.categories || store.categories.length === 0) {
+    store.categories = [...DEFAULT_CATEGORIES];
+    changed = true;
+  }
+  if (!store.budgets) {
+    store.budgets = [];
+    changed = true;
+  }
+
+  // Categories that can have budgets (expense, both, or uncategorized)
+  const budgetableCategories = store.categories.filter(c => c.type === 'expense' || c.type === 'both' || !c.type);
+
+  // 1. For each budgetable category, ensure a budget entry exists
+  for (const cat of budgetableCategories) {
+    const existingBudget = store.budgets.find(b => b.category.toLowerCase() === cat.name.toLowerCase());
+    if (!existingBudget) {
+      const defLimit = DEFAULT_BUDGETS.find(db => db.category.toLowerCase() === cat.name.toLowerCase())?.limit || 0;
+      store.budgets.push({
+        category: cat.name,
+        limit: defLimit,
+        spent: 0,
+        period: 'monthly',
+      });
+      changed = true;
+    } else if (existingBudget.category !== cat.name) {
+      existingBudget.category = cat.name;
+      changed = true;
+    }
+  }
+
+  // 2. Remove any budget entries for categories that no longer exist
+  const validCatNames = new Set(store.categories.map(c => c.name.toLowerCase()));
+  const initialCount = store.budgets.length;
+  store.budgets = store.budgets.filter(b => validCatNames.has(b.category.toLowerCase()));
+  if (store.budgets.length !== initialCount) {
+    changed = true;
+  }
+
+  return changed;
+}
 
 // In-Memory store with File sync
 function loadJson<T>(filePath: string, defaultValue: T): T {
@@ -442,6 +490,10 @@ function getUserData(userId: string): UserDataStore {
     } else if (!store.categories.some(c => c.name.toLowerCase() === 'uncategorized' || c.id === 'uncategorized')) {
       store.categories.push(DEFAULT_CATEGORIES.find(c => c.id === 'uncategorized')!);
     }
+    const synced = syncBudgetsWithCategories(store);
+    if (synced) {
+      saveJson(filePath, store);
+    }
   } else {
     // Check if legacy files exist to migrate to primary user
     let initialTx: Transaction[] = [];
@@ -459,6 +511,7 @@ function getUserData(userId: string): UserDataStore {
       budgets: initialBudgets,
       categories: [...DEFAULT_CATEGORIES],
     };
+    syncBudgetsWithCategories(store);
     saveJson(filePath, store);
   }
 
@@ -516,7 +569,8 @@ function getRequestUser(req: express.Request): UserProfile | null {
     if (found) return found;
   }
 
-  return null;
+  // Fallback to primary default user so sessions without explicit headers don't crash
+  return users[0] || null;
 }
 
 // Calculate Financial Summary for a user
@@ -615,6 +669,104 @@ export function detectPaymentMethod(text: string): PaymentMethod {
   return 'UPI';
 }
 
+// ---------------- Multi-Format Date Parser (English & Hinglish) ----------------
+
+const MONTH_MAP: Record<string, number> = {
+  jan: 1, january: 1,
+  feb: 2, february: 2,
+  mar: 3, march: 3,
+  apr: 4, april: 4,
+  may: 5,
+  jun: 6, june: 6,
+  jul: 7, july: 7,
+  aug: 8, august: 8,
+  sep: 9, sept: 9, september: 9,
+  oct: 10, october: 10,
+  nov: 11, november: 11,
+  dec: 12, december: 12,
+};
+
+export function parseCustomDateString(rawStr: string): string | null {
+  if (!rawStr) return null;
+  const str = rawStr.trim().toLowerCase();
+  const today = new Date();
+  const currentYear = today.getFullYear();
+
+  // Relative dates
+  if (str.includes('yesterday') || str.includes('kal') || str.includes('beeta kal')) {
+    const d = new Date(Date.now() - 86400000);
+    return d.toISOString().split('T')[0];
+  }
+  if (str.includes('parso') || str.includes('parson') || str.includes('2 days ago') || str.includes('2 din pehle')) {
+    const d = new Date(Date.now() - 2 * 86400000);
+    return d.toISOString().split('T')[0];
+  }
+  if (str.includes('today') || str.includes('aaj')) {
+    return today.toISOString().split('T')[0];
+  }
+
+  // 1. Day Month Year: "2 sep 26", "2nd september 2026", "02 sep", "2-sep-26", "15 aug"
+  const dmyMatch = str.match(/\b(\d{1,2})(?:st|nd|rd|th)?[\s\-_]+(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec|january|february|march|april|june|july|august|september|october|november|december)(?:[\s\-_]+(\d{2,4}))?\b/i);
+  if (dmyMatch) {
+    const day = parseInt(dmyMatch[1], 10);
+    const monthName = dmyMatch[2].toLowerCase();
+    const month = MONTH_MAP[monthName];
+    let year = dmyMatch[3] ? parseInt(dmyMatch[3], 10) : currentYear;
+    if (year < 100) year = 2000 + year;
+
+    if (day >= 1 && day <= 31 && month) {
+      return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    }
+  }
+
+  // 2. Month Day Year: "sep 2 2026", "september 2nd, 26"
+  const mdyMatch = str.match(/\b(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec|january|february|march|april|june|july|august|september|october|november|december)[\s\-_]+(\d{1,2})(?:st|nd|rd|th)?(?:[\s\-_,]+(\d{2,4}))?\b/i);
+  if (mdyMatch) {
+    const monthName = mdyMatch[1].toLowerCase();
+    const month = MONTH_MAP[monthName];
+    const day = parseInt(mdyMatch[2], 10);
+    let year = mdyMatch[3] ? parseInt(mdyMatch[3], 10) : currentYear;
+    if (year < 100) year = 2000 + year;
+
+    if (day >= 1 && day <= 31 && month) {
+      return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    }
+  }
+
+  // 3. Numeric Date DD/MM/YYYY or DD-MM-YYYY or DD.MM.YYYY or DD/MM/YY
+  const numMatch = str.match(/\b(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{2,4})\b/);
+  if (numMatch) {
+    const part1 = parseInt(numMatch[1], 10);
+    const part2 = parseInt(numMatch[2], 10);
+    let year = parseInt(numMatch[3], 10);
+    if (year < 100) year = 2000 + year;
+
+    let day = part1;
+    let month = part2;
+    if (part2 > 12 && part1 <= 12) {
+      month = part1;
+      day = part2;
+    }
+
+    if (day >= 1 && day <= 31 && month >= 1 && month <= 12) {
+      return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    }
+  }
+
+  // 4. ISO Date YYYY-MM-DD
+  const isoMatch = str.match(/\b(\d{4})-(\d{1,2})-(\d{1,2})\b/);
+  if (isoMatch) {
+    const year = parseInt(isoMatch[1], 10);
+    const month = parseInt(isoMatch[2], 10);
+    const day = parseInt(isoMatch[3], 10);
+    if (day >= 1 && day <= 31 && month >= 1 && month <= 12) {
+      return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    }
+  }
+
+  return null;
+}
+
 // ---------------- Fallback Rule-based parser ----------------
 
 function parseFallback(rawText: string, userCategories: CategoryDef[]): Array<{
@@ -643,30 +795,10 @@ function parseFallback(rawText: string, userCategories: CategoryDef[]): Array<{
     // Detect Payment Method for this segment
     const paymentMethod = detectPaymentMethod(seg);
 
-    // Date extraction
-    let extractedDate: string | undefined = undefined;
-    const dateMatch = seg.match(/(?:on\s+)?(\d{1,2}(?:st|nd|rd|th)?\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s*(?:\d{2,4})?)/i) ||
-                      seg.match(/(?:on\s+)?(\d{4}-\d{1,2}-\d{1,2}|\d{1,2}[/-]\d{1,2}[/-]\d{2,4})/i);
-
-    if (dateMatch) {
-      try {
-        const parsed = new Date(dateMatch[1]);
-        if (!isNaN(parsed.getTime())) {
-          extractedDate = parsed.toISOString().split('T')[0];
-        }
-      } catch (e) {}
-    }
-
-    if (segLower.includes('yesterday') || segLower.includes('kal')) {
-      const yesterday = new Date(Date.now() - 86400000);
-      extractedDate = yesterday.toISOString().split('T')[0];
-    } else if (segLower.includes('today') || segLower.includes('aaj')) {
-      extractedDate = new Date().toISOString().split('T')[0];
-    }
+    // Extract custom or relative date
+    const extractedDate = parseCustomDateString(seg);
 
     // Extract amount with strict unit boundary detection
-    // Matches: "250", "₹250", "rs 250", "2.5k", "5k", "10 thousand", "2 lakh", "1.5 cr"
-    // DOES NOT trigger on words starting with 'k' like "250 kamla", "250 kurkure", "100 kaju"
     const amountMatch = seg.match(/(?:(?:rs\.?|inr|₹)\s*)?(\d+(?:,\d+)*(?:\.\d+)?)\s*(k|thousand|hazar|lakh|lakhs|lac|lacs|cr|crore|crores)?(?:\s*(?:rs\.?|inr|₹|rupees|rupaye))?(?!\w)/i);
     if (!amountMatch) continue;
 
@@ -700,13 +832,16 @@ function parseFallback(rawText: string, userCategories: CategoryDef[]): Array<{
 
     const type: TransactionType = isIncome ? 'income' : 'expense';
 
-    // Clean description: remove the amount and unit while preserving the item description (e.g. "Kamla pasand")
+    // Clean description: remove amount, date tokens, and common filler words
     let cleanDesc = seg
       .replace(/(?:rs\.?|inr|₹)\s*\d+(?:,\d+)*(?:\.\d+)?/gi, '')
       .replace(/\b\d+(?:,\d+)*(?:\.\d+)?\s*(?:k|thousand|hazar|lakh|lakhs|lac|lacs|cr|crore|crores)?\b/gi, '')
-      .replace(/(?:on\s+)?(?:\d{1,2}(?:st|nd|rd|th)?\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s*(?:\d{2,4})?)/gi, '')
-      .replace(/(?:on\s+)?(?:\d{4}-\d{1,2}-\d{1,2}|\d{1,2}[/-]\d{1,2}[/-]\d{2,4})/gi, '')
-      .replace(/\b(income|expense|spent|paid|kharcha|diya|credited|received|on|at|for|yesterday|today|kal|aaj|rupees|rs|inr|₹|cash|upi|gpay|paytm|phonepe|card|bank|transfer|rokda|nagad)\b/gi, '')
+      .replace(/(?:on\s+)?\b\d{1,2}(?:st|nd|rd|th)?[\s\-_]+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec|january|february|march|april|june|july|august|september|october|november|december)(?:[\s\-_]+\d{2,4})?\b/gi, '')
+      .replace(/(?:on\s+)?\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec|january|february|march|april|june|july|august|september|october|november|december)[\s\-_]+\d{1,2}(?:st|nd|rd|th)?(?:[\s\-_,]+\d{2,4})?\b/gi, '')
+      .replace(/(?:on\s+)?\b\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4}\b/gi, '')
+      .replace(/(?:on\s+)?\b\d{4}-\d{1,2}-\d{1,2}\b/gi, '')
+      .replace(/\b(yesterday|kal|beeta kal|parso|parson|today|aaj|on|ko|ki tareeq|date)\b/gi, '')
+      .replace(/\b(income|expense|spent|paid|kharcha|diya|credited|received|at|for|rupees|rs|inr|₹|cash|upi|gpay|paytm|phonepe|card|bank|transfer|rokda|nagad)\b/gi, '')
       .replace(/\s+/g, ' ')
       .trim();
 
@@ -771,33 +906,38 @@ async function parseMessageWithGemini(
   }
 
   const categoryNames = userCategories.map(c => c.name);
-  // Ensure Uncategorized is in prompt options
   if (!categoryNames.includes('Uncategorized')) {
     categoryNames.push('Uncategorized');
   }
 
-  const prompt = `You are an expert financial transaction parser for an Indian personal ledger with full Hinglish & Hindi support.
-Analyze the user's message (which can be in English, Hindi, or Hinglish, e.g. "300 dahi cash", "500 petrol upi", "15000 salary bank me aayi", "1200 ki jeans kharidi card se", "sabzi 120 nagad", "dost ko 500 diye", "bhai se 2000 mile", "papa ne 5000 bheje", "kamla pasand 250", "400 zomato khana").
+  const prompt = `You are an expert financial transaction parser for an Indian personal ledger with full Hinglish, Hindi, and English support.
+Analyze the user's message (which can be in English, Hindi, or Hinglish, e.g. "30 dahi on 2 sep 26", "300 dahi cash", "500 petrol upi on 15 august 2026", "15000 salary bank me aayi 1st sept", "1200 ki jeans kharidi card se kal", "sabzi 120 nagad", "dost ko 500 diye parso", "bhai se 2000 mile yesterday", "kamla pasand 250 on 02/09/2026").
 
-Current date: ${currentDate}
+Current date: ${currentDate} (Year: ${new Date().getFullYear()})
 
 CRITICAL RULES:
 1. Extract every transaction (income or expense).
-2. Payment Method Detection:
+2. Date Extraction:
+   - If the user specifies a date (e.g. "on 2 sep 26", "2 sep", "2nd september 2026", "15 aug", "02/09/2026", "2-9-2026", "2/9/26"), parse it into exact ISO format "YYYY-MM-DD" (e.g. "2026-09-02", "2026-08-15").
+   - If relative terms are used:
+     * "yesterday" or "kal" / "beeta kal" -> Calculate date for yesterday relative to ${currentDate}.
+     * "parso" / "2 days ago" -> Calculate date for 2 days before ${currentDate}.
+     * "today" or "aaj" or no date specified -> Use "${currentDate}".
+3. Payment Method Detection:
    - If user wrote "cash", "nagad", "rokda", "haath me", "cash diya" -> paymentMethod: "Cash"
    - If user wrote "upi", "gpay", "google pay", "phonepe", "paytm", "bhim", "scan", "qr" -> paymentMethod: "UPI"
    - If user wrote "card", "visa", "mastercard", "credit", "debit", "swipe" -> paymentMethod: "Card"
    - If user wrote "bank transfer", "net banking", "neft", "imps", "bank", "account me", "khate me" -> paymentMethod: "Bank Transfer"
-   - If not specified, default to "UPI" (or "Cash" if implied by small grocery/chai/sabzi).
-3. Category Assignment:
-   - You MUST pick the best category from ONLY this exact list of the user's active categories:
+   - If not specified, default to "UPI" (or "Cash" if implied by small items).
+4. Category Assignment:
+   - Pick the best category from ONLY this exact list of the user's active categories:
    ${JSON.stringify(categoryNames)}
-   - CRITICAL REQUIREMENT: If the item does not clearly belong to any existing category, or if you are uncertain, you MUST set category to "Uncategorized".
-4. Clean description (in clean Title Case):
-   - "300 dahi cash" -> description: "Dahi", amount: 300, paymentMethod: "Cash", type: "expense"
-   - "500 petrol upi" -> description: "Petrol", amount: 500, paymentMethod: "UPI", type: "expense"
-   - "salary 50000 bank transfer" -> description: "Salary", amount: 50000, paymentMethod: "Bank Transfer", type: "income"
-   - "papa ne 2000 pocket money di" -> description: "Pocket Money", amount: 2000, paymentMethod: "UPI", type: "income"
+   - If the item does not clearly belong to any existing category, or if uncertain, set category to "Uncategorized".
+5. Clean description (in clean Title Case, DO NOT include the date or amount in description):
+   - "30 dahi on 2 sep 26" -> description: "Dahi", amount: 30, date: "2026-09-02", paymentMethod: "UPI", type: "expense"
+   - "500 petrol upi on 15 aug" -> description: "Petrol", amount: 500, date: "2026-08-15", paymentMethod: "UPI", type: "expense"
+   - "salary 50000 bank transfer 1st sep" -> description: "Salary", amount: 50000, date: "2026-09-01", paymentMethod: "Bank Transfer", type: "income"
+   - "200 chai yesterday cash" -> description: "Chai", amount: 200, paymentMethod: "Cash", type: "expense"
 
 User message:
 """
@@ -840,12 +980,17 @@ ${rawText}
           if (!categoryNames.includes(cat)) {
             cat = 'Uncategorized';
           }
+          // Validate date format
+          let finalDate = item.date || currentDate;
+          if (!/^\d{4}-\d{2}-\d{2}$/.test(finalDate)) {
+            finalDate = parseCustomDateString(finalDate) || currentDate;
+          }
           return {
             type: item.type === 'income' ? 'income' : 'expense',
             amount: Math.abs(Number(item.amount)),
             category: cat,
             description: item.description || 'Transaction',
-            date: item.date || currentDate,
+            date: finalDate,
             paymentMethod: (item.paymentMethod as PaymentMethod) || detectPaymentMethod(rawText),
             tags: Array.isArray(item.tags) ? item.tags : [],
           };
@@ -902,10 +1047,10 @@ async function sendTelegramReply(botToken: string, chatId: string | number, text
 async function handleTelegramMessage(messageObj: any) {
   const chatId = String(messageObj.chat.id);
   const userName = messageObj.from?.first_name || messageObj.from?.username || 'User';
-  const rawText = (messageObj.text || '').trim();
+  const rawText = (messageObj.text || messageObj.caption || '').trim();
   const botToken = botConfig.botToken;
 
-  if (!rawText || !botToken) return;
+  if (!botToken) return;
 
   // Always reload users from disk on every message so new registrations and links are immediately active
   users = loadJson<UserProfile[]>(USERS_FILE, users);
@@ -1026,6 +1171,42 @@ async function handleTelegramMessage(messageObj: any) {
   // Resolve sender member identity
   const senderMember = targetUser.linkedMembers?.find(m => m.telegramChatId === chatId);
   const senderDisplayName = senderMember?.customAlias || senderMember?.name || userName || 'Telegram User';
+
+  // Check for Excel / CSV Document Attachment in Telegram message
+  if (messageObj.document && botToken) {
+    const doc = messageObj.document;
+    const fileName = (doc.file_name || '').toLowerCase();
+    if (fileName.endsWith('.xlsx') || fileName.endsWith('.xls') || fileName.endsWith('.csv')) {
+      try {
+        const fileRes = await fetch(`https://api.telegram.org/bot${botToken}/getFile?file_id=${doc.file_id}`);
+        const fileData = await fileRes.json();
+        if (fileData.ok && fileData.result?.file_path) {
+          const downloadUrl = `https://api.telegram.org/file/bot${botToken}/${fileData.result.file_path}`;
+          const downloadRes = await fetch(downloadUrl);
+          const arrayBuffer = await downloadRes.arrayBuffer();
+          const buffer = Buffer.from(arrayBuffer);
+          const workbook = XLSX.read(buffer, { type: 'buffer' });
+          const sheetName = workbook.SheetNames[0];
+          const sheet = workbook.Sheets[sheetName];
+          const rows = XLSX.utils.sheet_to_json(sheet);
+
+          if (rows.length > 0) {
+            const result = importBudgetRows(userId, rows);
+            const replyMsg = `📊 <b>Excel Budget List Import Ho Gayi!</b> 🚀\n\n📁 <b>File:</b> <code>${doc.file_name}</code>\n✅ <b>${result.createdCount}</b> nayi categories auto-create ho gayi\n🔄 <b>${result.updatedCount}</b> categories ke budget allocate ho gaye\n💰 <b>Total Monthly Budget:</b> ₹${result.totalBudget.toLocaleString('en-IN')}\n\n💡 <i>Aapka budget allocation Web Dashboard par live sync ho gaya hai!</i>`;
+            await sendTelegramReply(botToken, chatId, replyMsg);
+            return;
+          } else {
+            await sendTelegramReply(botToken, chatId, '⚠️ Excel file khali hai ya koi row nahi mili. Kripya Category aur Budget columns check karein.');
+            return;
+          }
+        }
+      } catch (docErr: any) {
+        console.error('Error importing Excel from Telegram document:', docErr);
+        await sendTelegramReply(botToken, chatId, `❌ <b>Excel parse karne me error:</b> ${docErr.message}`);
+        return;
+      }
+    }
+  }
 
   // 3. Help & Commands
   if (command === '/start' || command === '/help') {
@@ -1554,13 +1735,15 @@ app.get('/api/categories', (req, res) => {
     return res.json({ categories: DEFAULT_CATEGORIES });
   }
   const store = getUserData(user.id);
+  syncBudgetsWithCategories(store);
+  saveUserData(user.id, store);
   res.json({ categories: store.categories });
 });
 
 app.post('/api/categories', (req, res) => {
   const user = getRequestUser(req);
   const store = getUserData(user.id);
-  const { name, type, icon, color, keywords, description } = req.body;
+  const { name, type, icon, color, keywords, description, budgetLimit } = req.body;
 
   if (!name || !name.trim()) {
     return res.status(400).json({ error: 'Category name is required' });
@@ -1584,9 +1767,22 @@ app.post('/api/categories', (req, res) => {
   };
 
   store.categories.push(newCat);
+
+  // If budget limit was provided or category is budgetable, set limit
+  if (newCat.type === 'expense' || newCat.type === 'both') {
+    const lim = typeof budgetLimit === 'number' ? Math.max(0, budgetLimit) : 0;
+    store.budgets.push({
+      category: newCat.name,
+      limit: lim,
+      spent: 0,
+      period: 'monthly',
+    });
+  }
+
+  syncBudgetsWithCategories(store);
   saveUserData(user.id, store);
 
-  res.json({ success: true, category: newCat, categories: store.categories });
+  res.json({ success: true, category: newCat, categories: store.categories, budgets: store.budgets });
 });
 
 app.put('/api/categories/:id', (req, res) => {
@@ -1613,17 +1809,23 @@ app.put('/api/categories/:id', (req, res) => {
     description: description !== undefined ? description : store.categories[catIdx].description,
   };
 
-  // If category name changed, update all transactions under it
+  // If category name changed, update all transactions and budgets under it
   if (oldName !== newName) {
     for (const t of store.transactions) {
       if (t.category === oldName) {
         t.category = newName;
       }
     }
+    for (const b of store.budgets) {
+      if (b.category.toLowerCase() === oldName.toLowerCase()) {
+        b.category = newName;
+      }
+    }
   }
 
+  syncBudgetsWithCategories(store);
   saveUserData(user.id, store);
-  res.json({ success: true, category: store.categories[catIdx], categories: store.categories });
+  res.json({ success: true, category: store.categories[catIdx], categories: store.categories, budgets: store.budgets });
 });
 
 app.delete('/api/categories/:id', (req, res) => {
@@ -1648,9 +1850,11 @@ app.delete('/api/categories/:id', (req, res) => {
   }
 
   store.categories = store.categories.filter(c => c.id !== targetCat.id);
+  store.budgets = store.budgets.filter(b => b.category.toLowerCase() !== targetCat.name.toLowerCase());
+  syncBudgetsWithCategories(store);
   saveUserData(user.id, store);
 
-  res.json({ success: true, categories: store.categories });
+  res.json({ success: true, categories: store.categories, budgets: store.budgets });
 });
 
 // 3. Transactions CRUD APIs (Scoped to User)
@@ -1788,6 +1992,201 @@ app.delete('/api/transactions', (req, res) => {
   res.json({ success: true, summary: calculateUserSummary(user.id) });
 });
 
+// Auto-category meta helper for Excel imports
+export function getAutoCategoryMeta(name: string): { icon: string; color: string; keywords: string[] } {
+  const lower = name.toLowerCase();
+  const kw = [lower];
+
+  if (/\b(food|dining|dahi|milk|doodh|chai|tea|cafe|restaurant|dinner|lunch|breakfast|swiggy|zomato|khana|sweets|snack|mcdonalds|kfc|pizza|burger)\b/i.test(lower)) {
+    return { icon: 'Utensils', color: '#F59E0B', keywords: [...kw, 'dahi', 'swiggy', 'zomato', 'restaurant', 'chai', 'khana', 'food'] };
+  }
+  if (/\b(grocery|groceries|kirana|sabzi|vegetable|fruit|rashan|supermarket|blinkit|zepto|instamart|dmart|ration)\b/i.test(lower)) {
+    return { icon: 'ShoppingCart', color: '#10B981', keywords: [...kw, 'sabzi', 'kirana', 'rashan', 'blinkit', 'zepto', 'vegetables', 'fruits', 'groceries'] };
+  }
+  if (/\b(petrol|diesel|fuel|cng|travel|transport|commute|auto|cab|uber|ola|rapido|metro|bus|train|flight|parking|toll)\b/i.test(lower)) {
+    return { icon: 'Car', color: '#06B6D4', keywords: [...kw, 'petrol', 'diesel', 'fuel', 'auto', 'uber', 'ola', 'metro', 'commute'] };
+  }
+  if (/\b(bill|electricity|bijli|power|wifi|broadband|recharge|mobile|phone|dth|cylinder|gas|water|utility|utilities)\b/i.test(lower)) {
+    return { icon: 'Zap', color: '#8B5CF6', keywords: [...kw, 'bijli', 'recharge', 'wifi', 'bill', 'electricity', 'gas', 'utilities'] };
+  }
+  if (/\b(shopping|cloth|clothes|dress|jeans|shirt|shoes|amazon|flipkart|myntra|meesho|zara|mall)\b/i.test(lower)) {
+    return { icon: 'ShoppingBag', color: '#EC4899', keywords: [...kw, 'amazon', 'flipkart', 'myntra', 'clothes', 'jeans', 'shopping'] };
+  }
+  if (/\b(rent|kiraya|makan|housing|flat|room|society|maintenance|maid|cook)\b/i.test(lower)) {
+    return { icon: 'Home', color: '#6366F1', keywords: [...kw, 'rent', 'kiraya', 'room', 'maintenance', 'maid'] };
+  }
+  if (/\b(movie|cinema|netflix|hotstar|prime|spotify|youtube|entertainment|fun|game|party|club|outing)\b/i.test(lower)) {
+    return { icon: 'Film', color: '#A855F7', keywords: [...kw, 'movie', 'netflix', 'party', 'cinema', 'fun', 'entertainment'] };
+  }
+  if (/\b(health|doctor|hospital|medical|medicine|dawa|pharmacy|test|clinic|gym|fitness|yoga)\b/i.test(lower)) {
+    return { icon: 'HeartPulse', color: '#F43F5E', keywords: [...kw, 'medicine', 'dawa', 'doctor', 'hospital', 'medical', 'gym', 'health'] };
+  }
+  if (/\b(invest|investment|sip|mutual fund|stock|share|crypto|gold|ppf|epf|savings|fd|rd)\b/i.test(lower)) {
+    return { icon: 'TrendingUp', color: '#10B981', keywords: [...kw, 'sip', 'mutual fund', 'stocks', 'gold', 'crypto', 'savings'] };
+  }
+  if (/\b(education|course|school|college|fees|tuition|book|books|exam|study|training)\b/i.test(lower)) {
+    return { icon: 'GraduationCap', color: '#3B82F6', keywords: [...kw, 'fees', 'course', 'books', 'school', 'tuition', 'education'] };
+  }
+  if (/\b(salary|job|stipend|bonus|office|payout|payroll)\b/i.test(lower)) {
+    return { icon: 'Briefcase', color: '#10B981', keywords: [...kw, 'salary', 'bonus', 'stipend', 'payout'] };
+  }
+  if (/\b(freelance|client|project|upwork|fiverr|consulting|gig)\b/i.test(lower)) {
+    return { icon: 'Laptop', color: '#0EA5E9', keywords: [...kw, 'freelance', 'client', 'project', 'consulting'] };
+  }
+
+  return { icon: 'Tag', color: '#06B6D4', keywords: kw };
+}
+
+export function importBudgetRows(
+  userId: string,
+  rawRows: any[],
+  replaceExisting: boolean = true
+): {
+  createdCount: number;
+  updatedCount: number;
+  budgets: CategoryBudget[];
+  categories: CategoryDef[];
+  totalBudget: number;
+  importedItems: Array<{ category: string; limit: number; type: string; isNew: boolean }>;
+} {
+  const store = getUserData(userId);
+  let createdCount = 0;
+  let updatedCount = 0;
+  const importedItems: Array<{ category: string; limit: number; type: string; isNew: boolean }> = [];
+
+  // When replaceExisting is true, clear out old categories and budgets so only Excel list is kept
+  if (replaceExisting) {
+    store.categories = [];
+    store.budgets = [];
+  }
+
+  for (const rawRow of rawRows) {
+    // Normalize row keys (ignore casing, spaces, underscores, hyphens)
+    const rowObj: Record<string, any> = {};
+    for (const k of Object.keys(rawRow)) {
+      rowObj[k.trim().toLowerCase().replace(/[\s_\-]+/g, '')] = rawRow[k];
+    }
+
+    let categoryName = 
+      rowObj['category'] || 
+      rowObj['categoryname'] || 
+      rowObj['name'] || 
+      rowObj['naam'] || 
+      rowObj['item'] || 
+      rowObj['kharcha'] || 
+      rowObj['kharchatype'] || 
+      rowObj['title'] || '';
+
+    categoryName = String(categoryName).trim();
+    if (!categoryName) continue;
+
+    const rawAmt = 
+      rowObj['budget'] ?? 
+      rowObj['budgetlimit'] ?? 
+      rowObj['monthlybudget'] ?? 
+      rowObj['limit'] ?? 
+      rowObj['monthlylimit'] ?? 
+      rowObj['amount'] ?? 
+      rowObj['rashi'] ?? 
+      rowObj['allocation'] ?? 
+      rowObj['allocated'] ?? 0;
+
+    const budgetLimit = Math.max(0, Number(String(rawAmt).replace(/[^0-9.]/g, '')) || 0);
+
+    const rawType = String(rowObj['type'] || rowObj['kind'] || rowObj['categorytype'] || 'expense').toLowerCase().trim();
+    let categoryType: TransactionType | 'both' = 'expense';
+    if (rawType.includes('inc') || rawType === 'income' || rawType === 'kamai') {
+      categoryType = 'income';
+    } else if (rawType === 'both' || rawType.includes('dono')) {
+      categoryType = 'both';
+    }
+
+    let rawKeywords: string[] = [];
+    const rawKw = rowObj['keywords'] || rowObj['keyword'] || rowObj['searchwords'] || rowObj['tags'] || '';
+    if (typeof rawKw === 'string' && rawKw.trim()) {
+      rawKeywords = rawKw.split(/[,;|]/).map(s => s.trim().toLowerCase()).filter(Boolean);
+    } else if (Array.isArray(rawKw)) {
+      rawKeywords = rawKw.map(s => String(s).trim().toLowerCase()).filter(Boolean);
+    }
+
+    // 1. Check or create category
+    let existingCat = store.categories.find(c => c.name.toLowerCase() === categoryName.toLowerCase());
+    let isNew = false;
+    if (!existingCat) {
+      isNew = true;
+      const meta = getAutoCategoryMeta(categoryName);
+      const combinedKeywords = Array.from(new Set([...meta.keywords, ...rawKeywords, categoryName.toLowerCase()]));
+      const newCatDef: CategoryDef = {
+        id: `cat_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
+        name: categoryName.charAt(0).toUpperCase() + categoryName.slice(1),
+        type: categoryType,
+        icon: meta.icon,
+        color: meta.color,
+        keywords: combinedKeywords,
+        isCustom: true,
+      };
+      store.categories.push(newCatDef);
+      existingCat = newCatDef;
+      createdCount++;
+    } else {
+      if (rawKeywords.length > 0) {
+        const set = new Set(existingCat.keywords || []);
+        rawKeywords.forEach(k => set.add(k));
+        existingCat.keywords = Array.from(set);
+      }
+    }
+
+    // 2. Update or insert in budgets list
+    const existingBudget = store.budgets.find(b => b.category.toLowerCase() === existingCat!.name.toLowerCase());
+    if (existingBudget) {
+      existingBudget.limit = budgetLimit;
+      updatedCount++;
+    } else {
+      store.budgets.push({
+        category: existingCat!.name,
+        limit: budgetLimit,
+        spent: 0,
+        period: 'monthly',
+      });
+      updatedCount++;
+    }
+
+    importedItems.push({
+      category: existingCat!.name,
+      limit: budgetLimit,
+      type: categoryType,
+      isNew,
+    });
+  }
+
+  // Ensure Uncategorized category is preserved if not in list
+  if (!store.categories.some(c => c.name.toLowerCase() === 'uncategorized' || c.id === 'uncategorized')) {
+    store.categories.push({
+      id: 'uncategorized',
+      name: 'Uncategorized',
+      type: 'both',
+      icon: 'Tag',
+      color: '#64748B',
+      keywords: ['other', 'misc', 'uncategorized'],
+      isCustom: false,
+    });
+  }
+
+  syncBudgetsWithCategories(store);
+  saveUserData(userId, store);
+
+  const totalBudget = store.budgets.reduce((acc, b) => acc + (b.limit || 0), 0);
+
+  return {
+    createdCount,
+    updatedCount,
+    budgets: store.budgets,
+    categories: store.categories,
+    totalBudget,
+    importedItems,
+  };
+}
+
 // 4. Budgets Management
 app.get('/api/budgets', (req, res) => {
   const user = getRequestUser(req);
@@ -1795,6 +2194,8 @@ app.get('/api/budgets', (req, res) => {
     return res.json({ budgets: [] });
   }
   const store = getUserData(user.id);
+  syncBudgetsWithCategories(store);
+  saveUserData(user.id, store);
   res.json({ budgets: store.budgets });
 });
 
@@ -1806,10 +2207,106 @@ app.put('/api/budgets', (req, res) => {
   if (!Array.isArray(newBudgets)) {
     return res.status(400).json({ error: 'newBudgets must be an array' });
   }
-  store.budgets = newBudgets;
+
+  // Update existing or add new
+  for (const nb of newBudgets) {
+    const existing = store.budgets.find(b => b.category.toLowerCase() === nb.category.toLowerCase());
+    if (existing) {
+      existing.limit = Math.max(0, Number(nb.limit) || 0);
+    } else {
+      store.budgets.push({
+        category: nb.category,
+        limit: Math.max(0, Number(nb.limit) || 0),
+        spent: 0,
+        period: 'monthly',
+      });
+    }
+  }
+
+  syncBudgetsWithCategories(store);
   saveUserData(user.id, store);
 
   res.json({ success: true, budgets: store.budgets });
+});
+
+// Import Budget from Excel / CSV endpoint
+app.post('/api/budgets/import-excel', (req, res) => {
+  try {
+    const user = getRequestUser(req);
+    if (!user) {
+      return res.status(401).json({ error: 'User session not found. Please log in.' });
+    }
+
+    const { rows, fileBase64, replaceExisting = true } = req.body;
+    let parsedRows: any[] = [];
+
+    if (Array.isArray(rows) && rows.length > 0) {
+      parsedRows = rows;
+    } else if (fileBase64) {
+      try {
+        const buffer = Buffer.from(fileBase64, 'base64');
+        const workbook = XLSX.read(buffer, { type: 'buffer' });
+        const sheetName = workbook.SheetNames[0];
+        const sheet = workbook.Sheets[sheetName];
+        parsedRows = XLSX.utils.sheet_to_json(sheet);
+      } catch (e: any) {
+        return res.status(400).json({ error: `Excel file parsing error: ${e.message}` });
+      }
+    } else {
+      return res.status(400).json({ error: 'No budget rows or fileBase64 provided' });
+    }
+
+    if (parsedRows.length === 0) {
+      return res.status(400).json({ error: 'Excel sheet khali hai ya columns match nahi huye' });
+    }
+
+    const result = importBudgetRows(user.id, parsedRows, replaceExisting);
+    return res.json({
+      success: true,
+      message: replaceExisting 
+        ? `Purani categories hata di gayi hain aur ${result.categories.length} Excel categories successfully setup ho gayi hain!`
+        : `${result.createdCount} nayi categories banayi gayi aur ${result.updatedCount} budgets update huye!`,
+      ...result,
+    });
+  } catch (err: any) {
+    console.error('Error importing budgets from Excel:', err);
+    return res.status(500).json({ error: err?.message || 'Failed to import Excel budgets' });
+  }
+});
+
+// Download sample budget template endpoint (Excel .xlsx or CSV)
+app.get('/api/budgets/template', (req, res) => {
+  const format = req.query.format === 'csv' ? 'csv' : 'xlsx';
+
+  const sampleData = [
+    { 'Category': 'Food & Dining', 'Monthly Budget': 12000, 'Type': 'expense', 'Keywords': 'dahi, swiggy, zomato, chai, restaurant, milk, snacks' },
+    { 'Category': 'Groceries & Kirana', 'Monthly Budget': 8000, 'Type': 'expense', 'Keywords': 'sabzi, blinkit, zepto, rashan, supermarket, fruits' },
+    { 'Category': 'Petrol & Fuel', 'Monthly Budget': 5000, 'Type': 'expense', 'Keywords': 'petrol, diesel, cng, fuel, bike, car' },
+    { 'Category': 'Bills & Utilities', 'Monthly Budget': 4000, 'Type': 'expense', 'Keywords': 'electricity, bijli, wifi, mobile recharge, gas cylinder' },
+    { 'Category': 'Shopping', 'Monthly Budget': 6000, 'Type': 'expense', 'Keywords': 'amazon, flipkart, myntra, clothes, shoes, jeans' },
+    { 'Category': 'Rent & Housing', 'Monthly Budget': 15000, 'Type': 'expense', 'Keywords': 'rent, kiraya, flat, maintenance, maid' },
+    { 'Category': 'Health & Medical', 'Monthly Budget': 3000, 'Type': 'expense', 'Keywords': 'medicine, doctor, hospital, pharmacy, gym' },
+    { 'Category': 'Entertainment', 'Monthly Budget': 2500, 'Type': 'expense', 'Keywords': 'movie, netflix, cinema, party, outing' },
+    { 'Category': 'Investments & Savings', 'Monthly Budget': 20000, 'Type': 'expense', 'Keywords': 'sip, mutual fund, stocks, gold, crypto, savings' },
+    { 'Category': 'Salary', 'Monthly Budget': 75000, 'Type': 'income', 'Keywords': 'salary, office, payout, payroll' },
+    { 'Category': 'Freelance & Side Income', 'Monthly Budget': 15000, 'Type': 'income', 'Keywords': 'freelance, client, upwork, project' },
+  ];
+
+  const worksheet = XLSX.utils.json_to_sheet(sampleData);
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, worksheet, 'Budgets');
+
+  if (format === 'csv') {
+    const csvContent = XLSX.utils.sheet_to_csv(worksheet);
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', 'attachment; filename="TeleExpense_Budget_Template.csv"');
+    return res.send(csvContent);
+  } else {
+    const buffer = XLSX.write(workbook, { bookType: 'xlsx', type: 'buffer' });
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', 'attachment; filename="TeleExpense_Budget_Template.xlsx"');
+    return res.send(buffer);
+  }
 });
 
 // 5. Telegram Bot Config & Status

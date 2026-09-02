@@ -6,7 +6,9 @@ import {
   PieChart, 
   Target, 
   RefreshCw,
-  Lock
+  Lock,
+  Coins,
+  PiggyBank
 } from 'lucide-react';
 import { Transaction, FinancialSummary, BotConfig, CategoryBudget, UserProfile, CategoryDef } from './types';
 import { safeFetchJson, setActiveUserId, setAuthSession } from './utils/api';
@@ -14,6 +16,7 @@ import { DEFAULT_CATEGORIES } from './utils/categories';
 import { Header } from './components/Header';
 import { OverviewCards } from './components/OverviewCards';
 import { FuturisticHud } from './components/FuturisticHud';
+import { InvestableSurplusTracker } from './components/InvestableSurplusTracker';
 import { TelegramBotSetupModal } from './components/TelegramBotSetupModal';
 import { AddTransactionModal } from './components/AddTransactionModal';
 import { TransactionList } from './components/TransactionList';
@@ -49,7 +52,7 @@ export default function App() {
   const [botConfig, setBotConfig] = useState<BotConfig | null>(null);
   const [webhookUrl, setWebhookUrl] = useState('');
   const [appUrl, setAppUrl] = useState('');
-  const [activeTab, setActiveTab] = useState<'transactions' | 'categories' | 'analytics' | 'budgets'>('transactions');
+  const [activeTab, setActiveTab] = useState<'transactions' | 'investments' | 'categories' | 'analytics' | 'budgets'>('transactions');
 
   // Modals state
   const [isBotSetupOpen, setIsBotSetupOpen] = useState(false);
@@ -218,7 +221,21 @@ export default function App() {
     }
   };
 
-  // Reclassify / Change category of a transaction
+  // Reclassify / Change category or full details of a transaction
+  const handleEditTransaction = async (updatedTx: Transaction) => {
+    const { data } = await safeFetchJson<{ transaction?: Transaction; summary?: FinancialSummary }>(`/api/transactions/${updatedTx.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(updatedTx),
+    });
+    if (data?.transaction) {
+      setTransactions((prev) => prev.map((t) => (t.id === updatedTx.id ? data.transaction! : t)));
+      if (data.summary) {
+        setSummary(data.summary);
+      }
+    }
+  };
+
   const handleUpdateTransactionCategory = async (id: string, newCategory: string) => {
     const { data } = await safeFetchJson<{ success?: boolean }>(`/api/transactions/${id}`, {
       method: 'PUT',
@@ -389,6 +406,23 @@ export default function App() {
             </button>
 
             <button
+              onClick={() => setActiveTab('investments')}
+              className={`pb-3 text-xs sm:text-sm font-semibold border-b-2 flex items-center space-x-2 transition-all shrink-0 cursor-pointer ${
+                activeTab === 'investments'
+                  ? 'border-cyan-400 text-cyan-300'
+                  : 'border-transparent text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <Coins className="w-4 h-4 text-cyan-400" />
+              <span className="flex items-center gap-1.5">
+                Investable Pool
+                <span className="text-[10px] font-mono px-1.5 py-0.2 rounded-md bg-cyan-950/90 text-cyan-300 border border-cyan-500/40">
+                  ₹{Math.max(0, summary.totalIncome - summary.totalExpense).toLocaleString('en-IN')}
+                </span>
+              </span>
+            </button>
+
+            <button
               onClick={() => setActiveTab('categories')}
               className={`pb-3 text-xs sm:text-sm font-semibold border-b-2 flex items-center space-x-2 transition-all shrink-0 cursor-pointer ${
                 activeTab === 'categories'
@@ -430,6 +464,7 @@ export default function App() {
               onClick={() => {
                 fetchTransactions();
                 fetchCategories();
+                fetchBudgets();
               }}
               title="Refresh ledger"
               className="p-1.5 rounded-xl border border-slate-800 bg-slate-900 text-slate-400 hover:text-white hover:border-slate-600 transition-all cursor-pointer"
@@ -441,12 +476,22 @@ export default function App() {
 
         {/* Tab Views */}
         {activeTab === 'transactions' && (
-          <TransactionList
+          <div className="space-y-6">
+            <TransactionList
+              transactions={transactions}
+              categories={categories}
+              onDeleteTransaction={handleDeleteTransaction}
+              onEditTransaction={handleEditTransaction}
+              onUpdateTransactionCategory={handleUpdateTransactionCategory}
+              onClearAll={handleClearAll}
+            />
+          </div>
+        )}
+
+        {activeTab === 'investments' && (
+          <InvestableSurplusTracker
+            summary={summary}
             transactions={transactions}
-            categories={categories}
-            onDeleteTransaction={handleDeleteTransaction}
-            onUpdateTransactionCategory={handleUpdateTransactionCategory}
-            onClearAll={handleClearAll}
           />
         )}
 
@@ -455,6 +500,7 @@ export default function App() {
             categories={categories}
             onCategoriesChange={(newCats) => {
               setCategories(newCats);
+              fetchBudgets();
               fetchTransactions();
             }}
           />
@@ -468,7 +514,17 @@ export default function App() {
           <BudgetManager
             budgets={budgets}
             transactions={transactions}
+            categories={categories}
             onUpdateBudgets={handleUpdateBudgets}
+            onCategoriesUpdated={(newCats, newBudge) => {
+              setCategories(newCats);
+              if (newBudge) {
+                setBudgets(newBudge);
+              } else {
+                fetchBudgets();
+              }
+              fetchTransactions();
+            }}
           />
         )}
 

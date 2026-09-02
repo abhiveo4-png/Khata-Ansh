@@ -13,17 +13,19 @@ import {
   ChevronDown,
   X,
   Banknote,
-  Smartphone
+  Smartphone,
+  Pencil
 } from 'lucide-react';
 import { Transaction, TransactionType, CategoryDef, PaymentMethod } from '../types';
 import { getCategoryByNameOrKeyword } from '../utils/categories';
 import { formatCurrency, formatRelativeDate } from '../utils/formatters';
+import { EditTransactionModal } from './EditTransactionModal';
 
 interface TransactionListProps {
   transactions: Transaction[];
   categories: CategoryDef[];
   onDeleteTransaction: (id: string) => Promise<void>;
-  onEditTransaction?: (tx: Transaction) => void;
+  onEditTransaction?: (tx: Transaction) => Promise<void>;
   onUpdateTransactionCategory?: (id: string, newCategory: string) => Promise<void>;
   onClearAll: () => Promise<void>;
 }
@@ -42,6 +44,9 @@ export const TransactionList: React.FC<TransactionListProps> = ({
   const [selectedMember, setSelectedMember] = useState<string>('all');
   const [dateFilter, setDateFilter] = useState<'all' | 'today' | 'yesterday' | 'this_month'>('all');
   const [sortBy, setSortBy] = useState<'date_desc' | 'date_asc' | 'amount_desc' | 'amount_asc'>('date_desc');
+
+  // Edit Modal State
+  const [editingTransaction, setEditingTransaction] = useState<Transaction | null>(null);
 
   // Category changer dropdown state
   const [activeCategoryDropdownTxId, setActiveCategoryDropdownTxId] = useState<string | null>(null);
@@ -424,10 +429,14 @@ export const TransactionList: React.FC<TransactionListProps> = ({
                 <div className="md:col-span-3 flex flex-col space-y-1">
                   <div className="flex items-center space-x-2">
                     {renderPaymentBadge(tx.paymentMethod)}
-                    <span className="text-slate-300 text-[11px] flex items-center space-x-1">
+                    <button
+                      onClick={() => setEditingTransaction(tx)}
+                      className="text-slate-300 hover:text-indigo-300 text-[11px] flex items-center space-x-1 cursor-pointer transition-colors"
+                      title="Tareeq ya details edit karein"
+                    >
                       <Calendar className="w-3 h-3 text-slate-500" />
                       <span>{formatRelativeDate(tx.date)}</span>
-                    </span>
+                    </button>
                   </div>
                   <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-slate-400">
                     {tx.telegramUser ? (
@@ -451,7 +460,7 @@ export const TransactionList: React.FC<TransactionListProps> = ({
                 </div>
 
                 {/* Amount & Actions */}
-                <div className="md:col-span-2 flex items-center justify-between md:justify-end space-x-3">
+                <div className="md:col-span-2 flex items-center justify-between md:justify-end space-x-2">
                   <div className="text-left md:text-right">
                     <span
                       className={`text-sm font-bold tracking-tight ${
@@ -462,13 +471,23 @@ export const TransactionList: React.FC<TransactionListProps> = ({
                     </span>
                   </div>
 
-                  <button
-                    onClick={() => onDeleteTransaction(tx.id)}
-                    title="Transaction delete karein"
-                    className="p-1.5 text-slate-500 hover:text-rose-400 hover:bg-rose-950/40 rounded-xl transition-colors shrink-0 cursor-pointer"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                  </button>
+                  <div className="flex items-center space-x-1">
+                    <button
+                      onClick={() => setEditingTransaction(tx)}
+                      title="Transaction ya Tareeq edit karein"
+                      className="p-1.5 text-slate-400 hover:text-indigo-400 hover:bg-indigo-950/40 rounded-xl transition-colors shrink-0 cursor-pointer"
+                    >
+                      <Pencil className="w-3.5 h-3.5" />
+                    </button>
+
+                    <button
+                      onClick={() => onDeleteTransaction(tx.id)}
+                      title="Transaction delete karein"
+                      className="p-1.5 text-slate-500 hover:text-rose-400 hover:bg-rose-950/40 rounded-xl transition-colors shrink-0 cursor-pointer"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
                 </div>
 
               </div>
@@ -476,6 +495,19 @@ export const TransactionList: React.FC<TransactionListProps> = ({
           })}
         </div>
       )}
+
+      {/* Edit Transaction Modal */}
+      <EditTransactionModal
+        isOpen={!!editingTransaction}
+        onClose={() => setEditingTransaction(null)}
+        transaction={editingTransaction}
+        categories={categories}
+        onSave={async (updated) => {
+          if (onEditTransaction) {
+            await onEditTransaction(updated);
+          }
+        }}
+      />
 
     </div>
   );
