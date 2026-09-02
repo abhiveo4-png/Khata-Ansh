@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   User, 
   Key, 
@@ -43,6 +43,7 @@ interface AuthModalProps {
   onRefreshUsers: () => Promise<void>;
   onLogout?: () => void;
   botUsername?: string;
+  initialTab?: 'family' | 'switch' | 'register';
 }
 
 export const AuthModal: React.FC<AuthModalProps> = ({
@@ -56,9 +57,10 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   onRefreshUsers,
   onLogout,
   botUsername = 'khata_ansh_bot',
+  initialTab,
 }) => {
   const [activeTab, setActiveTab] = useState<'family' | 'switch' | 'register'>(
-    currentUser ? 'family' : 'switch'
+    initialTab || (currentUser ? 'family' : 'switch')
   );
   
   // Login form state
@@ -97,29 +99,27 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const [newMemberChatId, setNewMemberChatId] = useState('');
   const [newMemberName, setNewMemberName] = useState('');
 
-  // Reset form inputs whenever modal opens or active user changes / logs out
+  // Track modal open state to only initialize tab on open transition, NOT on background polling
+  const prevIsOpenRef = useRef(false);
+
   useEffect(() => {
-    if (!isOpen) return;
-    if (currentUser) {
-      setActiveTab('family');
-    } else {
-      setActiveTab('switch');
-      setLoginEmail('');
-      setLoginPassword('');
+    // Only execute tab reset when modal transitions from closed to open
+    if (isOpen && !prevIsOpenRef.current) {
+      if (initialTab) {
+        setActiveTab(initialTab);
+      } else if (currentUser) {
+        setActiveTab('family');
+      } else {
+        setActiveTab('switch');
+      }
+      setError('');
+      setPasswordSuccess('');
+      setShowChangePassword(false);
+      setEditingMemberId(null);
+      setShowAddMember(false);
     }
-    setError('');
-    setPasswordSuccess('');
-    setShowChangePassword(false);
-    setRegisterName('');
-    setRegisterEmail('');
-    setRegisterPassword('');
-    setRegisterConfirmPassword('');
-    setCurrentPassword('');
-    setNewPassword('');
-    setConfirmNewPassword('');
-    setEditingMemberId(null);
-    setShowAddMember(false);
-  }, [isOpen, currentUser]);
+    prevIsOpenRef.current = isOpen;
+  }, [isOpen, initialTab, currentUser]);
 
   if (!isOpen) return null;
 
@@ -270,8 +270,11 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         return;
       }
 
+      setPasswordSuccess(`Vault Unlocked: ${data.user.name}`);
       handleSelect(data.user, data.token);
-      onClose();
+      setTimeout(() => {
+        onClose();
+      }, 400);
     } catch (err: any) {
       setError(err?.message || 'Login failed');
     } finally {
@@ -439,7 +442,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 }`}
               >
                 <Heart className="w-3.5 h-3.5" />
-                <span>MY VAULT & FAMILY</span>
+                <span>MY VAULT ({currentUser.name})</span>
               </button>
             )}
             <button
@@ -452,7 +455,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               }`}
             >
               <Lock className="w-3.5 h-3.5" />
-              <span>LOG IN / UNLOCK</span>
+              <span>{currentUser ? 'SWITCH / LOG IN' : 'LOG IN / UNLOCK'}</span>
             </button>
             <button
               onClick={() => {
@@ -860,13 +863,40 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 <div className="flex items-center space-x-2">
                   <Lock className="w-4 h-4 text-cyan-400" />
                   <p className="text-xs font-bold text-white uppercase tracking-wider">
-                    Unlock Private Expense Vault
+                    {currentUser ? 'Switch or Login to Another Vault' : 'Unlock Private Expense Vault'}
                   </p>
                 </div>
+
+                {currentUser && (
+                  <div className="bg-slate-950/90 border border-cyan-500/30 rounded-xl p-3 flex items-center justify-between">
+                    <div>
+                      <p className="text-[10px] text-cyan-400 font-bold">CURRENT ACTIVE VAULT</p>
+                      <p className="text-xs text-white font-bold">{currentUser.name} <span className="text-slate-400 font-normal font-mono">({currentUser.email})</span></p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onLogout();
+                        setActiveTab('switch');
+                      }}
+                      className="px-2.5 py-1 bg-rose-950/60 hover:bg-rose-900 border border-rose-500/40 text-rose-300 rounded-lg text-[10px] transition-colors cursor-pointer"
+                    >
+                      Sign Out
+                    </button>
+                  </div>
+                )}
+
                 <p className="text-[11px] text-slate-400">
                   Enter your registered email and Security Password / PIN to access your encrypted financial matrix:
                 </p>
                 
+                {passwordSuccess && (
+                  <div className="bg-emerald-950/80 border border-emerald-500/40 text-emerald-300 px-3.5 py-2.5 rounded-xl text-xs font-mono flex items-center space-x-2">
+                    <Check className="w-4 h-4 text-emerald-400 shrink-0" />
+                    <span>{passwordSuccess}</span>
+                  </div>
+                )}
+
                 {error && (
                   <div className="bg-rose-950/80 border border-rose-500/40 text-rose-300 px-3.5 py-2.5 rounded-xl text-xs font-mono flex items-start space-x-2">
                     <ShieldAlert className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />

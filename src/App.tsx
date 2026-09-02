@@ -33,6 +33,7 @@ export default function App() {
   const [currentUser, setCurrentUser] = useState<UserProfile | null>(null);
   const [usersList, setUsersList] = useState<UserProfile[]>([]);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
+  const [authModalInitialTab, setAuthModalInitialTab] = useState<'family' | 'switch' | 'register'>('family');
 
   // Core Financial State
   const [transactions, setTransactions] = useState<Transaction[]>([]);
@@ -175,6 +176,7 @@ export default function App() {
     setCurrentUser(null);
     setTransactions([]);
     setBudgets([]);
+    setAuthModalInitialTab('switch');
     setIsAuthModalOpen(true);
   };
 
@@ -629,6 +631,7 @@ export default function App() {
         onClose={() => setIsAuthModalOpen(false)}
         currentUser={currentUser}
         allUsers={usersList}
+        initialTab={authModalInitialTab}
         onSelectUser={handleSelectUser}
         onLogin={handleSelectUser}
         onRegister={handleRegister}
