@@ -23,7 +23,6 @@ interface HeaderProps {
   onOpenBotSetup: () => void;
   onOpenAddModal: () => void;
   onOpenAiInsights: () => void;
-  onOpenLogs: () => void;
   onExportCsv: () => void;
   onOpenBackupModal?: () => void;
   onLogout?: () => void;
@@ -36,7 +35,6 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenBotSetup,
   onOpenAddModal,
   onOpenAiInsights,
-  onOpenLogs,
   onExportCsv,
   onOpenBackupModal,
   onLogout,
@@ -162,10 +160,11 @@ export const Header: React.FC<HeaderProps> = ({
             {/* AI Insights Button */}
             <button
               onClick={onOpenAiInsights}
-              className="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-xl text-xs font-medium bg-slate-900 border border-slate-700 hover:border-indigo-500 text-slate-200 hover:text-white transition-all cursor-pointer"
+              className="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-gradient-to-r from-indigo-950/80 to-purple-950/80 border border-indigo-500/40 hover:border-indigo-400 text-indigo-200 hover:text-white transition-all shadow-sm cursor-pointer"
+              title="Gemini AI se janein kaha faltu kharcha hua aur kitni bachat ho sakti hai"
             >
               <Sparkles className="w-3.5 h-3.5 text-indigo-400" />
-              <span>AI Insights</span>
+              <span>AI Tips & Bachat</span>
             </button>
 
             {/* Quick Export CSV Button */}

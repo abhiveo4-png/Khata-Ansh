@@ -25,7 +25,6 @@ import { BudgetManager } from './components/BudgetManager';
 import { CategoryManager } from './components/CategoryManager';
 import { AuthModal } from './components/AuthModal';
 import { AiInsightsModal } from './components/AiInsightsModal';
-import { TelegramLogsModal } from './components/TelegramLogsModal';
 import { ExcelBackupRestoreModal } from './components/ExcelBackupRestoreModal';
 
 export default function App() {
@@ -60,7 +59,6 @@ export default function App() {
   const [isBotSetupOpen, setIsBotSetupOpen] = useState(false);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [isAiInsightsOpen, setIsAiInsightsOpen] = useState(false);
-  const [isLogsOpen, setIsLogsOpen] = useState(false);
   const [isBackupModalOpen, setIsBackupModalOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
 
@@ -173,20 +171,6 @@ export default function App() {
       return data.user;
     }
     return null;
-  };
-
-  // Quick simulate message parser
-  const handleQuickSimulate = async (msg: string) => {
-    try {
-      await safeFetchJson('/api/telegram/simulate-message', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: msg }),
-      });
-      await fetchTransactions();
-    } catch (err) {
-      console.error('Simulation error', err);
-    }
   };
 
   // Initial load
@@ -353,7 +337,6 @@ export default function App() {
         onOpenBotSetup={() => setIsBotSetupOpen(true)}
         onOpenAddModal={() => setIsAddModalOpen(true)}
         onOpenAiInsights={() => setIsAiInsightsOpen(true)}
-        onOpenLogs={() => setIsLogsOpen(true)}
         onOpenBackupModal={() => setIsBackupModalOpen(true)}
         onExportCsv={handleExportCsv}
         onLogout={handleLogout}
@@ -368,10 +351,9 @@ export default function App() {
           currentUser={currentUser}
           transactionCount={transactions.length}
           onOpenBotSetup={() => setIsBotSetupOpen(true)}
-          onOpenLogs={() => setIsLogsOpen(true)}
           onOpenAiInsights={() => setIsAiInsightsOpen(true)}
           onRefresh={fetchTransactions}
-          onQuickSimulate={handleQuickSimulate}
+          onOpenAddModal={() => setIsAddModalOpen(true)}
         />
 
         {/* Unauthenticated / Guest Notice */}
@@ -396,38 +378,6 @@ export default function App() {
             >
               Login / Khata Kholein
             </button>
-          </div>
-        )}
-
-        {/* Telegram Linking Banner for Current User */}
-        {currentUser && !currentUser.telegramChatId && (
-          <div className="bg-[#0e1526] rounded-2xl p-4 sm:p-5 text-white shadow-md flex flex-col md:flex-row items-start md:items-center justify-between gap-4 border border-indigo-500/30">
-            <div className="flex items-start sm:items-center space-x-3.5">
-              <div className="w-11 h-11 rounded-xl bg-indigo-950/60 border border-indigo-500/40 flex items-center justify-center shrink-0 text-indigo-300">
-                <Bot className="w-6 h-6" />
-              </div>
-              <div>
-                <div className="flex items-center space-x-2">
-                  <h3 className="font-semibold text-sm sm:text-base text-white">
-                    {currentUser.name} ka Telegram jodein
-                  </h3>
-                  <span className="px-2 py-0.5 rounded-full bg-amber-950/60 border border-amber-400/40 text-amber-300 text-[10px] font-medium">
-                    Not Linked
-                  </span>
-                </div>
-                <p className="text-xs text-slate-300 mt-1">
-                  Telegram Bot <span className="font-semibold text-indigo-300">@{botConfig?.botUsername || 'khata_ansh_bot'}</span> par yeh message bhejein: <code className="bg-slate-950 px-2 py-0.5 rounded font-mono text-indigo-300 font-bold border border-slate-700">/link {currentUser.linkCode || currentUser.telegramLinkCode}</code>
-                </p>
-              </div>
-            </div>
-            <div className="flex items-center space-x-2 shrink-0 w-full md:w-auto">
-              <button
-                onClick={() => setIsAuthModalOpen(true)}
-                className="w-full md:w-auto px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-semibold shadow-sm transition-all text-center cursor-pointer"
-              >
-                Link Details Dekhein
-              </button>
-            </div>
           </div>
         )}
 
@@ -593,9 +543,6 @@ export default function App() {
             <button onClick={() => setIsBotSetupOpen(true)} className="hover:text-white transition-colors cursor-pointer">
               Bot Config
             </button>
-            <button onClick={() => setIsLogsOpen(true)} className="hover:text-white transition-colors cursor-pointer">
-              Webhook Logs
-            </button>
             <button onClick={() => setIsAiInsightsOpen(true)} className="hover:text-white transition-colors cursor-pointer">
               AI Insights
             </button>
@@ -657,11 +604,6 @@ export default function App() {
         isOpen={isAiInsightsOpen}
         onClose={() => setIsAiInsightsOpen(false)}
         summary={summary}
-      />
-
-      <TelegramLogsModal
-        isOpen={isLogsOpen}
-        onClose={() => setIsLogsOpen(false)}
       />
 
     </div>

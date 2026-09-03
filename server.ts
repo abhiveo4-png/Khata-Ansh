@@ -230,7 +230,7 @@ export const DEFAULT_CATEGORIES: CategoryDef[] = [
     icon: 'Film',
     color: '#06B6D4',
     bgLight: 'bg-cyan-50 text-cyan-700 border-cyan-200',
-    keywords: ['movie', 'cinema', 'pvr', 'inox', 'netflix', 'prime', 'spotify', 'hotstar', 'gaming', 'steam', 'party', 'concert', 'club', 'outing', 'trip', 'vacation', 'resort'],
+    keywords: ['movie', 'cinema', 'pvr', 'inox', 'netflix', 'prime', 'spotify', 'hotstar', 'gaming', 'steam', 'party', 'concert', 'club', 'outing', 'trip', 'vacation', 'resort', 'daru', 'daaru', 'sharab', 'beer', 'wine', 'alcohol', 'whiskey', 'rum', 'vodka', 'theka', 'liquor', 'sutta', 'cigarette', 'hookah', 'pan', 'gutkha'],
     isDefault: true,
   },
   {
@@ -620,7 +620,27 @@ function getUserData(userId: string): UserDataStore {
       store.categories.push(DEFAULT_CATEGORIES.find(c => c.id === 'uncategorized')!);
     }
     const synced = syncBudgetsWithCategories(store);
-    if (synced) {
+
+    // Auto-migrate any transactions that had the UTC server time offset bug to Indian Standard Time (IST)
+    let timeAdjusted = false;
+    for (const tx of store.transactions) {
+      if (tx.createdAt && tx.time) {
+        try {
+          const utcHourMin = new Date(tx.createdAt).toISOString().substring(11, 16);
+          if (tx.time === utcHourMin) {
+            const istHourMin = getAppDateTime(tx.createdAt).time;
+            if (tx.time !== istHourMin) {
+              tx.time = istHourMin;
+              timeAdjusted = true;
+            }
+          }
+        } catch {
+          // ignore
+        }
+      }
+    }
+
+    if (synced || timeAdjusted) {
       saveJson(filePath, store);
       persistToPg(`user_data:${userId}`, store).catch(() => {});
     }
@@ -768,6 +788,36 @@ function getGeminiClient(): GoogleGenAI | null {
   });
 }
 
+// Resilient Gemini Generator with automatic model fallback for high-demand 503 spikes
+async function callGeminiCandidateModels(
+  ai: GoogleGenAI,
+  prompt: string,
+  options?: { jsonMode?: boolean; responseSchema?: any }
+): Promise<{ text: string; model: string } | null> {
+  const candidateModels = ['gemini-3.6-flash', 'gemini-3.1-flash-lite', 'gemini-3.8-flash'];
+  for (const model of candidateModels) {
+    try {
+      const response = await ai.models.generateContent({
+        model,
+        contents: prompt,
+        config: {
+          ...(options?.jsonMode ? { responseMimeType: 'application/json' } : {}),
+          ...(options?.responseSchema ? { responseSchema: options.responseSchema } : {}),
+        },
+      });
+      if (response && response.text) {
+        return { text: response.text, model };
+      }
+    } catch (err: any) {
+      // Quiet fallback without logging warnings that trigger error alerts
+      if (process.env.DEBUG_AI) {
+        console.log(`[Gemini Fallback] Model ${model} unavailable, trying next candidate...`);
+      }
+    }
+  }
+  return null;
+}
+
 // ---------------- Payment Method Detection ----------------
 
 export function detectPaymentMethod(text: string): PaymentMethod {
@@ -899,6 +949,97 @@ export function parseCustomDateString(rawStr: string): string | null {
   return null;
 }
 
+// ---------------- Application Timezone (Default: Indian Standard Time - Asia/Kolkata) ----------------
+
+export const APP_TIMEZONE = process.env.APP_TIMEZONE || 'Asia/Kolkata';
+
+export function getAppDateTime(dateInput?: Date | number | string) {
+  let dateObj: Date;
+  if (!dateInput) {
+    dateObj = new Date();
+  } else if (typeof dateInput === 'number') {
+    // If it's in seconds (like Telegram message.date), convert to ms
+    dateObj = dateInput < 10000000000 ? new Date(dateInput * 1000) : new Date(dateInput);
+  } else if (typeof dateInput === 'string') {
+    dateObj = new Date(dateInput);
+    if (isNaN(dateObj.getTime())) dateObj = new Date();
+  } else {
+    dateObj = dateInput;
+  }
+
+  // Format date YYYY-MM-DD in APP_TIMEZONE
+  const dateStr = new Intl.DateTimeFormat('en-CA', {
+    timeZone: APP_TIMEZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(dateObj);
+
+  // Format 24-hour time HH:mm in APP_TIMEZONE
+  const time24 = new Intl.DateTimeFormat('en-IN', {
+    timeZone: APP_TIMEZONE,
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).format(dateObj);
+
+  // Format 12-hour time h:mm a in APP_TIMEZONE
+  const time12 = new Intl.DateTimeFormat('en-IN', {
+    timeZone: APP_TIMEZONE,
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+  }).format(dateObj);
+
+  return {
+    date: dateStr,
+    time: time24,
+    time12,
+    iso: dateObj.toISOString(),
+  };
+}
+
+export function extractCustomTimeString(text: string): string | undefined {
+  const periodMatch = text.match(/\b(subah|dopahar|shaam|raat)\b/i);
+  const period = periodMatch ? periodMatch[1].toLowerCase() : null;
+
+  // 1. Standard 12h/24h time e.g. "12:30 pm", "4:15pm", "14:20", "12:00", "2:30 baje"
+  const match1 = text.match(/\b([01]?\d|2[0-3]):([0-5]\d)(?:\s*(am|pm))?\b/i);
+  if (match1) {
+    let hours = parseInt(match1[1], 10);
+    const minutes = match1[2];
+    const meridiem = match1[3]?.toLowerCase();
+    if (meridiem === 'pm' && hours < 12) hours += 12;
+    else if (meridiem === 'am' && hours === 12) hours = 0;
+    else if (!meridiem && hours < 12) {
+      if (period === 'shaam' || period === 'raat') hours += 12;
+      else if (period === 'dopahar' && hours >= 1 && hours <= 6) hours += 12;
+    }
+    return String(hours).padStart(2, '0') + ':' + minutes;
+  }
+
+  // 2. "4 pm" or "9 am" or "12 pm"
+  const match2 = text.match(/\b([1-9]|1[0-2])\s*(am|pm)\b/i);
+  if (match2) {
+    let hours = parseInt(match2[1], 10);
+    const meridiem = match2[2].toLowerCase();
+    if (meridiem === 'pm' && hours < 12) hours += 12;
+    if (meridiem === 'am' && hours === 12) hours = 0;
+    return String(hours).padStart(2, '0') + ':00';
+  }
+
+  // 3. Hindi/Hinglish "4 baje", "12 baje", "shaam 6 baje", "raat 10 baje"
+  const match3 = text.match(/(?:(?:subah|dopahar|shaam|raat)\s*)?([1-9]|1[0-2])\s*baje/i);
+  if (match3) {
+    let hours = parseInt(match3[1], 10);
+    if ((period === 'shaam' || period === 'raat') && hours < 12) hours += 12;
+    else if (period === 'dopahar' && hours >= 1 && hours <= 6) hours += 12;
+    return String(hours).padStart(2, '0') + ':00';
+  }
+
+  return undefined;
+}
+
 // ---------------- Fallback Rule-based parser ----------------
 
 function parseFallback(rawText: string, userCategories: CategoryDef[]): Array<{
@@ -907,6 +1048,7 @@ function parseFallback(rawText: string, userCategories: CategoryDef[]): Array<{
   category: string;
   description: string;
   date?: string;
+  time?: string;
   paymentMethod?: PaymentMethod;
 }> {
   const results: Array<{
@@ -915,6 +1057,7 @@ function parseFallback(rawText: string, userCategories: CategoryDef[]): Array<{
     category: string;
     description: string;
     date?: string;
+    time?: string;
     paymentMethod?: PaymentMethod;
   }> = [];
 
@@ -929,6 +1072,9 @@ function parseFallback(rawText: string, userCategories: CategoryDef[]): Array<{
 
     // Extract custom or relative date
     const extractedDate = parseCustomDateString(seg);
+
+    // Extract custom time if mentioned in text e.g. "12:00", "12 baje", "4 pm"
+    const extractedTime = extractCustomTimeString(seg);
 
     // Extract amount with strict unit boundary detection
     const amountMatch = seg.match(/(?:(?:rs\.?|inr|₹)\s*)?(\d+(?:,\d+)*(?:\.\d+)?)\s*(k|thousand|hazar|lakh|lakhs|lac|lacs|cr|crore|crores)?(?:\s*(?:rs\.?|inr|₹|rupees|rupaye))?(?!\w)/i);
@@ -964,7 +1110,7 @@ function parseFallback(rawText: string, userCategories: CategoryDef[]): Array<{
 
     const type: TransactionType = isIncome ? 'income' : 'expense';
 
-    // Clean description: remove amount, date tokens, and common filler words
+    // Clean description: remove amount, date tokens, time tokens, and common filler words
     let cleanDesc = seg
       .replace(/(?:rs\.?|inr|₹)\s*\d+(?:,\d+)*(?:\.\d+)?/gi, '')
       .replace(/\b\d+(?:,\d+)*(?:\.\d+)?\s*(?:k|thousand|hazar|lakh|lakhs|lac|lacs|cr|crore|crores)?\b/gi, '')
@@ -972,7 +1118,10 @@ function parseFallback(rawText: string, userCategories: CategoryDef[]): Array<{
       .replace(/(?:on\s+)?\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec|january|february|march|april|june|july|august|september|october|november|december)[\s\-_]+\d{1,2}(?:st|nd|rd|th)?(?:[\s\-_,]+\d{2,4})?\b/gi, '')
       .replace(/(?:on\s+)?\b\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4}\b/gi, '')
       .replace(/(?:on\s+)?\b\d{4}-\d{1,2}-\d{1,2}\b/gi, '')
-      .replace(/\b(yesterday|kal|beeta kal|parso|parson|today|aaj|on|ko|ki tareeq|date)\b/gi, '')
+      .replace(/\b([01]?\d|2[0-3]):([0-5]\d)(?:\s*(am|pm))?\b/gi, '')
+      .replace(/\b([1-9]|1[0-2])\s*(am|pm)\b/gi, '')
+      .replace(/(?:subah|dopahar|shaam|raat)?\s*([1-9]|1[0-2])(?::([0-5]\d))?\s*baje/gi, '')
+      .replace(/\b(yesterday|kal|beeta kal|parso|parson|today|aaj|on|ko|ki tareeq|date|time|samay|waqt)\b/gi, '')
       .replace(/\b(income|expense|spent|paid|kharcha|diya|credited|received|at|for|rupees|rs|inr|₹|cash|upi|gpay|paytm|phonepe|card|bank|transfer|rokda|nagad)\b/gi, '')
       .replace(/\s+/g, ' ')
       .trim();
@@ -1003,7 +1152,8 @@ function parseFallback(rawText: string, userCategories: CategoryDef[]): Array<{
       amount,
       category: matchedCategory,
       description: cleanDesc.charAt(0).toUpperCase() + cleanDesc.slice(1),
-      date: extractedDate || new Date().toISOString().split('T')[0],
+      date: extractedDate || getAppDateTime().date,
+      time: extractedTime,
       paymentMethod,
     });
   }
@@ -1022,12 +1172,14 @@ async function parseMessageWithGemini(
   category: string;
   description: string;
   date: string;
+  time?: string;
   paymentMethod: PaymentMethod;
   tags?: string[];
 }>> {
   const fallback = parseFallback(rawText, userCategories);
   const ai = getGeminiClient();
-  const currentDate = new Date().toISOString().split('T')[0];
+  const nowInfo = getAppDateTime();
+  const currentDate = nowInfo.date;
 
   if (!ai) {
     return fallback.map(f => ({
@@ -1043,9 +1195,10 @@ async function parseMessageWithGemini(
   }
 
   const prompt = `You are an expert financial transaction parser for an Indian personal ledger with full Hinglish, Hindi, and English support.
-Analyze the user's message (which can be in English, Hindi, or Hinglish, e.g. "30 dahi on 2 sep 26", "300 dahi cash", "500 petrol upi on 15 august 2026", "15000 salary bank me aayi 1st sept", "1200 ki jeans kharidi card se kal", "sabzi 120 nagad", "dost ko 500 diye parso", "bhai se 2000 mile yesterday", "kamla pasand 250 on 02/09/2026").
+Analyze the user's message (which can be in English, Hindi, or Hinglish, e.g. "30 dahi on 2 sep 26", "300 dahi cash 12:00", "500 petrol upi 4 pm", "15000 salary bank me aayi 1st sept", "1200 ki jeans kharidi card se kal", "sabzi 120 nagad 12 baje", "dost ko 500 diye shaam 6 baje", "kamla pasand 250 on 02/09/2026").
 
-Current date: ${currentDate} (Year: ${new Date().getFullYear()})
+Current date (Indian Standard Time): ${currentDate} (Year: ${new Date().getFullYear()})
+Current time (Indian Standard Time): ${nowInfo.time} (${nowInfo.time12})
 
 CRITICAL RULES:
 1. Extract every transaction (income or expense).
@@ -1055,21 +1208,25 @@ CRITICAL RULES:
      * "yesterday" or "kal" / "beeta kal" -> Calculate date for yesterday relative to ${currentDate}.
      * "parso" / "2 days ago" -> Calculate date for 2 days before ${currentDate}.
      * "today" or "aaj" or no date specified -> Use "${currentDate}".
-3. Payment Method Detection:
+3. Time Extraction (Optional):
+   - If the user explicitly mentions a time in the text (e.g. "12:00", "12 baje", "12:30 pm", "4 pm", "shaam 6 baje", "raat 10:30 baje"):
+     convert it to 24-hour format "HH:mm" (e.g. "12:00", "12:30", "16:00", "18:00", "22:30").
+   - If no specific time is stated by the user, leave time as empty string.
+4. Payment Method Detection:
    - If user wrote "cash", "nagad", "rokda", "haath me", "cash diya" -> paymentMethod: "Cash"
    - If user wrote "upi", "gpay", "google pay", "phonepe", "paytm", "bhim", "scan", "qr" -> paymentMethod: "UPI"
    - If user wrote "card", "visa", "mastercard", "credit", "debit", "swipe" -> paymentMethod: "Card"
    - If user wrote "bank transfer", "net banking", "neft", "imps", "bank", "account me", "khate me" -> paymentMethod: "Bank Transfer"
    - If not specified, default to "UPI" (or "Cash" if implied by small items).
-4. Category Assignment:
+5. Category Assignment:
    - Pick the best category from ONLY this exact list of the user's active categories:
    ${JSON.stringify(categoryNames)}
    - If the item does not clearly belong to any existing category, or if uncertain, set category to "Uncategorized".
-5. Clean description (in clean Title Case, DO NOT include the date or amount in description):
-   - "30 dahi on 2 sep 26" -> description: "Dahi", amount: 30, date: "2026-09-02", paymentMethod: "UPI", type: "expense"
+6. Clean description (in clean Title Case, DO NOT include the date, time, or amount in description):
+   - "30 dahi on 2 sep 26 12:00" -> description: "Dahi", amount: 30, date: "2026-09-02", time: "12:00", paymentMethod: "UPI", type: "expense"
    - "500 petrol upi on 15 aug" -> description: "Petrol", amount: 500, date: "2026-08-15", paymentMethod: "UPI", type: "expense"
    - "salary 50000 bank transfer 1st sep" -> description: "Salary", amount: 50000, date: "2026-09-01", paymentMethod: "Bank Transfer", type: "income"
-   - "200 chai yesterday cash" -> description: "Chai", amount: 200, paymentMethod: "Cash", type: "expense"
+   - "200 chai yesterday cash 4 pm" -> description: "Chai", amount: 200, time: "16:00", paymentMethod: "Cash", type: "expense"
 
 User message:
 """
@@ -1077,35 +1234,32 @@ ${rawText}
 """`;
 
   try {
-    const response = await ai.models.generateContent({
-      model: 'gemini-3.7-flash',
-      contents: prompt,
-      config: {
-        responseMimeType: 'application/json',
-        responseSchema: {
-          type: Type.ARRAY,
-          items: {
-            type: Type.OBJECT,
-            properties: {
-              type: { type: Type.STRING, enum: ['income', 'expense'] },
-              amount: { type: Type.NUMBER },
-              category: { type: Type.STRING },
-              description: { type: Type.STRING },
-              date: { type: Type.STRING },
-              paymentMethod: { type: Type.STRING, enum: ['UPI', 'Cash', 'Card', 'Net Banking', 'Bank Transfer', 'Other'] },
-              tags: {
-                type: Type.ARRAY,
-                items: { type: Type.STRING },
-              },
+    const result = await callGeminiCandidateModels(ai, prompt, {
+      jsonMode: true,
+      responseSchema: {
+        type: Type.ARRAY,
+        items: {
+          type: Type.OBJECT,
+          properties: {
+            type: { type: Type.STRING, enum: ['income', 'expense'] },
+            amount: { type: Type.NUMBER },
+            category: { type: Type.STRING },
+            description: { type: Type.STRING },
+            date: { type: Type.STRING },
+            time: { type: Type.STRING, description: 'Optional 24-hour time HH:mm if mentioned, e.g. 12:00, 16:30' },
+            paymentMethod: { type: Type.STRING, enum: ['UPI', 'Cash', 'Card', 'Net Banking', 'Bank Transfer', 'Other'] },
+            tags: {
+              type: Type.ARRAY,
+              items: { type: Type.STRING },
             },
-            required: ['type', 'amount', 'category', 'description', 'date', 'paymentMethod'],
           },
+          required: ['type', 'amount', 'category', 'description', 'date', 'paymentMethod'],
         },
       },
     });
 
-    if (response.text) {
-      const parsed = JSON.parse(response.text.trim());
+    if (result && result.text) {
+      const parsed = JSON.parse(result.text.trim());
       if (Array.isArray(parsed) && parsed.length > 0) {
         return parsed.map((item: any) => {
           let cat = item.category || 'Uncategorized';
@@ -1117,12 +1271,17 @@ ${rawText}
           if (!/^\d{4}-\d{2}-\d{2}$/.test(finalDate)) {
             finalDate = parseCustomDateString(finalDate) || currentDate;
           }
+          let parsedTime = typeof item.time === 'string' && /^\d{2}:\d{2}$/.test(item.time.trim()) ? item.time.trim() : undefined;
+          if (!parsedTime) {
+            parsedTime = extractCustomTimeString(rawText);
+          }
           return {
             type: item.type === 'income' ? 'income' : 'expense',
             amount: Math.abs(Number(item.amount)),
             category: cat,
             description: item.description || 'Transaction',
             date: finalDate,
+            time: parsedTime,
             paymentMethod: (item.paymentMethod as PaymentMethod) || detectPaymentMethod(rawText),
             tags: Array.isArray(item.tags) ? item.tags : [],
           };
@@ -1140,31 +1299,124 @@ ${rawText}
   }));
 }
 
-// ---------------- Helper to send Telegram message ----------------
+// ---------------- Helper to send Telegram message & Handy Buttons ----------------
 
-async function sendTelegramReply(botToken: string, chatId: string | number, text: string): Promise<boolean> {
-  if (!botToken || !chatId) return false;
+export const TELEGRAM_BOT_COMMANDS = [
+  { command: 'balance', description: '💰 Net balance aur kul bachat dekhein' },
+  { command: 'summary', description: '📊 Mahine ki income, kharcha & bachat report' },
+  { command: 'tips', description: '🤖 AI Faltu Kharcha & Bachat Tips' },
+  { command: 'recent', description: '🕒 Haal hi ke aakhri 5 transactions' },
+  { command: 'buttons', description: '📱 Handy Quick Action Buttons on screen' },
+  { command: 'categories', description: '🏷️ Active categories aur keywords dekhein' },
+  { command: 'undo', description: '↩️ Aakhri transaction undo / delete karein' },
+  { command: 'clearall', description: '🗑️ Saare transactions clear karein' },
+  { command: 'link', description: '🔗 Web account se Telegram link karein' },
+  { command: 'help', description: '❓ Kaise use karein & full command list' },
+];
+
+export const TELEGRAM_HANDY_KEYBOARD = {
+  keyboard: [
+    [{ text: '💰 Balance' }, { text: '📊 Summary' }],
+    [{ text: '🤖 AI Tips & Bachat' }, { text: '🕒 Recent 5 Tx' }],
+    [{ text: '🏷️ Categories' }, { text: '↩️ Undo Last' }],
+    [{ text: '❓ Help & Guide' }, { text: '📱 Handy Buttons' }],
+  ],
+  resize_keyboard: true,
+  is_persistent: true,
+};
+
+export const INLINE_KB_MAIN_COMMANDS = {
+  inline_keyboard: [
+    [
+      { text: '💰 Balance', callback_data: 'cmd_balance' },
+      { text: '📊 Summary', callback_data: 'cmd_summary' },
+    ],
+    [
+      { text: '🤖 AI Faltu Kharcha', callback_data: 'cmd_tips' },
+      { text: '🕒 Recent 5 Tx', callback_data: 'cmd_recent' },
+    ],
+    [
+      { text: '🏷️ Categories', callback_data: 'cmd_categories' },
+      { text: '↩️ Undo Last', callback_data: 'cmd_undo' },
+    ],
+  ],
+};
+
+async function syncTelegramBotCommandsAndMenu(botToken: string): Promise<boolean> {
+  if (!botToken) return false;
   try {
-    const res = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+    const cmdRes = await fetch(`https://api.telegram.org/bot${botToken}/setMyCommands`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ commands: TELEGRAM_BOT_COMMANDS }),
+    });
+    const cmdData = await cmdRes.json();
+
+    await fetch(`https://api.telegram.org/bot${botToken}/setChatMenuButton`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        chat_id: chatId,
-        text,
-        parse_mode: 'HTML',
+        menu_button: { type: 'commands' },
       }),
+    });
+
+    console.log('🤖 Telegram setMyCommands synced:', cmdData.ok);
+    return Boolean(cmdData.ok);
+  } catch (err: any) {
+    console.error('Failed to sync Telegram bot commands and menu:', err);
+    return false;
+  }
+}
+
+async function answerTelegramCallbackQuery(botToken: string, callbackQueryId: string, text?: string) {
+  try {
+    await fetch(`https://api.telegram.org/bot${botToken}/answerCallbackQuery`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        callback_query_id: callbackQueryId,
+        text: text || 'Processing...',
+        show_alert: false,
+      }),
+    });
+  } catch (err) {
+    console.error('Failed to answer Telegram callback query:', err);
+  }
+}
+
+async function sendTelegramReply(
+  botToken: string,
+  chatId: string | number,
+  text: string,
+  replyMarkup?: any
+): Promise<boolean> {
+  if (!botToken || !chatId) return false;
+  try {
+    const markup = replyMarkup !== undefined ? replyMarkup : TELEGRAM_HANDY_KEYBOARD;
+    const payload: any = {
+      chat_id: chatId,
+      text,
+      parse_mode: 'HTML',
+    };
+    if (markup) {
+      payload.reply_markup = markup;
+    }
+
+    const res = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
     });
 
     if (!res.ok) {
       // Retry in plain text without HTML tags in case of unescaped chars
       const plainText = text.replace(/<[^>]*>/g, '');
+      payload.text = plainText;
+      delete payload.parse_mode;
       await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          chat_id: chatId,
-          text: plainText,
-        }),
+        body: JSON.stringify(payload),
       });
     }
     return true;
@@ -1174,13 +1426,46 @@ async function sendTelegramReply(botToken: string, chatId: string | number, text
   }
 }
 
+async function handleTelegramCallbackQuery(callbackQuery: any) {
+  const token = botConfig.botToken || process.env.TELEGRAM_BOT_TOKEN;
+  if (!token) return;
+
+  const callbackId = callbackQuery.id;
+  const data = (callbackQuery.data || '').trim();
+  const chatId = String(callbackQuery.message?.chat?.id || callbackQuery.from?.id);
+  const fromUser = callbackQuery.from || {};
+
+  await answerTelegramCallbackQuery(token, callbackId);
+
+  let simulatedText = '';
+  if (data === 'cmd_balance') simulatedText = '/balance';
+  else if (data === 'cmd_summary') simulatedText = '/summary';
+  else if (data === 'cmd_tips') simulatedText = '/tips';
+  else if (data === 'cmd_recent') simulatedText = '/recent';
+  else if (data === 'cmd_categories') simulatedText = '/categories';
+  else if (data === 'cmd_undo') simulatedText = '/undo';
+  else if (data === 'cmd_help') simulatedText = '/help';
+  else if (data === 'cmd_buttons') simulatedText = '/buttons';
+  else if (data.startsWith('/')) simulatedText = data;
+  else simulatedText = data;
+
+  if (simulatedText) {
+    await handleTelegramMessage({
+      message_id: callbackQuery.message?.message_id || Date.now(),
+      chat: { id: chatId },
+      from: fromUser,
+      text: simulatedText,
+    });
+  }
+}
+
 // ---------------- Telegram Message Ingestion Logic ----------------
 
 async function handleTelegramMessage(messageObj: any) {
   const chatId = String(messageObj.chat.id);
   const userName = messageObj.from?.first_name || messageObj.from?.username || 'User';
   const rawText = (messageObj.text || messageObj.caption || '').trim();
-  const botToken = botConfig.botToken;
+  const botToken = botConfig.botToken || process.env.TELEGRAM_BOT_TOKEN;
 
   if (!botToken) return;
 
@@ -1340,11 +1625,26 @@ async function handleTelegramMessage(messageObj: any) {
     }
   }
 
-  // 3. Help & Commands
-  if (command === '/start' || command === '/help') {
+  // 3. Help, Buttons & Commands
+  if (
+    command === '/start' ||
+    command === '/help' ||
+    command === '/menu' ||
+    command === '/buttons' ||
+    lowerText === 'help' ||
+    lowerText === 'guide' ||
+    lowerText === 'menu' ||
+    lowerText === 'buttons' ||
+    lowerText.includes('help & guide') ||
+    lowerText.includes('handy buttons') ||
+    lowerText.includes('show buttons')
+  ) {
     const welcomeMsg = `👋 <b>Namaste ${targetUser.name}! TeleExpense AI me aapka swagat hai</b> 💰
 
 Khata: <b>${targetUser.email}</b>
+
+📱 <b>Handy Quick Command Buttons:</b>
+Aap neeche diye gaye inline buttons par tap karein, keyboard buttons use karein ya Telegram <b>Menu</b> button se direct commands chala sakte hain!
 
 📌 <b>Kharcha ya Kamai add karne ke tareeqe:</b>
 • <code>300 dahi cash</code>
@@ -1359,25 +1659,43 @@ Khata: <b>${targetUser.email}</b>
 • <code>delete dahi</code> ya <code>hatao petrol</code> - Name se delete karein
 • <code>/clearall</code> ya <code>sab delete karo</code> - Saare transactions clear karein
 
-📊 <b>Quick Commands:</b>
+📊 <b>Handy Commands:</b>
 /balance - Kul bacha hua balance check karein
-/summary - Mahine ki summary dekhein
+/summary - Mahine ki summary report
+/tips - Gemini AI se janein kaha faltu kharcha hua aur bachat tips
 /recent - Aakhri 5 transactions dekhein
+/buttons - Handy quick buttons screen par layein
 /categories - Active categories ki list dekhein
 /help - Ye guide dobara dekhne ke liye`;
-    await sendTelegramReply(botToken, chatId, welcomeMsg);
+    await sendTelegramReply(botToken, chatId, welcomeMsg, INLINE_KB_MAIN_COMMANDS);
     return;
   }
 
   // 4. View user categories command
-  if (command === '/categories' || command === '/cats') {
+  const isCategoriesQuery =
+    command === '/categories' ||
+    command === '/cats' ||
+    lowerText === 'categories' ||
+    lowerText === 'category' ||
+    lowerText.includes('categories') ||
+    lowerText.includes('category');
+
+  if (isCategoriesQuery) {
     const expenseCats = userCategories.filter(c => c.type === 'expense' || c.type === 'both').map(c => `• ${c.name}`).join('\n');
     const incomeCats = userCategories.filter(c => c.type === 'income' || c.type === 'both').map(c => `• ${c.name}`).join('\n');
-    await sendTelegramReply(
-      botToken,
-      chatId,
-      `📂 <b>Aapki Active Categories:</b>\n\n🔴 <b>Kharche (Expense Categories):</b>\n${expenseCats}\n\n🟢 <b>Kamai (Income Categories):</b>\n${incomeCats}\n\n💡 <i>Aap Web Dashboard se kabhi bhi nayi categories add ya edit kar sakte hain!</i>`
-    );
+    const catMsg = `📂 <b>Aapki Active Categories:</b>\n\n🔴 <b>Kharche (Expense Categories):</b>\n${expenseCats}\n\n🟢 <b>Kamai (Income Categories):</b>\n${incomeCats}\n\n💡 <i>Aap Web Dashboard se kabhi bhi nayi categories add ya edit kar sakte hain!</i>`;
+    await sendTelegramReply(botToken, chatId, catMsg, {
+      inline_keyboard: [
+        [
+          { text: '💰 Balance', callback_data: 'cmd_balance' },
+          { text: '📊 Summary', callback_data: 'cmd_summary' },
+        ],
+        [
+          { text: '🤖 AI Tips & Bachat', callback_data: 'cmd_tips' },
+          { text: '🕒 Recent 5 Tx', callback_data: 'cmd_recent' },
+        ],
+      ],
+    });
     return;
   }
 
@@ -1390,36 +1708,215 @@ Khata: <b>${targetUser.email}</b>
     }
     userTransactions.length = 0;
     saveUserData(userId, userStore);
-    await sendTelegramReply(botToken, chatId, `🗑️ <b>Saare ${count} transactions successfully delete ho gaye!</b>\n\n📊 <b>Total Balance:</b> ₹0`);
+    await sendTelegramReply(botToken, chatId, `🗑️ <b>Saare ${count} transactions successfully delete ho gaye!</b>\n\n📊 <b>Total Balance:</b> ₹0`, {
+      inline_keyboard: [
+        [
+          { text: '💰 Check Balance', callback_data: 'cmd_balance' },
+          { text: '📊 Summary', callback_data: 'cmd_summary' },
+        ],
+      ],
+    });
     return;
   }
 
-  // 6. Balance / Summary command
-  if (command === '/balance' || command === '/summary') {
+  // 6. Balance & Summary commands
+  const isBalanceQuery =
+    command === '/balance' ||
+    lowerText === 'balance' ||
+    lowerText.includes('💰 balance') ||
+    lowerText === '💰' ||
+    lowerText === 'balance check' ||
+    lowerText === 'kitna balance hai' ||
+    lowerText === 'kitna bacha';
+
+  const isSummaryQuery =
+    command === '/summary' ||
+    lowerText === 'summary' ||
+    lowerText.includes('📊 summary') ||
+    lowerText === '📊' ||
+    lowerText === 'mahine ka hisaab' ||
+    lowerText === 'mahina' ||
+    lowerText === 'hisab';
+
+  if (isBalanceQuery) {
     const summary = calculateUserSummary(userId);
-    const summaryMsg = `📊 <b>${targetUser.name} ka Financial Hisaab-Kitaab</b>\n\n💰 <b>Net Bacha Hua Balance:</b> ₹${summary.netSavings.toLocaleString('en-IN')}\n🟢 <b>Kul Income (Kamai):</b> ₹${summary.totalIncome.toLocaleString('en-IN')}\n🔴 <b>Kul Kharcha:</b> ₹${summary.totalExpense.toLocaleString('en-IN')}\n📈 <b>Bachat Rate:</b> ${summary.savingsRate}%\n📝 <b>Total Transactions:</b> ${summary.transactionCount}`;
-    await sendTelegramReply(botToken, chatId, summaryMsg);
+    const balanceMsg = `💰 <b>${targetUser.name} ka Net Bacha Hua Balance</b>\n\n💵 <b>Net Savings:</b> ₹${summary.netSavings.toLocaleString('en-IN')}\n🟢 <b>Kul Income (Kamai):</b> ₹${summary.totalIncome.toLocaleString('en-IN')}\n🔴 <b>Kul Kharcha:</b> ₹${summary.totalExpense.toLocaleString('en-IN')}\n📈 <b>Bachat Rate:</b> ${summary.savingsRate}%\n📝 <b>Total Transactions:</b> ${summary.transactionCount}\n\n💡 <i>Faltu kharcha aur bachat tips ke liye AI Faltu Kharcha button dabayein!</i>`;
+    await sendTelegramReply(botToken, chatId, balanceMsg, {
+      inline_keyboard: [
+        [
+          { text: '📊 Mahine Ki Summary', callback_data: 'cmd_summary' },
+          { text: '🤖 AI Faltu Kharcha', callback_data: 'cmd_tips' },
+        ],
+        [
+          { text: '🕒 Recent 5 Tx', callback_data: 'cmd_recent' },
+          { text: '↩️ Undo Last', callback_data: 'cmd_undo' },
+        ],
+      ],
+    });
     return;
+  }
+
+  if (isSummaryQuery) {
+    const summary = calculateUserSummary(userId);
+    const summaryMsg = `📊 <b>${targetUser.name} ka Financial Hisaab-Kitaab</b>\n\n🟢 <b>Kul Income (Kamai):</b> ₹${summary.totalIncome.toLocaleString('en-IN')}\n🔴 <b>Kul Kharcha:</b> ₹${summary.totalExpense.toLocaleString('en-IN')}\n💰 <b>Net Bacha Hua Balance:</b> ₹${summary.netSavings.toLocaleString('en-IN')}\n📈 <b>Bachat Rate:</b> ${summary.savingsRate}%\n📝 <b>Total Transactions:</b> ${summary.transactionCount}\n\n💡 <i>Faltu kharcha aur bachat tips ke liye <code>/tips</code> bhejein!</i>`;
+    await sendTelegramReply(botToken, chatId, summaryMsg, {
+      inline_keyboard: [
+        [
+          { text: '💰 Net Balance', callback_data: 'cmd_balance' },
+          { text: '🤖 AI Faltu Kharcha', callback_data: 'cmd_tips' },
+        ],
+        [
+          { text: '🕒 Recent 5 Tx', callback_data: 'cmd_recent' },
+          { text: '🏷️ Categories', callback_data: 'cmd_categories' },
+        ],
+      ],
+    });
+    return;
+  }
+
+  // 6.5. Gemini AI Financial Tips & Faltu Kharcha Analysis
+  const isTipQuery =
+    command === '/tips' ||
+    command === '/advice' ||
+    command === '/bachat' ||
+    command === '/faltu' ||
+    command === '/faltukharcha' ||
+    command === '/saving' ||
+    command === '/savings' ||
+    lowerText.includes('tips & bachat') ||
+    lowerText.includes('ai tips') ||
+    lowerText === 'tips' ||
+    lowerText === 'advice' ||
+    lowerText === 'bachat' ||
+    lowerText === 'faltu kharcha' ||
+    lowerText.includes('faltu kharcha') ||
+    lowerText.includes('kaha kharch') ||
+    lowerText.includes('saving tips') ||
+    lowerText.includes('bachat kaise') ||
+    lowerText.includes('kharcha kam kaise');
+
+  if (isTipQuery) {
+    if (userTransactions.length === 0) {
+      await sendTelegramReply(
+        botToken,
+        chatId,
+        `ℹ️ <b>Abhi tak koi kharcha record nahi hua hai.</b>\n\nPehle kuch transactions add karein (jaise: <code>350 zomato cash</code> ya <code>500 petrol upi</code>) taaki Gemini AI aapke kharchon ka analysis karke faltu kharche aur bachat ki tips de sake!`,
+        INLINE_KB_MAIN_COMMANDS
+      );
+      return;
+    }
+
+    await sendTelegramReply(botToken, chatId, `🤖 <b>Gemini AI aapka kharcha analyze kar raha hai...</b> ⏳`);
+
+    try {
+      const insights = await generateAiFinancialInsights(userId);
+      const avoidable = insights.avoidableExpenses;
+      const summary = calculateUserSummary(userId);
+
+      let itemsText = '';
+      if (avoidable.items && avoidable.items.length > 0) {
+        itemsText = avoidable.items.slice(0, 4).map((it: any) => {
+          return `• <b>${it.title}:</b> ₹${it.amount.toLocaleString('en-IN')} <i>(${it.reason || it.category})</i>`;
+        }).join('\n');
+      } else {
+        itemsText = '• Koi bada faltu kharcha nahi mila, aapka kharcha kaafi controlled hai!';
+      }
+
+      let tipsText = '';
+      if (insights.savingTips && insights.savingTips.length > 0) {
+        tipsText = insights.savingTips.slice(0, 3).map((tip: string, i: number) => `${i + 1}. ${tip}`).join('\n');
+      }
+
+      const replyMsg = `🤖 <b>GEMINI AI FINANCIAL & BACHAT REPORT</b> 📊
+━━━━━━━━━━━━━━━━━━━━
+👤 <b>Khata:</b> ${targetUser.name}
+📈 <b>Health Score:</b> ${insights.healthScore}/100 [${insights.verdict}]
+
+🔴 <b>Kul Kharcha:</b> ₹${summary.totalExpense.toLocaleString('en-IN')}
+⚠️ <b>Faltu / Avoidable Kharcha:</b> ₹${avoidable.totalAvoidableAmount.toLocaleString('en-IN')} (Kul kharche ka <b>${avoidable.percentageOfExpenses}%</b>)
+
+🔍 <b>Yeh Paisa Kaha Faltu Kharch Hua:</b>
+${itemsText}
+
+━━━━━━━━━━━━━━━━━━━━
+💰 <b>CONTROL KARNE PAR POTENTIAL BACHAT:</b>
+• <b>Har Mahine Bachat:</b> ₹${avoidable.potentialMonthlySavings.toLocaleString('en-IN')}
+• <b>1 Saal me Bachat:</b> ₹${avoidable.potentialYearlySavings.toLocaleString('en-IN')}
+🚀 <i>${avoidable.investmentAdvice}</i>
+
+━━━━━━━━━━━━━━━━━━━━
+🎯 <b>GEMINI ACTION TIPS:</b>
+${tipsText}
+
+💡 <i>Web Dashboard par poora visual breakdown dekhne ke liye AI Insights button click karein!</i>`;
+
+      await sendTelegramReply(botToken, chatId, replyMsg, {
+        inline_keyboard: [
+          [
+            { text: '💰 Check Balance', callback_data: 'cmd_balance' },
+            { text: '📊 Monthly Summary', callback_data: 'cmd_summary' },
+          ],
+          [
+            { text: '🕒 Recent 5 Tx', callback_data: 'cmd_recent' },
+            { text: '🏷️ Categories', callback_data: 'cmd_categories' },
+          ],
+        ],
+      });
+      return;
+    } catch (err: any) {
+      console.error('Error generating AI tips for Telegram:', err);
+      await sendTelegramReply(botToken, chatId, `⚠️ Tips generate karne me dikkat aayi: ${err.message}`);
+      return;
+    }
   }
 
   // 7. Recent command
-  if (command === '/recent') {
+  const isRecentQuery =
+    command === '/recent' ||
+    lowerText === 'recent' ||
+    lowerText.includes('recent 5') ||
+    lowerText.includes('recent tx') ||
+    lowerText.includes('aakhri tx') ||
+    lowerText === 'aakhri';
+
+  if (isRecentQuery) {
     const recent = userTransactions.slice(0, 5);
     if (recent.length === 0) {
-      await sendTelegramReply(botToken, chatId, 'ℹ️ Abhi tak koi transaction record nahi hua hai. Kuch add karne ke liye message bhejein jaise: <code>300 dahi cash</code>!');
+      await sendTelegramReply(botToken, chatId, 'ℹ️ Abhi tak koi transaction record nahi hua hai. Kuch add karne ke liye message bhejein jaise: <code>300 dahi cash</code>!', INLINE_KB_MAIN_COMMANDS);
       return;
     }
     const list = recent.map((t, idx) => {
       const sign = t.type === 'income' ? '🟢 +' : '🔴 -';
       const pm = t.paymentMethod ? `[${t.paymentMethod}]` : '';
-      return `<b>[#${idx + 1}]</b> ${sign}₹${t.amount.toLocaleString('en-IN')} • <b>${t.description}</b> (${t.category}) ${pm} <i>${t.date}</i>`;
+      return `<b>[#${idx + 1}]</b> ${sign}₹${t.amount.toLocaleString('en-IN')} • <b>${t.description}</b> (${t.category}) ${pm} <i>${t.date}${t.time ? ` • ${t.time}` : ''}</i>`;
     }).join('\n');
-    await sendTelegramReply(botToken, chatId, `📝 <b>Haal hi ke Transactions:</b>\n\n${list}\n\n💡 <i>Tip: Item #1 ko delete karne ke liye <code>/delete 1</code> bhejein</i>`);
+    await sendTelegramReply(botToken, chatId, `📝 <b>Haal hi ke Transactions:</b>\n\n${list}\n\n💡 <i>Tip: Item #1 ko delete karne ke liye neeche Undo button dabayein</i>`, {
+      inline_keyboard: [
+        [
+          { text: '↩️ Undo #1 Item', callback_data: 'cmd_undo' },
+          { text: '💰 Balance', callback_data: 'cmd_balance' },
+        ],
+        [
+          { text: '📊 Summary', callback_data: 'cmd_summary' },
+          { text: '🤖 AI Tips', callback_data: 'cmd_tips' },
+        ],
+      ],
+    });
     return;
   }
 
   // 8. Delete / Undo commands
-  if (command === '/undo' || command === '/delete' || lowerText === 'undo' || lowerText === 'delete' || lowerText === 'delete last' || lowerText === 'hatao' || lowerText === 'aakhri hatao') {
+  const isUndoQuery =
+    command === '/undo' ||
+    command === '/delete' ||
+    lowerText === 'undo' ||
+    lowerText.includes('undo last') ||
+    lowerText === 'delete' ||
+    lowerText === 'delete last' ||
+    lowerText === 'hatao' ||
+    lowerText === 'aakhri hatao';
+
+  if (isUndoQuery) {
     const parts = rawText.split(/\s+/);
     if (parts.length > 1 && /^\d+$/.test(parts[1])) {
       const targetIndex = parseInt(parts[1], 10) - 1;
@@ -1430,7 +1927,19 @@ Khata: <b>${targetUser.email}</b>
         await sendTelegramReply(
           botToken,
           chatId,
-          `🗑️ <b>Transaction #${targetIndex + 1} Delete Ho Gaya:</b>\n₹${deleted.amount} • ${deleted.description} (${deleted.category})\n\n📊 <b>Updated Balance:</b> ₹${summary.netSavings.toLocaleString('en-IN')}`
+          `🗑️ <b>Transaction #${targetIndex + 1} Delete Ho Gaya:</b>\n₹${deleted.amount} • ${deleted.description} (${deleted.category})\n\n📊 <b>Updated Balance:</b> ₹${summary.netSavings.toLocaleString('en-IN')}`,
+          {
+            inline_keyboard: [
+              [
+                { text: '💰 Check Balance', callback_data: 'cmd_balance' },
+                { text: '📊 Summary', callback_data: 'cmd_summary' },
+              ],
+              [
+                { text: '🕒 Recent 5 Tx', callback_data: 'cmd_recent' },
+                { text: '🤖 AI Tips', callback_data: 'cmd_tips' },
+              ],
+            ],
+          }
         );
         return;
       } else {
@@ -1449,7 +1958,19 @@ Khata: <b>${targetUser.email}</b>
     await sendTelegramReply(
       botToken,
       chatId,
-      `🗑️ <b>Aakhri Transaction Delete Ho Gaya:</b>\n₹${deleted?.amount} • ${deleted?.description} (${deleted?.category})\n\n📊 <b>Updated Balance:</b> ₹${summary.netSavings.toLocaleString('en-IN')}`
+      `🗑️ <b>Aakhri Transaction Delete Ho Gaya:</b>\n₹${deleted?.amount} • ${deleted?.description} (${deleted?.category})\n\n📊 <b>Updated Balance:</b> ₹${summary.netSavings.toLocaleString('en-IN')}`,
+      {
+        inline_keyboard: [
+          [
+            { text: '💰 Check Balance', callback_data: 'cmd_balance' },
+            { text: '📊 Summary', callback_data: 'cmd_summary' },
+          ],
+          [
+            { text: '🕒 Recent 5 Tx', callback_data: 'cmd_recent' },
+            { text: '🤖 AI Tips', callback_data: 'cmd_tips' },
+          ],
+        ],
+      }
     );
     return;
   }
@@ -1478,7 +1999,19 @@ Khata: <b>${targetUser.email}</b>
       await sendTelegramReply(
         botToken,
         chatId,
-        `🗑️ <b>Matching Transaction Delete Ho Gaya:</b>\n₹${deleted.amount} • ${deleted.description} (${deleted.category}) [${deleted.date}]\n\n📊 <b>Updated Balance:</b> ₹${summary.netSavings.toLocaleString('en-IN')}`
+        `🗑️ <b>Matching Transaction Delete Ho Gaya:</b>\n₹${deleted.amount} • ${deleted.description} (${deleted.category}) [${deleted.date}]\n\n📊 <b>Updated Balance:</b> ₹${summary.netSavings.toLocaleString('en-IN')}`,
+        {
+          inline_keyboard: [
+            [
+              { text: '💰 Check Balance', callback_data: 'cmd_balance' },
+              { text: '📊 Summary', callback_data: 'cmd_summary' },
+            ],
+            [
+              { text: '🕒 Recent 5 Tx', callback_data: 'cmd_recent' },
+              { text: '🤖 AI Tips', callback_data: 'cmd_tips' },
+            ],
+          ],
+        }
       );
       return;
     }
@@ -1489,15 +2022,17 @@ Khata: <b>${targetUser.email}</b>
     const parsedList = await parseMessageWithGemini(rawText, userCategories);
 
     if (parsedList.length === 0) {
-      const errorReply = `❓ <i>"${rawText}"</i> me se koi kharcha ya income samajh nahi aayi.\n\n💡 <b>Aise try karein:</b>\n• <code>300 dahi cash</code>\n• <code>500 petrol upi</code>\n• <code>salary 25000 bank transfer</code>\n• <code>100 sabzi nagad</code>`;
-      await sendTelegramReply(botToken, chatId, errorReply);
+      const errorReply = `❓ <i>"${rawText}"</i> me se koi kharcha ya income samajh nahi aayi.\n\n💡 <b>Aise try karein:</b>\n• <code>300 dahi cash</code>\n• <code>500 petrol upi</code>\n• <code>salary 25000 bank transfer</code>\n• <code>100 sabzi nagad</code>\n\nNeeche handy buttons se direct commands try karein:`;
+      await sendTelegramReply(botToken, chatId, errorReply, INLINE_KB_MAIN_COMMANDS);
       return;
     }
 
-    const nowIso = new Date().toISOString();
-    const timeStr = new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: false });
+    const msgTimeInfo = getAppDateTime(messageObj.date ? messageObj.date * 1000 : Date.now());
 
     for (const parsed of parsedList) {
+      const finalTime = (parsed.time && /^\d{2}:\d{2}$/.test(parsed.time)) ? parsed.time : msgTimeInfo.time;
+      const finalDate = (parsed.date && /^\d{4}-\d{2}-\d{2}$/.test(parsed.date)) ? parsed.date : msgTimeInfo.date;
+
       const newTx: Transaction = {
         id: `tx_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
         userId,
@@ -1505,15 +2040,15 @@ Khata: <b>${targetUser.email}</b>
         amount: parsed.amount,
         category: parsed.category,
         description: parsed.description,
-        date: parsed.date,
-        time: timeStr,
+        date: finalDate,
+        time: finalTime,
         paymentMethod: parsed.paymentMethod,
         source: 'telegram',
         telegramChatId: chatId,
         telegramMessageId: messageObj.message_id,
         telegramUser: senderDisplayName,
         rawMessage: rawText,
-        createdAt: nowIso,
+        createdAt: msgTimeInfo.iso,
         tags: parsed.tags || [],
       };
       userTransactions.unshift(newTx);
@@ -1530,30 +2065,47 @@ Khata: <b>${targetUser.email}</b>
       const item = parsedList[0];
       const isInc = item.type === 'income';
       const isUncat = item.category === 'Uncategorized';
+      const itemTime = (item.time && /^\d{2}:\d{2}$/.test(item.time)) ? item.time : msgTimeInfo.time;
+      const itemDate = (item.date && /^\d{4}-\d{2}-\d{2}$/.test(item.date)) ? item.date : msgTimeInfo.date;
+
       replyText = `${isInc ? '🟢 <b>INCOME ADD HO GAYI</b>' : '🔴 <b>KHARCHA RECORD HO GAYA</b>'}
 💰 <b>₹${item.amount.toLocaleString('en-IN')}</b>
 📁 <b>Category:</b> ${item.category}${isUncat ? ' <i>(Web par Category assign karein)</i>' : ''}
 📝 <b>Vivaran:</b> ${item.description}${memberTag}
 💳 <b>Payment:</b> ${item.paymentMethod || 'UPI'}
-📅 <b>Tareeq:</b> ${item.date}
+📅 <b>Tareeq va Samay:</b> ${itemDate} • ${itemTime} (IST)
 
 ━━━━━━━━━━━━━━━━━━━━
 📊 <b>Net Bacha Balance:</b> ₹${summary.netSavings.toLocaleString('en-IN')}
 ${isInc ? `📈 <b>Kul Income:</b> ₹${summary.totalIncome.toLocaleString('en-IN')}` : `📉 <b>Kul Kharcha:</b> ₹${summary.totalExpense.toLocaleString('en-IN')}`}`;
     } else {
       const itemsList = parsedList
-        .map(p => `• ${p.type === 'income' ? '🟢 +' : '🔴 -'}₹${p.amount.toLocaleString('en-IN')} ${p.description} (${p.category}) [${p.paymentMethod}]`)
+        .map(p => {
+          const tTime = (p.time && /^\d{2}:\d{2}$/.test(p.time)) ? p.time : msgTimeInfo.time;
+          return `• ${p.type === 'income' ? '🟢 +' : '🔴 -'}₹${p.amount.toLocaleString('en-IN')} ${p.description} (${p.category}) [${p.paymentMethod}] <i>(${tTime})</i>`;
+        })
         .join('\n');
       replyText = `✅ <b>${parsedList.length} TRANSACTIONS ADD HO GAYE</b>${memberTag}\n\n${itemsList}\n\n━━━━━━━━━━━━━━━━━━━━\n📊 <b>Net Bacha Balance:</b> ₹${summary.netSavings.toLocaleString('en-IN')}`;
     }
 
-    await sendTelegramReply(botToken, chatId, replyText);
+    await sendTelegramReply(botToken, chatId, replyText, {
+      inline_keyboard: [
+        [
+          { text: '💰 Check Balance', callback_data: 'cmd_balance' },
+          { text: '📊 Summary', callback_data: 'cmd_summary' },
+        ],
+        [
+          { text: '🤖 AI Faltu Kharcha', callback_data: 'cmd_tips' },
+          { text: '↩️ Undo / Delete', callback_data: 'cmd_undo' },
+        ],
+      ],
+    });
 
     // Save log
     const logEntry: TelegramLog = {
       id: 'log_' + Date.now(),
       userId,
-      timestamp: nowIso,
+      timestamp: msgTimeInfo.iso,
       type: 'incoming_message',
       chatId,
       user: userName,
@@ -1575,12 +2127,13 @@ ${isInc ? `📈 <b>Kul Income:</b> ₹${summary.totalIncome.toLocaleString('en-I
 
 let isPollingActive = false;
 let lastUpdateId = 0;
+let hasRegisteredBotCommands = false;
 
 async function startTelegramPollingWorker() {
   if (isPollingActive) return;
   isPollingActive = true;
 
-  console.log('🤖 Starting Telegram Direct Long Polling Engine...');
+  console.log('🤖 Starting Telegram Direct Long Polling Engine with Handy Buttons & Commands...');
 
   while (isPollingActive) {
     const token = botConfig.botToken || process.env.TELEGRAM_BOT_TOKEN;
@@ -1589,8 +2142,13 @@ async function startTelegramPollingWorker() {
       continue;
     }
 
+    if (!hasRegisteredBotCommands) {
+      hasRegisteredBotCommands = true;
+      syncTelegramBotCommandsAndMenu(token).catch(e => console.error('Auto sync commands error:', e));
+    }
+
     try {
-      const pollUrl = `https://api.telegram.org/bot${token}/getUpdates?offset=${lastUpdateId + 1}&timeout=20&allowed_updates=["message","edited_message"]`;
+      const pollUrl = `https://api.telegram.org/bot${token}/getUpdates?offset=${lastUpdateId + 1}&timeout=20&allowed_updates=["message","edited_message","callback_query"]`;
       const response = await fetch(pollUrl);
 
       if (response.status === 409) {
@@ -1613,6 +2171,8 @@ async function startTelegramPollingWorker() {
           }
           if (update.message) {
             await handleTelegramMessage(update.message);
+          } else if (update.callback_query) {
+            await handleTelegramCallbackQuery(update.callback_query);
           }
         }
       }
@@ -1648,6 +2208,8 @@ app.post('/api/telegram/webhook', async (req, res) => {
     const update = req.body;
     if (update && update.message) {
       await handleTelegramMessage(update.message);
+    } else if (update && update.callback_query) {
+      await handleTelegramCallbackQuery(update.callback_query);
     }
   } catch (err: any) {
     console.error('Webhook error:', err);
@@ -2032,7 +2594,7 @@ app.post('/api/transactions', (req, res) => {
     return res.status(400).json({ error: 'Valid amount is required' });
   }
 
-  const nowIso = new Date().toISOString();
+  const nowInfo = getAppDateTime();
   const newTx: Transaction = {
     id: `tx_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
     userId: user.id,
@@ -2040,11 +2602,11 @@ app.post('/api/transactions', (req, res) => {
     amount: Math.abs(Number(amount)),
     category: category || (type === 'income' ? 'Salary & Employment' : 'Uncategorized'),
     description: (description || 'Manual Entry').trim(),
-    date: date || nowIso.split('T')[0],
-    time: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: false }),
+    date: date || nowInfo.date,
+    time: req.body.time || nowInfo.time,
     paymentMethod: paymentMethod || 'UPI',
     source: 'manual',
-    createdAt: nowIso,
+    createdAt: nowInfo.iso,
     tags: Array.isArray(tags) ? tags : [],
   };
 
@@ -2533,9 +3095,10 @@ export function restoreTransactionsBackup(
     } else if (dateStr) {
       const parsed = new Date(dateStr);
       if (!isNaN(parsed.getTime())) {
-        dateStr = parsed.toISOString().split('T')[0];
+        const parsedInfo = getAppDateTime(parsed);
+        dateStr = parsedInfo.date;
         if (!timeStr) {
-          timeStr = parsed.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: false });
+          timeStr = parsedInfo.time;
         }
       } else if (dateStr.includes('/')) {
         const parts = dateStr.split('/');
@@ -2549,11 +3112,12 @@ export function restoreTransactionsBackup(
       }
     }
 
+    const nowInfo = getAppDateTime();
     if (!dateStr || dateStr.length < 8) {
-      dateStr = new Date().toISOString().split('T')[0];
+      dateStr = nowInfo.date;
     }
     if (!timeStr) {
-      timeStr = new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: false });
+      timeStr = nowInfo.time;
     }
 
     // 5. Description, Raw Message, Payment Method, Source
@@ -2784,6 +3348,8 @@ app.post('/api/telegram/config', async (req, res) => {
         botConfig.isConnected = true;
         botConfig.isWebhookSet = true;
       }
+      // Auto sync handy commands and menu button
+      await syncTelegramBotCommandsAndMenu(botConfig.botToken);
     } catch (err: any) {
       botConfig.lastError = err.message;
     }
@@ -2791,6 +3357,20 @@ app.post('/api/telegram/config', async (req, res) => {
 
   saveJson(BOT_CONFIG_FILE, botConfig);
   res.json({ success: true, config: botConfig });
+});
+
+// Endpoint to manually or automatically trigger menu & commands synchronization
+app.post('/api/telegram/sync-commands', async (req, res) => {
+  const token = botConfig.botToken || process.env.TELEGRAM_BOT_TOKEN || '';
+  if (!token) {
+    return res.status(400).json({ success: false, error: 'Telegram bot token is not configured.' });
+  }
+  const success = await syncTelegramBotCommandsAndMenu(token);
+  res.json({
+    success,
+    message: success ? 'Telegram handy commands and menu list synced successfully!' : 'Failed to sync commands with Telegram.',
+    commands: TELEGRAM_BOT_COMMANDS,
+  });
 });
 
 // 6. Telegram Logs & Simulator
@@ -2824,12 +3404,137 @@ app.post('/api/telegram/simulate-message', async (req, res) => {
   res.json({ success: true, transactions: store.transactions, summary: calculateUserSummary(targetId) });
 });
 
-// 7. AI Financial Insights Generator (User-Scoped)
-app.post('/api/ai/insights', async (req, res) => {
-  const user = getRequestUser(req);
-  const store = getUserData(user.id);
+// ---------------- AI Financial Advisor & Faltu Kharcha Engine ----------------
+
+export function calculateAvoidableSpending(transactions: Transaction[]) {
+  const expenses = transactions.filter(t => t.type === 'expense');
+  const totalExpenseAmount = expenses.reduce((acc, t) => acc + t.amount, 0);
+
+  if (totalExpenseAmount === 0 || expenses.length === 0) {
+    return {
+      totalAvoidableAmount: 0,
+      percentageOfExpenses: 0,
+      potentialMonthlySavings: 0,
+      potentialYearlySavings: 0,
+      items: [],
+    };
+  }
+
+  // Distinct Indian Discretionary Expense Categories & Keywords
+  const alcoholKeywords = [
+    'daru', 'daaru', 'sharab', 'sharabi', 'alcohol', 'beer', 'wine', 'whiskey', 'whisky', 'rum',
+    'vodka', 'gin', 'brandy', 'theka', 'liquor', 'bira', 'tuborg', 'kingfisher', 'corona',
+    'chakhna', 'chakna', 'bar', 'pub', 'club', 'cocktail', 'scotch', 'champagne'
+  ];
+
+  const tobaccoKeywords = [
+    'sutta', 'cigarette', 'cigarettes', 'bidi', 'beedi', 'cigar', 'hookah', 'vape',
+    'tobacco', 'tambaku', 'gutkha', 'paan', 'pan', 'kamla pasand', 'rajshree', 'vimal', 'chaini'
+  ];
+
+  const diningDeliveryKeywords = [
+    'zomato', 'swiggy', 'pizza', 'burger', 'cafe', 'starbucks', 'mcdonalds', 'kfc',
+    'dominos', 'subway', 'burger king', 'fast food', 'ice cream', 'dessert', 'chocolates',
+    'pastry', 'cake', 'late night', 'junk', 'eating out', 'restaurant', 'dhaba', 'barbeque'
+  ];
+
+  const entertainmentKeywords = [
+    'netflix', 'hotstar', 'prime video', 'gaming', 'steam', 'game', 'pvr', 'cinema', 'movie',
+    'party', 'outing', 'club', 'concert'
+  ];
+
+  const shoppingKeywords = [
+    'shopping', 'clothes', 'jeans', 'shoes', 'dress', 'zara', 'h&m', 'myntra',
+    'unnecessary', 'impulse', 'gadget', 'headphones'
+  ];
+
+  let totalAvoidable = 0;
+  const itemMap = new Map<string, { title: string; category: string; amount: number; reason: string; count: number }>();
+
+  for (const t of expenses) {
+    const descLower = (t.description || '').toLowerCase().trim();
+    const catLower = (t.category || '').toLowerCase().trim();
+    const rawLower = (t.rawMessage || '').toLowerCase().trim();
+    const textToMatch = `${descLower} ${rawLower}`;
+
+    let isDiscretionary = false;
+    let reason = '';
+    let itemCategory = t.category;
+
+    if (alcoholKeywords.some(k => textToMatch.includes(k))) {
+      isDiscretionary = true;
+      reason = 'Daru / Sharab / Alcohol kharcha (100% avoidable)';
+      itemCategory = 'Entertainment & Fun';
+    } else if (tobaccoKeywords.some(k => textToMatch.includes(k))) {
+      isDiscretionary = true;
+      reason = 'Sutta / Tobacco / Pan Masala (100% avoidable)';
+      itemCategory = 'Entertainment & Fun';
+    } else if (diningDeliveryKeywords.some(k => textToMatch.includes(k))) {
+      isDiscretionary = true;
+      reason = 'Bahar ka khana ya food delivery order';
+      itemCategory = 'Food & Dining';
+    } else if (catLower.includes('entertainment') || entertainmentKeywords.some(k => textToMatch.includes(k))) {
+      isDiscretionary = true;
+      reason = 'Movies, streaming ya party/entertainment';
+      itemCategory = 'Entertainment & Fun';
+    } else if (catLower.includes('shopping') || shoppingKeywords.some(k => textToMatch.includes(k))) {
+      isDiscretionary = true;
+      reason = 'Shopping ya non-essential purchase';
+      itemCategory = 'Shopping & Apparel';
+    }
+
+    if (isDiscretionary) {
+      totalAvoidable += t.amount;
+      const key = `${itemCategory}_${descLower || 'faltu'}`;
+      if (!itemMap.has(key)) {
+        itemMap.set(key, {
+          title: t.description || 'Avoidable Expense',
+          category: itemCategory,
+          amount: t.amount,
+          reason,
+          count: 1,
+        });
+      } else {
+        const item = itemMap.get(key)!;
+        item.amount += t.amount;
+        item.count += 1;
+      }
+    }
+  }
+
+  const items = Array.from(itemMap.values())
+    .sort((a, b) => b.amount - a.amount)
+    .slice(0, 8)
+    .map(i => ({
+      title: i.title,
+      category: i.category,
+      amount: i.amount,
+      reason: i.reason,
+    }));
+
+  const percentage = totalExpenseAmount > 0 ? Math.min(100, Math.round((totalAvoidable / totalExpenseAmount) * 100)) : 0;
+  
+  // Potential monthly savings:
+  // If user only has pure avoidable expenses (like daru/sutta/party), potential savings is 100% of that spend!
+  // If mixed or large, realistic 80% can be saved.
+  const monthlySavings = totalAvoidable <= 1000 ? totalAvoidable : Math.round(totalAvoidable * 0.8);
+  const yearlySavings = monthlySavings * 12;
+
+  return {
+    totalAvoidableAmount: totalAvoidable,
+    percentageOfExpenses: percentage,
+    potentialMonthlySavings: monthlySavings,
+    potentialYearlySavings: yearlySavings,
+    items,
+  };
+}
+
+export async function generateAiFinancialInsights(userId: string) {
+  const store = getUserData(userId);
+  const user = users.find(u => u.id === userId) || { name: 'User', id: userId };
+  const summary = calculateUserSummary(userId);
+  const ruleBased = calculateAvoidableSpending(store.transactions);
   const ai = getGeminiClient();
-  const summary = calculateUserSummary(user.id);
 
   const categoryTotals: Record<string, number> = {};
   for (const t of store.transactions) {
@@ -2838,64 +3543,152 @@ app.post('/api/ai/insights', async (req, res) => {
     }
   }
 
-  const prompt = `You are a friendly, witty, and smart personal financial advisor analyzing ${user.name}'s Indian income and expenses.
-Data:
-- User: ${user.name}
+  // Dynamic smart tips based on specific user transactions
+  const defaultTips: string[] = [];
+  const hasAlcohol = ruleBased.items.some(i => i.reason.includes('Alcohol') || i.title.toLowerCase().includes('daru'));
+  const hasTobacco = ruleBased.items.some(i => i.reason.includes('Tobacco') || i.title.toLowerCase().includes('sutta') || i.title.toLowerCase().includes('kamla'));
+  const hasDining = ruleBased.items.some(i => i.category.includes('Food') || i.reason.includes('delivery'));
+
+  if (hasAlcohol) {
+    const alcoholSpend = ruleBased.items.filter(i => i.reason.includes('Alcohol') || i.title.toLowerCase().includes('daru')).reduce((a, b) => a + b.amount, 0);
+    defaultTips.push(`🍻 Daru / Alcohol Cut: ₹${alcoholSpend} ki daru 100% avoidable kharcha hai. Ise rokne se seedhe mahine ke ₹${alcoholSpend} (saal ke ₹${alcoholSpend * 12}) bachenge!`);
+  }
+  if (hasTobacco) {
+    defaultTips.push(`🚭 Sutta / Pan Masala Cut: Daily pocket leak ko rokein, health aur pocket dono fit rahenge (Bachat: ~₹1,000-₹2,000/mo).`);
+  }
+  if (hasDining) {
+    defaultTips.push(`🍔 50% Food Delivery Cut: Swiggy/Zomato ya bahar se khane ko hafte me sirf 1 baar limit karein (Bachat: ~₹2,000/mo).`);
+  }
+  if (defaultTips.length < 3) {
+    defaultTips.push('⏳ 24-Hour Cart Rule: Koi bhi non-essential cheez online khareedne se pehle 24 ghante cart me chhod dein (Bachat: ~₹1,500/mo).');
+  }
+  if (defaultTips.length < 3) {
+    defaultTips.push('📈 SIP Auto-Debit: Salary aate hi kam se kam 20% paisa pehle Mutual Fund SIP ya RD me transfer karein.');
+  }
+
+  let overviewText = '';
+  if (ruleBased.totalAvoidableAmount > 0) {
+    if (ruleBased.percentageOfExpenses === 100) {
+      overviewText = `Aapne kul ₹${summary.totalExpense.toLocaleString('en-IN')} kharch kiye hain, aur ye poora ₹${ruleBased.totalAvoidableAmount.toLocaleString('en-IN')} (100%) avoidable / faltu kharcha hai jise control karke poori bachat ki ja sakti hai.`;
+    } else {
+      overviewText = `Aapne kul ₹${summary.totalExpense.toLocaleString('en-IN')} kharch kiye hain, jisme se ₹${ruleBased.totalAvoidableAmount.toLocaleString('en-IN')} (${ruleBased.percentageOfExpenses}%) avoidable / faltu kharcha hai.`;
+    }
+  } else {
+    overviewText = `Aapne kul ₹${summary.totalExpense.toLocaleString('en-IN')} kharch kiye hain. Bahut badhiya! Aapka koi bhi faltu kharcha detect nahi hua hai.`;
+  }
+
+  const fallbackInsights = {
+    overview: overviewText,
+    healthScore: Math.min(100, Math.max(10, Math.round(summary.savingsRate * 0.7 + (100 - ruleBased.percentageOfExpenses) * 0.3))),
+    verdict: (ruleBased.percentageOfExpenses >= 75 ? 'Critical' : ruleBased.percentageOfExpenses >= 35 ? 'Needs Attention' : 'Good') as 'Excellent' | 'Good' | 'Needs Attention' | 'Critical',
+    keyInsights: [
+      `Kul Kamai: ₹${summary.totalIncome.toLocaleString('en-IN')} | Kul Kharcha: ₹${summary.totalExpense.toLocaleString('en-IN')}`,
+      `Bachat Dar (Savings Rate): ${summary.savingsRate}%`,
+      ruleBased.totalAvoidableAmount > 0
+        ? `Aapke kharcho me se ₹${ruleBased.totalAvoidableAmount.toLocaleString('en-IN')} (${ruleBased.percentageOfExpenses}%) poori tarah avoidable / faltu cheezon par hua hai.`
+        : 'Aapne apne kharcho ko bohot acche se control me rakha hua hai!',
+    ],
+    savingTips: defaultTips.slice(0, 3),
+    avoidableExpenses: {
+      totalAvoidableAmount: ruleBased.totalAvoidableAmount,
+      percentageOfExpenses: ruleBased.percentageOfExpenses,
+      potentialMonthlySavings: ruleBased.potentialMonthlySavings,
+      potentialYearlySavings: ruleBased.potentialYearlySavings,
+      investmentAdvice: `Agar aap har mahine ₹${ruleBased.potentialMonthlySavings.toLocaleString('en-IN')} ki ye bachat Nifty 50 Index SIP me lagayein, to 12% returns ke hisaab se 3 saal me lagbhag ₹${Math.round(ruleBased.potentialMonthlySavings * 42.5).toLocaleString('en-IN')} aur 5 saal me ₹${Math.round(ruleBased.potentialMonthlySavings * 82.5).toLocaleString('en-IN')} ban sakte hain!`,
+      items: ruleBased.items,
+    }
+  };
+
+  if (!ai || store.transactions.length === 0) {
+    return fallbackInsights;
+  }
+
+  const prompt = `You are an expert Indian personal finance advisor and expense coach analyzing ${user.name}'s transactions with a razor-sharp focus on identifying "Faltu Kharcha" (avoidable, unnecessary, impulsive, or discretionary spending) and calculating exact potential savings.
+
+Financial Overview:
+- User Name: ${user.name}
 - Total Income: ₹${summary.totalIncome}
 - Total Expenses: ₹${summary.totalExpense}
 - Net Balance: ₹${summary.netSavings}
 - Savings Rate: ${summary.savingsRate}%
-- Expenses by category: ${JSON.stringify(categoryTotals)}
-- Recent transactions: ${JSON.stringify(store.transactions.slice(0, 10).map(t => ({ desc: t.description, cat: t.category, amt: t.amount, type: t.type, pm: t.paymentMethod })))}
+- Category-wise Expense Totals: ${JSON.stringify(categoryTotals)}
+- Recent Expenses List: ${JSON.stringify(store.transactions.filter(t => t.type === 'expense').slice(0, 30).map(t => ({ desc: t.description, cat: t.category, amt: t.amount, date: t.date, method: t.paymentMethod })))}
+- Pre-analyzed Rule-based Discretionary Items: ${JSON.stringify(ruleBased)}
 
-Provide an actionable, encouraging financial breakdown in clean JSON format:
-1. "overview": A concise 2-sentence summary.
-2. "keyInsights": Array of 3-4 specific observations.
-3. "savingTips": Array of 2-3 practical tips.
-4. "healthScore": A number from 0 to 100.
-5. "verdict": "Excellent" | "Good" | "Needs Attention" | "Critical"`;
+CRITICAL CALCULATION ACCURACY RULES (DO NOT VIOLATE):
+1. Notice every avoidable expense accurately: "daru", "alcohol", "beer", "sutta", "cigarettes", "party", "club", "zomato", "swiggy", etc.
+2. If the user only has ₹500 expense on "daru", then the avoidable expense is EXACTLY ₹500 (100% of the expense). NEVER return ₹200 or any partial arbitrary fraction for 100% avoidable spending!
+3. If user controls or stops buying daru/alcohol, the potential monthly savings is ₹500, and yearly savings is ₹6,000 (500 * 12).
+4. Explain clearly in friendly, witty Hinglish:
+   - Exactly where the user is spending money on avoidable things ("daru pe kharch ho raha hai").
+   - Exactly how much was spent on them ("itna kharch aapne faltu ki chizo pe kiya hai").
+   - Exactly how much can be saved if controlled ("agar ise control karein to mahine me ₹500 aur saal me ₹6,000 ki bachat ho sakti hai").
+   - Wealth projection: investing this saved amount in Nifty 50 Index SIP.
+5. Provide 3 practical Hinglish action tips specifically addressing their spending.
 
-  if (!ai) {
-    return res.json({
-      insights: {
-        overview: `${user.name}, you have saved ₹${summary.netSavings.toLocaleString('en-IN')} with an overall savings rate of ${summary.savingsRate}%.`,
-        keyInsights: [
-          `Total Income recorded: ₹${summary.totalIncome.toLocaleString('en-IN')}`,
-          `Total Expenses: ₹${summary.totalExpense.toLocaleString('en-IN')}`,
-          `Top spending category: ${Object.keys(categoryTotals)[0] || 'Food & Dining'}`,
-        ],
-        savingTips: [
-          'Track every small expense like chai, dahi, and auto via Telegram to catch hidden leaks.',
-          'Set category budget limits for delivery and dining out.',
-        ],
-        healthScore: Math.min(100, Math.max(20, summary.savingsRate + 40)),
-        verdict: summary.savingsRate > 30 ? 'Good' : 'Needs Attention',
+Return ONLY a valid JSON object with this exact schema:
+{
+  "overview": string (2-3 sentences in natural Hinglish explaining the verdict and total avoidable spending),
+  "healthScore": number (0 to 100),
+  "verdict": "Excellent" | "Good" | "Needs Attention" | "Critical",
+  "keyInsights": string[] (3-4 bullet points highlighting specific observations),
+  "savingTips": string[] (3 specific practical tips with estimated savings),
+  "avoidableExpenses": {
+    "totalAvoidableAmount": number (total amount of avoidable expenses identified),
+    "percentageOfExpenses": number (percentage of total expenses, e.g. 100),
+    "potentialMonthlySavings": number (monthly savings if controlled),
+    "potentialYearlySavings": number (yearly savings if controlled),
+    "investmentAdvice": string (friendly Hinglish advice on investing this saved amount in SIP/RD),
+    "items": [
+      {
+        "title": string (e.g. "Daru / Alcohol"),
+        "category": string,
+        "amount": number,
+        "reason": string (brief reason why it's avoidable)
       }
-    });
+    ]
   }
+}`;
 
   try {
-    const response = await ai.models.generateContent({
-      model: 'gemini-3.7-flash',
-      contents: prompt,
-      config: { responseMimeType: 'application/json' },
-    });
-    if (response.text) {
-      return res.json({ insights: JSON.parse(response.text.trim()) });
+    const result = await callGeminiCandidateModels(ai, prompt, { jsonMode: true });
+
+    if (result && result.text) {
+      const parsed = JSON.parse(result.text.trim());
+      if (parsed && typeof parsed.healthScore === 'number' && parsed.avoidableExpenses) {
+        parsed.avoidableExpenses.totalAvoidableAmount = Number(parsed.avoidableExpenses.totalAvoidableAmount) || ruleBased.totalAvoidableAmount;
+        // Ensure that if rule-based detected higher avoidable items (e.g. ₹500 daru), AI doesn't under-report it
+        if (ruleBased.totalAvoidableAmount > 0 && parsed.avoidableExpenses.totalAvoidableAmount < ruleBased.totalAvoidableAmount) {
+          parsed.avoidableExpenses.totalAvoidableAmount = ruleBased.totalAvoidableAmount;
+        }
+        parsed.avoidableExpenses.percentageOfExpenses = summary.totalExpense > 0 
+          ? Math.min(100, Math.round((parsed.avoidableExpenses.totalAvoidableAmount / summary.totalExpense) * 100))
+          : 0;
+        parsed.avoidableExpenses.potentialMonthlySavings = Number(parsed.avoidableExpenses.potentialMonthlySavings) || ruleBased.potentialMonthlySavings;
+        parsed.avoidableExpenses.potentialYearlySavings = Number(parsed.avoidableExpenses.potentialYearlySavings) || (parsed.avoidableExpenses.potentialMonthlySavings * 12);
+        if (!Array.isArray(parsed.avoidableExpenses.items) || parsed.avoidableExpenses.items.length === 0) {
+          parsed.avoidableExpenses.items = ruleBased.items;
+        }
+        return parsed;
+      }
     }
   } catch (err: any) {
-    console.error('AI insights generation failed:', err);
+    console.error('Gemini insights generator error:', err.message);
   }
 
-  res.json({
-    insights: {
-      overview: `You currently have ₹${summary.netSavings.toLocaleString('en-IN')} in net savings across ${summary.transactionCount} transactions.`,
-      keyInsights: [`Recorded ₹${summary.totalIncome.toLocaleString('en-IN')} in total earnings.`],
-      savingTips: ['Keep logging expenses on Telegram right when they happen!'],
-      healthScore: 75,
-      verdict: 'Good',
-    }
-  });
+  return fallbackInsights;
+}
+
+// 7. AI Financial Insights Generator (User-Scoped)
+app.post('/api/ai/insights', async (req, res) => {
+  const user = getRequestUser(req);
+  try {
+    const insights = await generateAiFinancialInsights(user.id);
+    res.json({ insights });
+  } catch (err: any) {
+    console.error('Error generating AI insights:', err);
+    res.status(500).json({ error: 'Failed to generate AI insights' });
+  }
 });
 
 // 8. Storage Engine Status & Postgres Synchronization

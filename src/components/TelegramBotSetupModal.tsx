@@ -39,6 +39,7 @@ export const TelegramBotSetupModal: React.FC<TelegramBotSetupModalProps> = ({
   const [tokenInput, setTokenInput] = useState(botConfig?.botToken || '');
   const [isSaving, setIsSaving] = useState(false);
   const [isSettingWebhook, setIsSettingWebhook] = useState(false);
+  const [isSyncingCommands, setIsSyncingCommands] = useState(false);
   const [statusMessage, setStatusMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [copied, setCopied] = useState(false);
 
@@ -48,6 +49,31 @@ export const TelegramBotSetupModal: React.FC<TelegramBotSetupModalProps> = ({
     navigator.clipboard.writeText(webhookUrl);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
+  };
+
+  const handleSyncCommands = async () => {
+    setIsSyncingCommands(true);
+    setStatusMessage(null);
+    try {
+      const { data, error } = await safeFetchJson<{ success?: boolean; message?: string; error?: string }>('/api/telegram/sync-commands', {
+        method: 'POST',
+      });
+      if (data?.success) {
+        setStatusMessage({
+          type: 'success',
+          text: '✅ Telegram Bot Menu List & Handy Action Buttons safaltapoorvak Telegram server par sync ho gaye! Ab aap Telegram me bot ke Menu button aur quick buttons dekh sakte hain.',
+        });
+      } else {
+        setStatusMessage({
+          type: 'error',
+          text: data?.error || error || 'Failed to sync Telegram commands.',
+        });
+      }
+    } catch (err: any) {
+      setStatusMessage({ type: 'error', text: err.message || 'Error syncing commands' });
+    } finally {
+      setIsSyncingCommands(false);
+    }
   };
 
   const handleSaveAndSetWebhook = async () => {
@@ -245,6 +271,84 @@ export const TelegramBotSetupModal: React.FC<TelegramBotSetupModalProps> = ({
                 </div>
               </div>
 
+            </div>
+          </div>
+
+          {/* Telegram Handy Buttons & Command Menu Showcase */}
+          <div className="bg-gradient-to-br from-slate-900 via-indigo-950/40 to-slate-900 rounded-xl p-4 border border-cyan-500/30 space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-2">
+                <Terminal className="w-4 h-4 text-cyan-400" />
+                <h4 className="text-xs font-bold text-white font-display uppercase tracking-wider">
+                  TELEGRAM HANDY BUTTONS & MENU LIST
+                </h4>
+              </div>
+              <button
+                onClick={handleSyncCommands}
+                disabled={isSyncingCommands}
+                className="px-2.5 py-1 bg-cyan-950/80 hover:bg-cyan-900/80 border border-cyan-500/40 rounded-lg text-[10px] text-cyan-300 font-bold flex items-center space-x-1 cursor-pointer transition-colors"
+                title="Telegram Botfather commands and menu button ko sync karein"
+              >
+                <RefreshCw className={`w-3 h-3 ${isSyncingCommands ? 'animate-spin' : ''}`} />
+                <span>{isSyncingCommands ? 'SYNC HO RAHA HAI...' : 'SYNC MENU & BUTTONS'}</span>
+              </button>
+            </div>
+
+            <p className="text-[11px] text-slate-300">
+              Bot ke sath <b>Handy Keyboard Buttons</b>, <b>Inline Action Buttons</b>, aur Telegram ka <b>Menu Button</b> activate kar diya gaya hai. Telegram me bas in buttons par tap karein:
+            </p>
+
+            {/* Visual Interactive Preview of Buttons */}
+            <div className="bg-slate-950/90 rounded-xl p-3 border border-slate-800 space-y-2">
+              <div className="text-[10px] text-slate-400 uppercase tracking-wider flex items-center justify-between">
+                <span>📱 TELEGRAM CHAT SCREEN BUTTONS PREVIEW</span>
+                <span className="text-emerald-400 font-bold">● ACTIVE</span>
+              </div>
+              
+              <div className="grid grid-cols-2 gap-1.5 pt-1">
+                <div className="bg-slate-900 border border-cyan-500/30 text-cyan-200 px-2.5 py-1.5 rounded-lg text-center font-bold text-[11px]">
+                  💰 Balance
+                </div>
+                <div className="bg-slate-900 border border-cyan-500/30 text-cyan-200 px-2.5 py-1.5 rounded-lg text-center font-bold text-[11px]">
+                  📊 Summary
+                </div>
+                <div className="bg-slate-900 border border-amber-500/30 text-amber-200 px-2.5 py-1.5 rounded-lg text-center font-bold text-[11px]">
+                  🤖 AI Tips & Bachat
+                </div>
+                <div className="bg-slate-900 border border-indigo-500/30 text-indigo-200 px-2.5 py-1.5 rounded-lg text-center font-bold text-[11px]">
+                  🕒 Recent 5 Tx
+                </div>
+                <div className="bg-slate-900 border border-purple-500/30 text-purple-200 px-2.5 py-1.5 rounded-lg text-center font-bold text-[11px]">
+                  🏷️ Categories
+                </div>
+                <div className="bg-slate-900 border border-rose-500/30 text-rose-200 px-2.5 py-1.5 rounded-lg text-center font-bold text-[11px]">
+                  ↩️ Undo Last
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-1.5 pt-0.5">
+                <div className="bg-slate-900/60 border border-slate-700/60 text-slate-300 px-2 py-1 rounded-lg text-center text-[10px]">
+                  ❓ Help & Guide
+                </div>
+                <div className="bg-slate-900/60 border border-slate-700/60 text-slate-300 px-2 py-1 rounded-lg text-center text-[10px]">
+                  📱 Handy Buttons
+                </div>
+              </div>
+            </div>
+
+            {/* Menu List items */}
+            <div className="text-[10px] text-slate-400 space-y-1">
+              <span className="font-bold text-slate-300">📋 Telegram "Menu" Button me registered commands:</span>
+              <div className="grid grid-cols-2 gap-x-2 gap-y-0.5 font-mono text-[10px] text-slate-400">
+                <span>• <code>/balance</code> - Kul bachat</span>
+                <span>• <code>/summary</code> - Mahina report</span>
+                <span>• <code>/tips</code> - Gemini Faltu kharcha</span>
+                <span>• <code>/recent</code> - Aakhri 5 transactions</span>
+                <span>• <code>/buttons</code> - Handy buttons</span>
+                <span>• <code>/categories</code> - Active categories</span>
+                <span>• <code>/undo</code> - Aakhri kharcha delete</span>
+                <span>• <code>/help</code> - Full guide</span>
+              </div>
             </div>
           </div>
 

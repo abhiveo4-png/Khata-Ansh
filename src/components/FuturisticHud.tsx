@@ -1,14 +1,13 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { 
   Bot,
   Sparkles, 
   Users, 
-  Send,
   RefreshCw,
-  SlidersHorizontal,
-  ShieldCheck,
-  Zap,
-  CheckCircle2
+  Copy,
+  Check,
+  CheckCircle2,
+  Plus
 } from 'lucide-react';
 import { BotConfig, UserProfile } from '../types';
 
@@ -17,10 +16,9 @@ interface FuturisticHudProps {
   currentUser: UserProfile | null;
   transactionCount: number;
   onOpenBotSetup: () => void;
-  onOpenLogs: () => void;
   onOpenAiInsights: () => void;
   onRefresh: () => void;
-  onQuickSimulate?: (msg: string) => void;
+  onOpenAddModal?: () => void;
 }
 
 export const FuturisticHud: React.FC<FuturisticHudProps> = ({
@@ -28,14 +26,12 @@ export const FuturisticHud: React.FC<FuturisticHudProps> = ({
   currentUser,
   transactionCount,
   onOpenBotSetup,
-  onOpenLogs,
   onOpenAiInsights,
   onRefresh,
-  onQuickSimulate,
+  onOpenAddModal,
 }) => {
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
-  const [quickInput, setQuickInput] = useState<string>('');
-  const [isSimulating, setIsSimulating] = useState<boolean>(false);
+  const [copiedCode, setCopiedCode] = useState(false);
 
   const handleRefreshClick = () => {
     setIsSyncing(true);
@@ -43,15 +39,13 @@ export const FuturisticHud: React.FC<FuturisticHudProps> = ({
     setTimeout(() => setIsSyncing(false), 600);
   };
 
-  const handleSimulateSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!quickInput.trim()) return;
-    setIsSimulating(true);
-    if (onQuickSimulate) {
-      onQuickSimulate(quickInput.trim());
+  const handleCopyLinkCode = () => {
+    const code = currentUser?.linkCode || currentUser?.telegramLinkCode;
+    if (code) {
+      navigator.clipboard.writeText(`/link ${code}`);
+      setCopiedCode(true);
+      setTimeout(() => setCopiedCode(false), 2000);
     }
-    setQuickInput('');
-    setTimeout(() => setIsSimulating(false), 500);
   };
 
   const isBotActive = Boolean(
@@ -60,17 +54,20 @@ export const FuturisticHud: React.FC<FuturisticHudProps> = ({
     (botConfig?.isWebhookSet && botConfig?.botToken)
   );
 
+  const linkCode = currentUser?.linkCode || currentUser?.telegramLinkCode;
+
   return (
-    <div className="w-full bg-[#0d1424] border border-slate-800/80 rounded-2xl p-3 sm:p-3.5 shadow-lg shadow-black/20">
-      <div className="flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-3">
+    <div className="w-full bg-[#0e1526] border border-slate-800 rounded-2xl px-4 py-3 shadow-md shadow-black/20">
+      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
         
-        {/* Left: Active Indicators */}
-        <div className="flex flex-wrap items-center gap-2 text-xs">
+        {/* Left: Active Status Badges */}
+        <div className="flex flex-wrap items-center gap-2.5 text-xs">
           
-          {/* Telegram Bot Status Badge */}
+          {/* Telegram Bot Live Status */}
           <button
             onClick={onOpenBotSetup}
-            className="inline-flex items-center space-x-2 px-3 py-1.5 rounded-xl bg-slate-900/90 border border-slate-700/70 hover:border-emerald-500/50 transition-all text-slate-200 cursor-pointer group"
+            className="inline-flex items-center space-x-2 px-3 py-1.5 rounded-xl bg-slate-900/90 border border-slate-800 hover:border-emerald-500/40 transition-all text-slate-200 cursor-pointer group"
+            title="Telegram Bot Settings"
           >
             <span className="relative flex h-2 w-2">
               <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${
@@ -80,70 +77,68 @@ export const FuturisticHud: React.FC<FuturisticHudProps> = ({
                 isBotActive ? 'bg-emerald-500' : 'bg-amber-500'
               }`} />
             </span>
-            <span className="text-[11px] font-medium text-slate-400">Telegram Bot:</span>
+            <span className="text-[11px] text-slate-400">Telegram Bot:</span>
             <span className="font-semibold text-emerald-400 group-hover:text-emerald-300">
               @{botConfig?.botUsername || 'khata_ansh_bot'}
             </span>
           </button>
 
-          {/* AI Smart Engine Badge */}
+          {/* AI Insights Chip */}
           <button
             onClick={onOpenAiInsights}
-            className="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-xl bg-indigo-950/40 border border-indigo-500/30 hover:border-indigo-400/60 text-indigo-200 transition-all cursor-pointer"
+            className="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-xl bg-indigo-950/40 border border-indigo-500/20 hover:border-indigo-500/50 text-indigo-200 transition-all cursor-pointer"
+            title="AI Financial Insights"
           >
             <Sparkles className="w-3.5 h-3.5 text-indigo-400" />
-            <span className="text-[11px] font-medium text-indigo-300">Gemini 3.7 AI:</span>
-            <span className="font-semibold text-cyan-300">Active</span>
+            <span className="text-[11px] text-indigo-300 font-medium">Gemini AI Active</span>
           </button>
 
+          {/* Telegram Link Code Chip (if user has code) */}
+          {currentUser && linkCode && !currentUser.telegramChatId && (
+            <button
+              onClick={handleCopyLinkCode}
+              className="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-xl bg-slate-900/90 border border-slate-700/80 hover:border-cyan-500/50 text-slate-300 hover:text-white transition-all cursor-pointer text-xs"
+              title="Click to copy /link command"
+            >
+              <span className="text-[11px] text-slate-400">Bot Link:</span>
+              <span className="font-mono text-cyan-300 font-semibold">/link {linkCode}</span>
+              {copiedCode ? (
+                <Check className="w-3 h-3 text-emerald-400" />
+              ) : (
+                <Copy className="w-3 h-3 text-slate-400" />
+              )}
+            </button>
+          )}
+
           {/* Family Link Badge */}
-          {currentUser && currentUser.linkedMembers && currentUser.linkedMembers.length > 0 && (
+          {currentUser && currentUser.linkedMembers && currentUser.linkedMembers.length > 1 && (
             <div className="inline-flex items-center space-x-1.5 px-2.5 py-1.5 rounded-xl bg-violet-950/30 border border-violet-500/20 text-[11px] text-violet-300">
               <Users className="w-3.5 h-3.5 text-violet-400" />
-              <span>{currentUser.linkedMembers.length} Members Judhe Hain</span>
+              <span>{currentUser.linkedMembers.length} Members</span>
             </div>
           )}
         </div>
 
-        {/* Right: Quick AI Simulator Input & Actions */}
-        <div className="flex flex-col sm:flex-row items-center gap-2">
-          
-          <form onSubmit={handleSimulateSubmit} className="relative w-full sm:w-80">
-            <input
-              type="text"
-              value={quickInput}
-              onChange={(e) => setQuickInput(e.target.value)}
-              placeholder="Test karein: '250 sabzi cash', '500 petrol'..."
-              className="w-full pl-3 pr-20 py-1.5 bg-slate-950 border border-slate-700/80 rounded-xl text-xs text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-indigo-400 focus:ring-1 focus:ring-indigo-400/40 transition-all"
-            />
-            <button
-              type="submit"
-              disabled={isSimulating || !quickInput.trim()}
-              className="absolute right-1 top-1 bottom-1 px-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-[11px] font-semibold flex items-center space-x-1 disabled:opacity-40 transition-all cursor-pointer"
-            >
-              <span>AI Test</span>
-              <Send className="w-2.5 h-2.5" />
-            </button>
-          </form>
+        {/* Right: Actions */}
+        <div className="flex items-center space-x-2 self-end sm:self-auto shrink-0">
+          <button
+            onClick={handleRefreshClick}
+            title="Refresh Transactions"
+            className="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-800 text-slate-300 hover:text-white hover:border-slate-700 text-xs transition-all cursor-pointer"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin text-indigo-400' : 'text-slate-400'}`} />
+            <span className="text-[11px] font-medium">Sync Now</span>
+          </button>
 
-          <div className="flex items-center space-x-1.5 shrink-0 self-end sm:self-auto">
+          {onOpenAddModal && (
             <button
-              onClick={handleRefreshClick}
-              title="Khata Sync / Refresh karein"
-              className="p-2 rounded-xl bg-slate-900 border border-slate-700 text-slate-300 hover:text-white hover:border-slate-500 transition-all cursor-pointer"
+              onClick={onOpenAddModal}
+              className="inline-flex items-center space-x-1 px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold shadow-sm transition-all cursor-pointer"
             >
-              <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin text-indigo-400' : ''}`} />
+              <Plus className="w-3.5 h-3.5" />
+              <span>Add Entry</span>
             </button>
-
-            <button
-              onClick={onOpenLogs}
-              title="Telegram Bot Logs dekhein"
-              className="px-2.5 py-1.5 rounded-xl bg-slate-900 border border-slate-700 hover:border-slate-500 text-slate-300 hover:text-white text-xs font-medium flex items-center space-x-1.5 transition-all cursor-pointer"
-            >
-              <SlidersHorizontal className="w-3.5 h-3.5 text-slate-400" />
-              <span>Logs</span>
-            </button>
-          </div>
+          )}
         </div>
 
       </div>

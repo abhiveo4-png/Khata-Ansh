@@ -371,11 +371,6 @@ export const TransactionList: React.FC<TransactionListProps> = ({
                     <div className="flex items-center space-x-2">
                       <span className="font-semibold text-white truncate text-sm">{tx.description}</span>
                     </div>
-                    {tx.rawMessage && (
-                      <div className="text-[11px] text-slate-400 mt-0.5 truncate max-w-xs flex items-center gap-1">
-                        <span>"{tx.rawMessage}"</span>
-                      </div>
-                    )}
                   </div>
                 </div>
 

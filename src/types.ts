@@ -107,3 +107,26 @@ export interface FinancialSummary {
   dailyAverageExpense: number;
 }
 
+export interface AvoidableExpenseItem {
+  title: string;
+  category: string;
+  amount: number;
+  reason: string;
+}
+
+export interface AiFinancialInsights {
+  overview: string;
+  healthScore: number;
+  verdict: 'Excellent' | 'Good' | 'Needs Attention' | 'Critical';
+  keyInsights: string[];
+  savingTips: string[];
+  avoidableExpenses: {
+    totalAvoidableAmount: number;
+    percentageOfExpenses: number;
+    potentialMonthlySavings: number;
+    potentialYearlySavings: number;
+    investmentAdvice: string;
+    items: AvoidableExpenseItem[];
+  };
+}
+

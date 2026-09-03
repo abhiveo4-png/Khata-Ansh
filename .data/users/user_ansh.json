@@ -1,22 +1,24 @@
 {
   "transactions": [
     {
-      "id": "tx_1786893703376_nxf8e3",
+      "id": "tx_1788413920036_3y7a5a",
       "userId": "user_ansh",
       "type": "expense",
-      "amount": 250,
-      "category": "Uncategorized",
-      "description": "Kamla pasand",
-      "date": "2026-08-16",
-      "time": "15:21",
+      "amount": 500,
+      "category": "Food & Dining",
+      "description": "Daru",
+      "date": "2026-09-03",
+      "time": "05:38",
       "paymentMethod": "UPI",
       "source": "telegram",
       "telegramChatId": "838107368",
-      "telegramMessageId": 55,
-      "telegramUser": "Ansh",
-      "rawMessage": "250 kamla pasand",
-      "createdAt": "2026-08-16T15:21:43.376Z",
-      "tags": []
+      "telegramMessageId": 441,
+      "telegramUser": "Demo Account (Owner)",
+      "rawMessage": "500 daru",
+      "createdAt": "2026-09-03T05:38:40.028Z",
+      "tags": [
+        "daru"
+      ]
     }
   ],
   "budgets": [
@@ -58,6 +60,30 @@
     {
       "category": "Investments & Savings",
       "limit": 15000,
+      "period": "monthly"
+    },
+    {
+      "category": "Rent & Housing",
+      "limit": 12000,
+      "spent": 0,
+      "period": "monthly"
+    },
+    {
+      "category": "Education & Learning",
+      "limit": 3000,
+      "spent": 0,
+      "period": "monthly"
+    },
+    {
+      "category": "Other Expense",
+      "limit": 2000,
+      "spent": 0,
+      "period": "monthly"
+    },
+    {
+      "category": "Uncategorized",
+      "limit": 0,
+      "spent": 0,
       "period": "monthly"
     }
   ],
