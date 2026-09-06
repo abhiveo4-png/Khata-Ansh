@@ -851,6 +851,70 @@ export function detectPaymentMethod(text: string): PaymentMethod {
   return 'UPI';
 }
 
+// ---------------- Application Timezone (Default: Indian Standard Time - Asia/Kolkata) ----------------
+
+export const APP_TIMEZONE = process.env.APP_TIMEZONE || 'Asia/Kolkata';
+
+export function getIstDateOffset(daysOffset = 0): string {
+  const d = new Date();
+  const formatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone: APP_TIMEZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  });
+  const istDateStr = formatter.format(d);
+  const [y, m, day] = istDateStr.split('-').map(Number);
+  const istMidnight = new Date(Date.UTC(y, m - 1, day + daysOffset, 12, 0, 0));
+  return formatter.format(istMidnight);
+}
+
+export function getAppDateTime(dateInput?: Date | number | string) {
+  let dateObj: Date;
+  if (!dateInput) {
+    dateObj = new Date();
+  } else if (typeof dateInput === 'number') {
+    // If it's in seconds (like Telegram message.date), convert to ms
+    dateObj = dateInput < 10000000000 ? new Date(dateInput * 1000) : new Date(dateInput);
+  } else if (typeof dateInput === 'string') {
+    dateObj = new Date(dateInput);
+    if (isNaN(dateObj.getTime())) dateObj = new Date();
+  } else {
+    dateObj = dateInput;
+  }
+
+  // Format date YYYY-MM-DD in APP_TIMEZONE
+  const dateStr = new Intl.DateTimeFormat('en-CA', {
+    timeZone: APP_TIMEZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  });
+
+  // Format 24-hour time HH:mm in APP_TIMEZONE
+  const time24 = new Intl.DateTimeFormat('en-IN', {
+    timeZone: APP_TIMEZONE,
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  });
+
+  // Format 12-hour time h:mm a in APP_TIMEZONE
+  const time12 = new Intl.DateTimeFormat('en-IN', {
+    timeZone: APP_TIMEZONE,
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+  });
+
+  return {
+    date: dateStr.format(dateObj),
+    time: time24.format(dateObj),
+    time12: time12.format(dateObj),
+    iso: dateObj.toISOString(),
+  };
+}
+
 // ---------------- Multi-Format Date Parser (English & Hinglish) ----------------
 
 const MONTH_MAP: Record<string, number> = {
@@ -871,20 +935,17 @@ const MONTH_MAP: Record<string, number> = {
 export function parseCustomDateString(rawStr: string): string | null {
   if (!rawStr) return null;
   const str = rawStr.trim().toLowerCase();
-  const today = new Date();
-  const currentYear = today.getFullYear();
+  const currentYear = parseInt(getIstDateOffset(0).split('-')[0], 10);
 
-  // Relative dates
-  if (str.includes('yesterday') || str.includes('kal') || str.includes('beeta kal')) {
-    const d = new Date(Date.now() - 86400000);
-    return d.toISOString().split('T')[0];
+  // Relative dates calculated via IST
+  if (/\b(yesterday|kal|beeta kal)\b/i.test(str)) {
+    return getIstDateOffset(-1);
   }
-  if (str.includes('parso') || str.includes('parson') || str.includes('2 days ago') || str.includes('2 din pehle')) {
-    const d = new Date(Date.now() - 2 * 86400000);
-    return d.toISOString().split('T')[0];
+  if (/\b(parso|parson|2 days ago|2 din pehle)\b/i.test(str)) {
+    return getIstDateOffset(-2);
   }
-  if (str.includes('today') || str.includes('aaj')) {
-    return today.toISOString().split('T')[0];
+  if (/\b(today|aaj)\b/i.test(str)) {
+    return getIstDateOffset(0);
   }
 
   // 1. Day Month Year: "2 sep 26", "2nd september 2026", "02 sep", "2-sep-26", "15 aug"
@@ -947,56 +1008,6 @@ export function parseCustomDateString(rawStr: string): string | null {
   }
 
   return null;
-}
-
-// ---------------- Application Timezone (Default: Indian Standard Time - Asia/Kolkata) ----------------
-
-export const APP_TIMEZONE = process.env.APP_TIMEZONE || 'Asia/Kolkata';
-
-export function getAppDateTime(dateInput?: Date | number | string) {
-  let dateObj: Date;
-  if (!dateInput) {
-    dateObj = new Date();
-  } else if (typeof dateInput === 'number') {
-    // If it's in seconds (like Telegram message.date), convert to ms
-    dateObj = dateInput < 10000000000 ? new Date(dateInput * 1000) : new Date(dateInput);
-  } else if (typeof dateInput === 'string') {
-    dateObj = new Date(dateInput);
-    if (isNaN(dateObj.getTime())) dateObj = new Date();
-  } else {
-    dateObj = dateInput;
-  }
-
-  // Format date YYYY-MM-DD in APP_TIMEZONE
-  const dateStr = new Intl.DateTimeFormat('en-CA', {
-    timeZone: APP_TIMEZONE,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).format(dateObj);
-
-  // Format 24-hour time HH:mm in APP_TIMEZONE
-  const time24 = new Intl.DateTimeFormat('en-IN', {
-    timeZone: APP_TIMEZONE,
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  }).format(dateObj);
-
-  // Format 12-hour time h:mm a in APP_TIMEZONE
-  const time12 = new Intl.DateTimeFormat('en-IN', {
-    timeZone: APP_TIMEZONE,
-    hour: 'numeric',
-    minute: '2-digit',
-    hour12: true,
-  }).format(dateObj);
-
-  return {
-    date: dateStr,
-    time: time24,
-    time12,
-    iso: dateObj.toISOString(),
-  };
 }
 
 export function extractCustomTimeString(text: string): string | undefined {
@@ -1299,11 +1310,305 @@ ${rawText}
   }));
 }
 
+// ---------------- Category Budget & Date Report Calculation Helpers ----------------
+
+export interface CategoryBudgetAnalysis {
+  category: string;
+  emoji: string;
+  limit: number;
+  spent: number;
+  remaining: number;
+  percentage: number;
+  isOverBudget: boolean;
+  type: string;
+}
+
+export function getCategoryEmoji(catName: string): string {
+  const lower = (catName || '').toLowerCase();
+  if (lower.includes('food') || lower.includes('dining') || lower.includes('restaurant') || lower.includes('khana') || lower.includes('cafe') || lower.includes('zomato') || lower.includes('swiggy')) return '🍔';
+  if (lower.includes('grocer') || lower.includes('sabzi') || lower.includes('ration') || lower.includes('kirana') || lower.includes('vegetable') || lower.includes('doodh') || lower.includes('dahi')) return '🥦';
+  if (lower.includes('transport') || lower.includes('fuel') || lower.includes('petrol') || lower.includes('diesel') || lower.includes('auto') || lower.includes('cab') || lower.includes('uber') || lower.includes('ola')) return '🚗';
+  if (lower.includes('bill') || lower.includes('utility') || lower.includes('electricity') || lower.includes('wifi') || lower.includes('recharge') || lower.includes('bijli') || lower.includes('water')) return '💡';
+  if (lower.includes('shop') || lower.includes('apparel') || lower.includes('clothes') || lower.includes('kapde') || lower.includes('amazon') || lower.includes('flipkart') || lower.includes('myntra')) return '🛍️';
+  if (lower.includes('rent') || lower.includes('house') || lower.includes('housing') || lower.includes('kiraya') || lower.includes('flat') || lower.includes('pg')) return '🏠';
+  if (lower.includes('entertain') || lower.includes('movie') || lower.includes('ott') || lower.includes('cinema') || lower.includes('game') || lower.includes('fun') || lower.includes('netflix')) return '🎬';
+  if (lower.includes('health') || lower.includes('fit') || lower.includes('medic') || lower.includes('doctor') || lower.includes('hospital') || lower.includes('gym') || lower.includes('dawa')) return '💊';
+  if (lower.includes('invest') || lower.includes('sip') || lower.includes('mutual') || lower.includes('stock') || lower.includes('gold') || lower.includes('savings')) return '📈';
+  if (lower.includes('travel') || lower.includes('trip') || lower.includes('hotel') || lower.includes('flight') || lower.includes('train') || lower.includes('irctc')) return '✈️';
+  if (lower.includes('edu') || lower.includes('school') || lower.includes('college') || lower.includes('fee') || lower.includes('book') || lower.includes('course')) return '📚';
+  if (lower.includes('personal') || lower.includes('care') || lower.includes('salon') || lower.includes('beauty') || lower.includes('groom')) return '💇';
+  if (lower.includes('gift') || lower.includes('allowance') || lower.includes('shagun')) return '🎁';
+  if (lower.includes('salary') || lower.includes('wage') || lower.includes('employ')) return '💼';
+  if (lower.includes('freelance') || lower.includes('consult')) return '💻';
+  if (lower.includes('uncategorized') || lower.includes('unknown') || lower.includes('other')) return '📁';
+  return '🏷️';
+}
+
+export function renderProgressBar(percentage: number): string {
+  const clamped = Math.min(100, Math.max(0, percentage));
+  const filledCount = Math.round((clamped / 100) * 10);
+  const emptyCount = 10 - filledCount;
+  return '█'.repeat(filledCount) + '░'.repeat(emptyCount);
+}
+
+export function getCategoryBudgetStatus(userId: string) {
+  const store = getUserData(userId);
+  syncBudgetsWithCategories(store);
+
+  const nowInfo = getAppDateTime();
+  const currentMonthPrefix = nowInfo.date.substring(0, 7); // e.g. "2026-09"
+  const monthName = new Intl.DateTimeFormat('en-IN', {
+    timeZone: APP_TIMEZONE,
+    month: 'long',
+    year: 'numeric',
+  }).format(new Date());
+
+  const expenseCategories = store.categories.filter(c => c.type === 'expense' || c.type === 'both' || !c.type);
+  const items: CategoryBudgetAnalysis[] = [];
+
+  let totalAllocatedBudget = 0;
+  let totalSpentThisMonth = 0;
+
+  for (const cat of expenseCategories) {
+    const budget = store.budgets.find(b => b.category.toLowerCase() === cat.name.toLowerCase());
+    const limit = budget ? (budget.limit || 0) : 0;
+    
+    // Sum expenses this month in this category
+    const spent = store.transactions
+      .filter(t => t.type === 'expense' && t.date && t.date.startsWith(currentMonthPrefix) && t.category.toLowerCase() === cat.name.toLowerCase())
+      .reduce((sum, t) => sum + (Number(t.amount) || 0), 0);
+
+    totalAllocatedBudget += limit;
+    totalSpentThisMonth += spent;
+
+    const remaining = limit > 0 ? (limit - spent) : 0;
+    const percentage = limit > 0 ? Math.round((spent / limit) * 100) : (spent > 0 ? 100 : 0);
+    const isOverBudget = limit > 0 && spent > limit;
+
+    items.push({
+      category: cat.name,
+      emoji: getCategoryEmoji(cat.name),
+      limit,
+      spent,
+      remaining,
+      percentage,
+      isOverBudget,
+      type: cat.type || 'expense',
+    });
+  }
+
+  // Also include any other transactions with custom categories not in expenseCategories
+  const otherExpenses = store.transactions.filter(t =>
+    t.type === 'expense' &&
+    t.date &&
+    t.date.startsWith(currentMonthPrefix) &&
+    !expenseCategories.some(c => c.name.toLowerCase() === t.category.toLowerCase())
+  );
+
+  if (otherExpenses.length > 0) {
+    const groupedOther: Record<string, number> = {};
+    for (const t of otherExpenses) {
+      groupedOther[t.category] = (groupedOther[t.category] || 0) + (Number(t.amount) || 0);
+    }
+    for (const [catName, spent] of Object.entries(groupedOther)) {
+      totalSpentThisMonth += spent;
+      items.push({
+        category: catName,
+        emoji: getCategoryEmoji(catName),
+        limit: 0,
+        spent,
+        remaining: 0,
+        percentage: 100,
+        isOverBudget: false,
+        type: 'expense',
+      });
+    }
+  }
+
+  // Sort items: over budget first, then by spent descending, then by limit descending
+  items.sort((a, b) => {
+    if (a.isOverBudget && !b.isOverBudget) return -1;
+    if (!a.isOverBudget && b.isOverBudget) return 1;
+    if (b.spent !== a.spent) return b.spent - a.spent;
+    return b.limit - a.limit;
+  });
+
+  const totalRemainingBudget = totalAllocatedBudget - totalSpentThisMonth;
+  const overallPercentage = totalAllocatedBudget > 0 ? Math.round((totalSpentThisMonth / totalAllocatedBudget) * 100) : 0;
+
+  return {
+    monthName,
+    currentMonthPrefix,
+    totalAllocatedBudget,
+    totalSpentThisMonth,
+    totalRemainingBudget,
+    overallPercentage,
+    items,
+  };
+}
+
+export function buildCategoryBudgetTelegramMessage(userId: string, userName: string): string {
+  const data = getCategoryBudgetStatus(userId);
+  const progressBar = renderProgressBar(data.overallPercentage);
+  const remainingStatus = data.totalRemainingBudget >= 0
+    ? `🟢 <b>Kul Bacha Budget:</b> ₹${data.totalRemainingBudget.toLocaleString('en-IN')} (${Math.max(0, 100 - data.overallPercentage)}% bacha)`
+    : `⚠️ <b>Kul Over-Budget:</b> ₹${Math.abs(data.totalRemainingBudget).toLocaleString('en-IN')} (Budget se zyada kharcha!)`;
+
+  const categoryLines = data.items.map(item => {
+    const bar = renderProgressBar(item.percentage);
+    if (item.limit > 0) {
+      if (item.isOverBudget) {
+        const overAmt = item.spent - item.limit;
+        return `${item.emoji} <b>${item.category}</b>\n• Allotted: ₹${item.limit.toLocaleString('en-IN')} | Kharcha: <b>₹${item.spent.toLocaleString('en-IN')}</b>\n• Status: 🚨 <b>₹${overAmt.toLocaleString('en-IN')} OVER BUDGET!</b> (${item.percentage}% used)\n• Progress: [${bar}]`;
+      } else {
+        return `${item.emoji} <b>${item.category}</b>\n• Allotted: ₹${item.limit.toLocaleString('en-IN')} | Kharcha: ₹${item.spent.toLocaleString('en-IN')}\n• Bacha Balance: 🟢 <b>₹${item.remaining.toLocaleString('en-IN')}</b> (${100 - item.percentage}% bacha)\n• Progress: [${bar}] ${item.percentage}%`;
+      }
+    } else {
+      return `${item.emoji} <b>${item.category}</b>\n• Kharcha: ₹${item.spent.toLocaleString('en-IN')} <i>(Koi limit set nahi hai)</i>`;
+    }
+  }).join('\n\n');
+
+  return `🎯 <b>CATEGORY-WISE BUDGET & KHARCHA</b> (${data.monthName})
+━━━━━━━━━━━━━━━━━━━━
+👤 <b>Khata:</b> ${userName}
+💰 <b>Kul Monthly Allotted Budget:</b> ₹${data.totalAllocatedBudget.toLocaleString('en-IN')}
+🔴 <b>Kul Spent This Month:</b> ₹${data.totalSpentThisMonth.toLocaleString('en-IN')}
+${remainingStatus}
+📊 <b>Overall Budget Used:</b> [${progressBar}] ${data.overallPercentage}%
+
+━━━━━━━━━━━━━━━━━━━━
+📂 <b>HAR CATEGORY KA DETAIL HISAAB:</b>
+
+${categoryLines || 'ℹ️ Koi category budget nahi mila.'}
+
+━━━━━━━━━━━━━━━━━━━━
+💡 <i>Tip: Excel sheet bhej kar ya Web Dashboard se budget limit change kar sakte hain!</i>`;
+}
+
+export function isPureDateQuery(rawText: string): string | null {
+  if (!rawText) return null;
+  const text = rawText.trim();
+  const lower = text.toLowerCase();
+
+  // 1. Direct command syntax: /date <date>, /day <date>, /tareeq <date>, /history <date>
+  if (
+    lower.startsWith('/date') ||
+    lower.startsWith('/day') ||
+    lower.startsWith('/history') ||
+    lower.startsWith('/tareeq') ||
+    lower.startsWith('/tarikh')
+  ) {
+    const arg = lower.replace(/^\/(?:date|day|history|tareeq|tarikh)\s*/, '').trim();
+    return parseCustomDateString(arg || 'today');
+  }
+
+  // 2. Query phrases containing date words or keywords
+  const isQueryPattern = /\b(ka kharcha|kitna kharcha|ka hisaab|ka hisab|ki kamai|ki income|expense|transactions|report|batao|hua|tha|dekho|dikhaye)\b/i.test(lower);
+  const parsedDate = parseCustomDateString(lower);
+  if (!parsedDate) return null;
+
+  // Check if text contains non-date numbers (which would indicate a new transaction amount like "300 dahi 2 sep")
+  const textWithoutDate = lower
+    .replace(/\b\d{4}-\d{1,2}-\d{1,2}\b/g, '')
+    .replace(/\b\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4}\b/g, '')
+    .replace(/\b\d{1,2}(?:st|nd|rd|th)?[\s\-_]+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec|january|february|march|april|june|july|august|september|october|november|december)(?:[\s\-_]+\d{2,4})?\b/gi, '')
+    .replace(/\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec|january|february|march|april|june|july|august|september|october|november|december)[\s\-_]+\d{1,2}(?:st|nd|rd|th)?(?:[\s\-_,]+\d{2,4})?\b/gi, '')
+    .replace(/\b(yesterday|kal|beeta kal|parso|today|aaj)\b/gi, '');
+
+  const hasRemainingNumber = /\b\d+(\.\d+)?\b/.test(textWithoutDate);
+
+  if (isQueryPattern && !hasRemainingNumber) {
+    return parsedDate;
+  }
+
+  // If there are no other numbers, and the text is primarily a date inquiry
+  if (!hasRemainingNumber) {
+    return parsedDate;
+  }
+
+  return null;
+}
+
+export function buildDateReportTelegramMessage(userId: string, targetDate: string, userName: string): string {
+  const store = getUserData(userId);
+  const matching = store.transactions.filter(t => t.date === targetDate);
+
+  // Format date display
+  const [y, m, d] = targetDate.split('-').map(Number);
+  const dateObj = new Date(Date.UTC(y, m - 1, d, 12, 0, 0));
+  const formattedDate = new Intl.DateTimeFormat('en-IN', {
+    timeZone: APP_TIMEZONE,
+    weekday: 'long',
+    day: '2-digit',
+    month: 'long',
+    year: 'numeric',
+  }).format(dateObj);
+
+  let totalIncome = 0;
+  let totalExpense = 0;
+
+  for (const t of matching) {
+    if (t.type === 'income') {
+      totalIncome += (Number(t.amount) || 0);
+    } else {
+      totalExpense += (Number(t.amount) || 0);
+    }
+  }
+
+  const net = totalIncome - totalExpense;
+
+  if (matching.length === 0) {
+    return `📅 <b>TAREEQ KA HISAAB-KITAAB REPORT</b>
+<b>${formattedDate}</b> (<code>${targetDate}</code>)
+━━━━━━━━━━━━━━━━━━━━
+👤 <b>Khata:</b> ${userName}
+
+ℹ️ <b>Is tareeq ko koi bhi kharcha ya income record nahi hua tha.</b>
+
+🟢 <b>Income:</b> ₹0
+🔴 <b>Kharcha:</b> ₹0
+💰 <b>Net Day Savings:</b> ₹0
+
+━━━━━━━━━━━━━━━━━━━━
+💡 <b>Is tareeq par kharcha ya income add karne ke liye aise likhein:</b>
+• <code>300 dahi cash on ${targetDate}</code>
+• <code>500 petrol upi on ${targetDate}</code>
+• <code>salary 25000 bank on ${targetDate}</code>`;
+  }
+
+  const txListText = matching.map((t, idx) => {
+    const sign = t.type === 'income' ? '🟢 +' : '🔴 -';
+    const pm = t.paymentMethod ? `[${t.paymentMethod}]` : '';
+    const timeStr = t.time ? ` • 🕒 ${t.time}` : '';
+    const emoji = getCategoryEmoji(t.category);
+    return `<b>[#${idx + 1}]</b> ${sign}₹${t.amount.toLocaleString('en-IN')} • <b>${t.description}</b> (${emoji} ${t.category}) ${pm}${timeStr}`;
+  }).join('\n\n');
+
+  return `📅 <b>TAREEQ KA HISAAB-KITAAB REPORT</b>
+<b>${formattedDate}</b> (<code>${targetDate}</code>)
+━━━━━━━━━━━━━━━━━━━━
+👤 <b>Khata:</b> ${userName}
+🟢 <b>Kul Income (Kamai):</b> ₹${totalIncome.toLocaleString('en-IN')}
+🔴 <b>Kul Kharcha:</b> ₹${totalExpense.toLocaleString('en-IN')}
+💰 <b>Net Day Savings:</b> ${net >= 0 ? '+' : ''}₹${net.toLocaleString('en-IN')}
+📝 <b>Total Transactions:</b> ${matching.length}
+
+━━━━━━━━━━━━━━━━━━━━
+📋 <b>IS DIN KE SAARE TRANSACTIONS:</b>
+
+${txListText}
+
+━━━━━━━━━━━━━━━━━━━━
+💡 <i>Tip: Kisi transaction ko delete karne ke liye <code>/delete &lt;number&gt;</code> ya <code>/undo</code> bhejein!</i>`;
+}
+
 // ---------------- Helper to send Telegram message & Handy Buttons ----------------
 
 export const TELEGRAM_BOT_COMMANDS = [
   { command: 'balance', description: '💰 Net balance aur kul bachat dekhein' },
   { command: 'summary', description: '📊 Mahine ki income, kharcha & bachat report' },
+  { command: 'budget', description: '🎯 Category-wise kharcha aur bacha budget' },
+  { command: 'date', description: '📅 Kisi bhi tareeq ka kharcha & income dekhein' },
   { command: 'tips', description: '🤖 AI Faltu Kharcha & Bachat Tips' },
   { command: 'recent', description: '🕒 Haal hi ke aakhri 5 transactions' },
   { command: 'buttons', description: '📱 Handy Quick Action Buttons on screen' },
@@ -1317,6 +1622,7 @@ export const TELEGRAM_BOT_COMMANDS = [
 export const TELEGRAM_HANDY_KEYBOARD = {
   keyboard: [
     [{ text: '💰 Balance' }, { text: '📊 Summary' }],
+    [{ text: '🎯 Category Budget' }, { text: '📅 Aaj Ka Hisab' }],
     [{ text: '🤖 AI Tips & Bachat' }, { text: '🕒 Recent 5 Tx' }],
     [{ text: '🏷️ Categories' }, { text: '↩️ Undo Last' }],
     [{ text: '❓ Help & Guide' }, { text: '📱 Handy Buttons' }],
@@ -1330,6 +1636,10 @@ export const INLINE_KB_MAIN_COMMANDS = {
     [
       { text: '💰 Balance', callback_data: 'cmd_balance' },
       { text: '📊 Summary', callback_data: 'cmd_summary' },
+    ],
+    [
+      { text: '🎯 Category Budget', callback_data: 'cmd_budget' },
+      { text: '📅 Aaj Ka Hisab', callback_data: 'cmd_date_today' },
     ],
     [
       { text: '🤖 AI Faltu Kharcha', callback_data: 'cmd_tips' },
@@ -1440,6 +1750,9 @@ async function handleTelegramCallbackQuery(callbackQuery: any) {
   let simulatedText = '';
   if (data === 'cmd_balance') simulatedText = '/balance';
   else if (data === 'cmd_summary') simulatedText = '/summary';
+  else if (data === 'cmd_budget' || data === 'cmd_catbudget') simulatedText = '/budget';
+  else if (data === 'cmd_date_today') simulatedText = '/date today';
+  else if (data === 'cmd_date_yesterday') simulatedText = '/date yesterday';
   else if (data === 'cmd_tips') simulatedText = '/tips';
   else if (data === 'cmd_recent') simulatedText = '/recent';
   else if (data === 'cmd_categories') simulatedText = '/categories';
@@ -1648,10 +1961,14 @@ Aap neeche diye gaye inline buttons par tap karein, keyboard buttons use karein 
 
 📌 <b>Kharcha ya Kamai add karne ke tareeqe:</b>
 • <code>300 dahi cash</code>
-• <code>500 petrol upi</code>
-• <code>100 sabzi nagad</code>
+• <code>500 petrol upi 2 sep</code>
+• <code>100 sabzi nagad kal</code>
 • <code>salary 50000 bank transfer</code>
 • <code>1200 ki jeans card se</code>
+
+🎯 <b>Budget & Date Reports:</b>
+• <code>/budget</code> - Kon si category me kitna kharcha hua aur kitna balance bacha
+• <code>/date 2 sep</code> ya <code>kal ka kharcha</code> - Kisi specific date ka hisaab-kitaab
 
 🗑️ <b>Delete karne ke commands:</b>
 • <code>/undo</code> ya <code>/delete</code> - Aakhri transaction delete karein
@@ -1662,6 +1979,8 @@ Aap neeche diye gaye inline buttons par tap karein, keyboard buttons use karein 
 📊 <b>Handy Commands:</b>
 /balance - Kul bacha hua balance check karein
 /summary - Mahine ki summary report
+/budget - Category-wise kharcha aur bacha budget
+/date - Tareeq ka hisaab (jaise: <code>/date 2 sep</code> ya <code>kal</code>)
 /tips - Gemini AI se janein kaha faltu kharcha hua aur bachat tips
 /recent - Aakhri 5 transactions dekhein
 /buttons - Handy quick buttons screen par layein
@@ -1763,11 +2082,49 @@ Aap neeche diye gaye inline buttons par tap karein, keyboard buttons use karein 
       inline_keyboard: [
         [
           { text: '💰 Net Balance', callback_data: 'cmd_balance' },
-          { text: '🤖 AI Faltu Kharcha', callback_data: 'cmd_tips' },
+          { text: '🎯 Category Budget', callback_data: 'cmd_budget' },
         ],
         [
+          { text: '🤖 AI Faltu Kharcha', callback_data: 'cmd_tips' },
           { text: '🕒 Recent 5 Tx', callback_data: 'cmd_recent' },
+        ],
+        [
+          { text: '📅 Aaj Ka Hisab', callback_data: 'cmd_date_today' },
           { text: '🏷️ Categories', callback_data: 'cmd_categories' },
+        ],
+      ],
+    });
+    return;
+  }
+
+  // 6.3. Category-Wise Budget & Expense Report Command
+  const isBudgetQuery =
+    command === '/budget' ||
+    command === '/budgets' ||
+    command === '/catbudget' ||
+    command === '/categorybudget' ||
+    lowerText === 'budget' ||
+    lowerText === 'budgets' ||
+    lowerText.includes('🎯 category budget') ||
+    lowerText.includes('category budget') ||
+    lowerText.includes('category wise kharcha') ||
+    lowerText.includes('category wise budget') ||
+    lowerText.includes('kon si category me kitna') ||
+    lowerText.includes('kisme kitna kharcha') ||
+    lowerText.includes('budget status') ||
+    lowerText.includes('budget check');
+
+  if (isBudgetQuery) {
+    const budgetMsg = buildCategoryBudgetTelegramMessage(userId, targetUser.name);
+    await sendTelegramReply(botToken, chatId, budgetMsg, {
+      inline_keyboard: [
+        [
+          { text: '💰 Balance', callback_data: 'cmd_balance' },
+          { text: '📊 Summary', callback_data: 'cmd_summary' },
+        ],
+        [
+          { text: '📅 Aaj Ka Hisab', callback_data: 'cmd_date_today' },
+          { text: '🤖 AI Faltu Kharcha', callback_data: 'cmd_tips' },
         ],
       ],
     });
@@ -2015,6 +2372,25 @@ ${tipsText}
       );
       return;
     }
+  }
+
+  // 8.5. Date-Specific Expense & Income Inquiry (/date <date> or pure date queries like "2 sep", "kal", "parso", "2 sep ka kharcha", "aaj ka hisab")
+  const queriedDate = isPureDateQuery(rawText);
+  if (queriedDate) {
+    const dateReportMsg = buildDateReportTelegramMessage(userId, queriedDate, targetUser.name);
+    await sendTelegramReply(botToken, chatId, dateReportMsg, {
+      inline_keyboard: [
+        [
+          { text: '💰 Balance', callback_data: 'cmd_balance' },
+          { text: '🎯 Category Budget', callback_data: 'cmd_budget' },
+        ],
+        [
+          { text: '📊 Summary', callback_data: 'cmd_summary' },
+          { text: '🤖 AI Tips', callback_data: 'cmd_tips' },
+        ],
+      ],
+    });
+    return;
   }
 
   // 9. AI & Fallback Transaction Parser

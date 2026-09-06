@@ -312,6 +312,12 @@ export const TelegramBotSetupModal: React.FC<TelegramBotSetupModalProps> = ({
                 <div className="bg-slate-900 border border-cyan-500/30 text-cyan-200 px-2.5 py-1.5 rounded-lg text-center font-bold text-[11px]">
                   📊 Summary
                 </div>
+                <div className="bg-slate-900 border border-emerald-500/30 text-emerald-200 px-2.5 py-1.5 rounded-lg text-center font-bold text-[11px]">
+                  🎯 Category Budget
+                </div>
+                <div className="bg-slate-900 border border-teal-500/30 text-teal-200 px-2.5 py-1.5 rounded-lg text-center font-bold text-[11px]">
+                  📅 Aaj Ka Hisab
+                </div>
                 <div className="bg-slate-900 border border-amber-500/30 text-amber-200 px-2.5 py-1.5 rounded-lg text-center font-bold text-[11px]">
                   🤖 AI Tips & Bachat
                 </div>
@@ -342,6 +348,8 @@ export const TelegramBotSetupModal: React.FC<TelegramBotSetupModalProps> = ({
               <div className="grid grid-cols-2 gap-x-2 gap-y-0.5 font-mono text-[10px] text-slate-400">
                 <span>• <code>/balance</code> - Kul bachat</span>
                 <span>• <code>/summary</code> - Mahina report</span>
+                <span>• <code>/budget</code> - Category wise kharcha</span>
+                <span>• <code>/date 2 sep</code> - Date hisaab</span>
                 <span>• <code>/tips</code> - Gemini Faltu kharcha</span>
                 <span>• <code>/recent</code> - Aakhri 5 transactions</span>
                 <span>• <code>/buttons</code> - Handy buttons</span>
