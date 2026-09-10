@@ -3268,27 +3268,44 @@ app.get('/api/budgets', (req, res) => {
   const store = getUserData(user.id);
   syncBudgetsWithCategories(store);
   saveUserData(user.id, store);
-  res.json({ budgets: store.budgets });
+  const summary = calculateUserSummary(user.id);
+  res.json({ budgets: store.budgets, summary });
 });
 
-app.put('/api/budgets', (req, res) => {
+app.put(['/api/budgets', '/api/budgets/set'], (req, res) => {
   const user = getRequestUser(req);
+  if (!user) {
+    return res.status(401).json({ error: 'User session not found' });
+  }
   const store = getUserData(user.id);
-  const { newBudgets } = req.body;
+  const body = req.body || {};
+  const listToProcess: Array<{ category: string; limit: number }> = [];
 
-  if (!Array.isArray(newBudgets)) {
-    return res.status(400).json({ error: 'newBudgets must be an array' });
+  if (Array.isArray(body)) {
+    listToProcess.push(...body);
+  } else if (Array.isArray(body.newBudgets)) {
+    listToProcess.push(...body.newBudgets);
+  } else if (Array.isArray(body.budgets)) {
+    listToProcess.push(...body.budgets);
+  } else if (body.category) {
+    listToProcess.push({ category: String(body.category), limit: Number(body.limit) || 0 });
+  }
+
+  if (listToProcess.length === 0) {
+    return res.status(400).json({ error: 'Invalid budget data provided. Expected array of budgets or { category, limit }.' });
   }
 
   // Update existing or add new
-  for (const nb of newBudgets) {
-    const existing = store.budgets.find(b => b.category.toLowerCase() === nb.category.toLowerCase());
+  for (const nb of listToProcess) {
+    if (!nb.category) continue;
+    const existing = store.budgets.find(b => b.category.toLowerCase() === String(nb.category).toLowerCase());
+    const cleanLimit = Math.max(0, Number(nb.limit) || 0);
     if (existing) {
-      existing.limit = Math.max(0, Number(nb.limit) || 0);
+      existing.limit = cleanLimit;
     } else {
       store.budgets.push({
         category: nb.category,
-        limit: Math.max(0, Number(nb.limit) || 0),
+        limit: cleanLimit,
         spent: 0,
         period: 'monthly',
       });
@@ -3297,8 +3314,55 @@ app.put('/api/budgets', (req, res) => {
 
   syncBudgetsWithCategories(store);
   saveUserData(user.id, store);
+  const summary = calculateUserSummary(user.id);
 
-  res.json({ success: true, budgets: store.budgets });
+  res.json({ success: true, budgets: store.budgets, summary });
+});
+
+app.post(['/api/budgets', '/api/budgets/set'], (req, res) => {
+  const user = getRequestUser(req);
+  if (!user) {
+    return res.status(401).json({ error: 'User session not found' });
+  }
+  const store = getUserData(user.id);
+  const body = req.body || {};
+  const listToProcess: Array<{ category: string; limit: number }> = [];
+
+  if (Array.isArray(body)) {
+    listToProcess.push(...body);
+  } else if (Array.isArray(body.newBudgets)) {
+    listToProcess.push(...body.newBudgets);
+  } else if (Array.isArray(body.budgets)) {
+    listToProcess.push(...body.budgets);
+  } else if (body.category) {
+    listToProcess.push({ category: String(body.category), limit: Number(body.limit) || 0 });
+  }
+
+  if (listToProcess.length === 0) {
+    return res.status(400).json({ error: 'Invalid budget data. Expected category & limit or list of budgets.' });
+  }
+
+  for (const nb of listToProcess) {
+    if (!nb.category) continue;
+    const existing = store.budgets.find(b => b.category.toLowerCase() === String(nb.category).toLowerCase());
+    const cleanLimit = Math.max(0, Number(nb.limit) || 0);
+    if (existing) {
+      existing.limit = cleanLimit;
+    } else {
+      store.budgets.push({
+        category: nb.category,
+        limit: cleanLimit,
+        spent: 0,
+        period: 'monthly',
+      });
+    }
+  }
+
+  syncBudgetsWithCategories(store);
+  saveUserData(user.id, store);
+  const summary = calculateUserSummary(user.id);
+
+  res.json({ success: true, budgets: store.budgets, summary });
 });
 
 // Import Budget from Excel / CSV endpoint

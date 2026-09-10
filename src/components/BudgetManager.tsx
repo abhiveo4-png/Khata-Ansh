@@ -1,8 +1,9 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Target,
   Edit2,
   Check,
+  X,
   AlertCircle,
   TrendingUp,
   ShieldAlert,
@@ -27,10 +28,10 @@ import {
   Wallet,
   Tag,
   HelpCircle,
-  Filter,
+  Sparkles,
+  RotateCcw,
 } from 'lucide-react';
 import { CategoryBudget, Transaction, CategoryDef } from '../types';
-import { formatCurrency } from '../utils/formatters';
 import { safeFetchJson } from '../utils/api';
 import { ExcelBudgetImportModal } from './ExcelBudgetImportModal';
 
@@ -72,32 +73,45 @@ export const BudgetManager: React.FC<BudgetManagerProps> = ({
   onCategoriesUpdated,
   onRefreshTransactions,
 }) => {
-  const [isEditing, setIsEditing] = useState(false);
-  const [editedBudgets, setEditedBudgets] = useState<CategoryBudget[]>(budgets);
-  const [isSaving, setIsSaving] = useState(false);
+  // Global bulk editing mode
+  const [isBulkEditing, setIsBulkEditing] = useState(false);
+  // Bulk inputs mapping category name -> string representation of limit
+  const [bulkInputValues, setBulkInputValues] = useState<Record<string, string>>({});
+  const [isSavingBulk, setIsSavingBulk] = useState(false);
+
+  // Single card inline editing mode
+  const [singleEditingCat, setSingleEditingCat] = useState<string | null>(null);
+  const [singleInputValue, setSingleInputValue] = useState<string>('');
+  const [isSavingSingle, setIsSavingSingle] = useState(false);
+  const singleInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Toast / feedback message
+  const [toastMessage, setToastMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
+
   const [isExcelModalOpen, setIsExcelModalOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'exceeded' | 'warning' | 'safe' | 'unallocated'>('all');
   const [deletingCatName, setDeletingCatName] = useState<string | null>(null);
 
-  // Keep editedBudgets synchronized when prop updates
+  // Focus single input when singleEditingCat changes
   useEffect(() => {
-    // Process only active categories so old removed categories don't linger
-    const unified: CategoryBudget[] = [];
+    if (singleEditingCat && singleInputRef.current) {
+      singleInputRef.current.focus();
+      singleInputRef.current.select();
+    }
+  }, [singleEditingCat]);
 
+  // Sync bulk inputs from props whenever budgets change (only when not actively editing)
+  useEffect(() => {
+    if (isBulkEditing || singleEditingCat) return;
+
+    const initialMap: Record<string, string> = {};
     categories.forEach((cat) => {
-      const catName = cat.name;
-      const existing = budgets.find((b) => b.category.toLowerCase() === catName.toLowerCase());
-      unified.push({
-        category: catName,
-        limit: existing ? existing.limit : 0,
-        spent: existing ? existing.spent : 0,
-        period: 'monthly',
-      });
+      const existing = budgets.find((b) => b.category.toLowerCase() === cat.name.toLowerCase());
+      initialMap[cat.name] = existing ? String(existing.limit) : '0';
     });
-
-    setEditedBudgets(unified);
-  }, [budgets, categories]);
+    setBulkInputValues(initialMap);
+  }, [budgets, categories, isBulkEditing, singleEditingCat]);
 
   // Calculate spent per category from current month transactions
   const spentMap: Record<string, number> = useMemo(() => {
@@ -105,7 +119,7 @@ export const BudgetManager: React.FC<BudgetManagerProps> = ({
     transactions.forEach((tx) => {
       if (tx.type === 'expense') {
         const catName = tx.category || 'Uncategorized';
-        map[catName.toLowerCase()] = (map[catName.toLowerCase()] || 0) + tx.amount;
+        map[catName.toLowerCase()] = (map[catName.toLowerCase()] || 0) + (Number(tx.amount) || 0);
       }
     });
     return map;
@@ -113,9 +127,6 @@ export const BudgetManager: React.FC<BudgetManagerProps> = ({
 
   // Master list of displayed budget items synced with categories
   const displayBudgets = useMemo(() => {
-    const sourceList = isEditing ? editedBudgets : budgets;
-
-    // Guarantee that only currently defined categories appear in the list
     const merged: Array<{
       category: string;
       limit: number;
@@ -124,18 +135,26 @@ export const BudgetManager: React.FC<BudgetManagerProps> = ({
     }> = [];
 
     categories.forEach((cat) => {
-      const budgetEntry = sourceList.find((b) => b.category.toLowerCase() === cat.name.toLowerCase());
+      let limit = 0;
+      if (isBulkEditing) {
+        const valStr = bulkInputValues[cat.name];
+        limit = valStr !== undefined ? Math.max(0, parseInt(valStr, 10) || 0) : 0;
+      } else {
+        const budgetEntry = budgets.find((b) => b.category.toLowerCase() === cat.name.toLowerCase());
+        limit = budgetEntry ? budgetEntry.limit : 0;
+      }
+
       const spent = spentMap[cat.name.toLowerCase()] || 0;
       merged.push({
         category: cat.name,
-        limit: budgetEntry ? budgetEntry.limit : 0,
+        limit,
         spent,
         categoryDef: cat,
       });
     });
 
     return merged;
-  }, [categories, budgets, editedBudgets, isEditing, spentMap]);
+  }, [categories, budgets, bulkInputValues, isBulkEditing, spentMap]);
 
   // Filtered list based on search and status
   const filteredBudgets = useMemo(() => {
@@ -176,37 +195,149 @@ export const BudgetManager: React.FC<BudgetManagerProps> = ({
     return displayBudgets.filter((b) => b.limit > 0 && b.spent > b.limit).length;
   }, [displayBudgets]);
 
-  const handleLimitChange = (categoryName: string, newLimit: number) => {
-    const val = Math.max(0, newLimit);
-    setEditedBudgets((prev) => {
-      const exists = prev.some((b) => b.category.toLowerCase() === categoryName.toLowerCase());
-      if (exists) {
-        return prev.map((b) =>
-          b.category.toLowerCase() === categoryName.toLowerCase() ? { ...b, limit: val } : b
-        );
+  // Helper to trigger toast
+  const showToast = (text: string, type: 'success' | 'error' = 'success') => {
+    setToastMessage({ text, type });
+    setTimeout(() => {
+      setToastMessage(null);
+    }, 4000);
+  };
+
+  // ---------------- Single Card Edit Handlers ----------------
+
+  const handleStartSingleEdit = (categoryName: string, currentLimit: number) => {
+    setSingleEditingCat(categoryName);
+    setSingleInputValue(currentLimit > 0 ? String(currentLimit) : '');
+  };
+
+  const handleCancelSingleEdit = () => {
+    setSingleEditingCat(null);
+    setSingleInputValue('');
+  };
+
+  const handleSaveSingleEdit = async (categoryName: string) => {
+    const parsedLimit = Math.max(0, parseInt(singleInputValue.trim(), 10) || 0);
+    setIsSavingSingle(true);
+    try {
+      // Build unified new budgets list
+      const updatedList: CategoryBudget[] = categories.map((cat) => {
+        if (cat.name.toLowerCase() === categoryName.toLowerCase()) {
+          return {
+            category: cat.name,
+            limit: parsedLimit,
+            spent: spentMap[cat.name.toLowerCase()] || 0,
+            period: 'monthly',
+          };
+        }
+        const existing = budgets.find((b) => b.category.toLowerCase() === cat.name.toLowerCase());
+        return {
+          category: cat.name,
+          limit: existing ? existing.limit : 0,
+          spent: existing ? existing.spent : 0,
+          period: 'monthly',
+        };
+      });
+
+      // Send to server
+      const { data, error } = await safeFetchJson<{
+        success: boolean;
+        budgets: CategoryBudget[];
+      }>('/api/budgets', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ category: categoryName, limit: parsedLimit, newBudgets: updatedList }),
+      });
+
+      if (error || !data?.success) {
+        showToast(error || 'Budget update karne me dikkat aayi', 'error');
+      } else {
+        await onUpdateBudgets(data.budgets || updatedList);
+        setSingleEditingCat(null);
+        showToast(`✅ "${categoryName}" ka monthly budget ₹${parsedLimit.toLocaleString('en-IN')} set ho gaya!`);
       }
-      return [...prev, { category: categoryName, limit: val, spent: 0, period: 'monthly' }];
+    } catch (err: any) {
+      console.error('Failed to save single budget', err);
+      showToast('Budget save karne me error aaya: ' + (err.message || 'Unknown error'), 'error');
+    } finally {
+      setIsSavingSingle(false);
+    }
+  };
+
+  const handleSingleQuickAdd = (amount: number) => {
+    const current = Math.max(0, parseInt(singleInputValue.trim(), 10) || 0);
+    if (amount === 0) {
+      setSingleInputValue('0');
+    } else {
+      setSingleInputValue(String(current + amount));
+    }
+  };
+
+  // ---------------- Bulk Edit Handlers ----------------
+
+  const handleStartBulkEdit = () => {
+    const map: Record<string, string> = {};
+    categories.forEach((cat) => {
+      const existing = budgets.find((b) => b.category.toLowerCase() === cat.name.toLowerCase());
+      map[cat.name] = existing ? String(existing.limit) : '0';
+    });
+    setBulkInputValues(map);
+    setIsBulkEditing(true);
+    setSingleEditingCat(null);
+  };
+
+  const handleCancelBulkEdit = () => {
+    setIsBulkEditing(false);
+  };
+
+  const handleBulkInputChange = (categoryName: string, value: string) => {
+    // Allow digits or empty string
+    const clean = value.replace(/[^0-9]/g, '');
+    setBulkInputValues((prev) => ({
+      ...prev,
+      [categoryName]: clean,
+    }));
+  };
+
+  const handleSaveBulk = async () => {
+    setIsSavingBulk(true);
+    try {
+      const updatedList: CategoryBudget[] = categories.map((cat) => {
+        const valStr = bulkInputValues[cat.name];
+        const limit = valStr !== undefined ? Math.max(0, parseInt(valStr, 10) || 0) : 0;
+        return {
+          category: cat.name,
+          limit,
+          spent: spentMap[cat.name.toLowerCase()] || 0,
+          period: 'monthly',
+        };
+      });
+
+      await onUpdateBudgets(updatedList);
+      setIsBulkEditing(false);
+      showToast(`✅ Saare ${updatedList.length} categories ke budgets successfully save ho gaye!`);
+    } catch (err: any) {
+      console.error('Failed to save bulk budgets', err);
+      showToast('Budgets save karne me error aaya: ' + (err.message || 'Unknown error'), 'error');
+    } finally {
+      setIsSavingBulk(false);
+    }
+  };
+
+  const handleBulkQuickApply = (action: 'zero' | '5000' | '10000' | 'add1000') => {
+    setBulkInputValues((prev) => {
+      const next = { ...prev };
+      categories.forEach((cat) => {
+        const current = Math.max(0, parseInt(next[cat.name] || '0', 10) || 0);
+        if (action === 'zero') next[cat.name] = '0';
+        else if (action === '5000') next[cat.name] = '5000';
+        else if (action === '10000') next[cat.name] = '10000';
+        else if (action === 'add1000') next[cat.name] = String(current + 1000);
+      });
+      return next;
     });
   };
 
-  const handleSave = async () => {
-    setIsSaving(true);
-    try {
-      await onUpdateBudgets(editedBudgets);
-      setIsEditing(false);
-    } catch (err) {
-      console.error('Failed to save budgets', err);
-    } finally {
-      setIsSaving(false);
-    }
-  };
-
-  const handleExcelImportSuccess = (newCats: CategoryDef[], newBudge: CategoryBudget[]) => {
-    if (onCategoriesUpdated) {
-      onCategoriesUpdated(newCats, newBudge);
-    }
-    onUpdateBudgets(newBudge);
-  };
+  // ---------------- Category Deletion ----------------
 
   const handleDeleteCategory = async (categoryName: string, categoryId?: string) => {
     if (categoryName.toLowerCase() === 'uncategorized') {
@@ -229,15 +360,12 @@ export const BudgetManager: React.FC<BudgetManagerProps> = ({
       });
 
       if (error || !data?.success) {
-        alert(error || 'Category delete karne me error aaya.');
+        showToast(error || 'Category delete karne me error aaya.', 'error');
         return;
       }
 
-      // Update local and parent states
       const updatedCats = data.categories || categories.filter(c => c.name.toLowerCase() !== categoryName.toLowerCase());
       const updatedBudgets = data.budgets || budgets.filter(b => b.category.toLowerCase() !== categoryName.toLowerCase());
-
-      setEditedBudgets((prev) => prev.filter(b => b.category.toLowerCase() !== categoryName.toLowerCase()));
 
       if (onCategoriesUpdated) {
         onCategoriesUpdated(updatedCats, updatedBudgets);
@@ -245,16 +373,47 @@ export const BudgetManager: React.FC<BudgetManagerProps> = ({
       if (onRefreshTransactions) {
         onRefreshTransactions();
       }
+      showToast(`🗑️ "${categoryName}" category delete ho gayi.`);
     } catch (err: any) {
       console.error('Delete category error', err);
-      alert('Failed to delete category: ' + err.message);
+      showToast('Failed to delete category: ' + err.message, 'error');
     } finally {
       setDeletingCatName(null);
     }
   };
 
+  const handleExcelImportSuccess = (newCats: CategoryDef[], newBudge: CategoryBudget[]) => {
+    if (onCategoriesUpdated) {
+      onCategoriesUpdated(newCats, newBudge);
+    }
+    onUpdateBudgets(newBudge);
+    showToast('📊 Excel file se saari categories aur budgets successfully allocate ho gaye!');
+  };
+
   return (
     <div className="space-y-6">
+      {/* Toast Notification Alert */}
+      {toastMessage && (
+        <div
+          className={`p-3.5 rounded-xl border flex items-center justify-between text-xs font-mono transition-all animate-in fade-in slide-in-from-top-2 duration-300 ${
+            toastMessage.type === 'success'
+              ? 'bg-emerald-950/90 border-emerald-500/50 text-emerald-200 shadow-lg shadow-emerald-950/50'
+              : 'bg-rose-950/90 border-rose-500/50 text-rose-200 shadow-lg shadow-rose-950/50'
+          }`}
+        >
+          <div className="flex items-center space-x-2">
+            <Sparkles className="w-4 h-4 text-emerald-400" />
+            <span className="font-semibold">{toastMessage.text}</span>
+          </div>
+          <button
+            onClick={() => setToastMessage(null)}
+            className="p-1 text-slate-400 hover:text-white"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
+
       {/* Top Banner & Budget Controls */}
       <div className="bg-[#0c1222]/85 rounded-2xl border border-slate-800 backdrop-blur-xl p-5 sm:p-6 shadow-2xl shadow-black/50">
         <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 pb-5 border-b border-slate-800">
@@ -271,7 +430,7 @@ export const BudgetManager: React.FC<BudgetManagerProps> = ({
               </span>
             </div>
             <p className="text-xs font-mono text-slate-400 mt-1">
-              Har category ke liye monthly kharcha limit set karein. Categories tab ke sath 100% sync hai.
+              Har category ke card par <b>Pencil Icon ✏️</b> dabayein ya upar <b>"LIMITS EDIT KAREIN"</b> se sabhi limits badlein.
             </p>
           </div>
 
@@ -286,40 +445,70 @@ export const BudgetManager: React.FC<BudgetManagerProps> = ({
               <span>EXCEL SE ALLOCATE KAREIN</span>
             </button>
 
-            {isEditing ? (
+            {isBulkEditing ? (
               <div className="flex items-center space-x-2">
                 <button
-                  onClick={() => {
-                    setEditedBudgets(budgets);
-                    setIsEditing(false);
-                  }}
+                  onClick={handleCancelBulkEdit}
                   className="px-3.5 py-2 rounded-xl border border-slate-700 text-xs font-mono text-slate-400 hover:text-white hover:bg-slate-800 transition-all cursor-pointer"
                 >
                   CANCEL
                 </button>
                 <button
-                  onClick={handleSave}
-                  disabled={isSaving}
+                  onClick={handleSaveBulk}
+                  disabled={isSavingBulk}
                   className="px-4 py-2 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 text-xs font-mono font-bold flex items-center space-x-1.5 shadow-lg shadow-cyan-950/50 transition-all cursor-pointer"
                 >
                   <Check className="w-4 h-4 stroke-[3]" />
-                  <span>{isSaving ? 'SAVING...' : 'SAVE BUDGETS'}</span>
+                  <span>{isSavingBulk ? 'SAVING ALL...' : 'SAVE ALL BUDGETS'}</span>
                 </button>
               </div>
             ) : (
               <button
-                onClick={() => {
-                  setEditedBudgets(budgets);
-                  setIsEditing(true);
-                }}
-                className="px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-xs font-mono text-cyan-300 flex items-center space-x-1.5 transition-all cursor-pointer"
+                onClick={handleStartBulkEdit}
+                className="px-4 py-2 rounded-xl bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/40 text-xs font-mono font-bold text-cyan-300 flex items-center space-x-1.5 transition-all cursor-pointer shadow-md shadow-cyan-950/30"
               >
                 <Edit2 className="w-3.5 h-3.5 text-cyan-400" />
-                <span>LIMITS EDIT KAREIN</span>
+                <span>LIMITS EDIT KAREIN (BULK)</span>
               </button>
             )}
           </div>
         </div>
+
+        {/* Bulk Editing Quick Tools Bar (When bulk editing is active) */}
+        {isBulkEditing && (
+          <div className="mt-4 p-3 bg-cyan-950/30 border border-cyan-500/30 rounded-xl flex flex-wrap items-center justify-between gap-2.5 text-xs font-mono">
+            <div className="flex items-center space-x-1.5 text-cyan-300 font-semibold">
+              <Sparkles className="w-3.5 h-3.5 text-cyan-400" />
+              <span>Bulk Quick Presets:</span>
+            </div>
+            <div className="flex flex-wrap items-center gap-1.5">
+              <button
+                onClick={() => handleBulkQuickApply('5000')}
+                className="px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-300 text-[11px] hover:border-cyan-500/40 transition-all"
+              >
+                All ₹5,000
+              </button>
+              <button
+                onClick={() => handleBulkQuickApply('10000')}
+                className="px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-300 text-[11px] hover:border-cyan-500/40 transition-all"
+              >
+                All ₹10,000
+              </button>
+              <button
+                onClick={() => handleBulkQuickApply('add1000')}
+                className="px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-300 text-[11px] hover:border-cyan-500/40 transition-all"
+              >
+                +₹1,000 to All
+              </button>
+              <button
+                onClick={() => handleBulkQuickApply('zero')}
+                className="px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-rose-950/50 border border-slate-700 hover:border-rose-500/40 text-rose-300 text-[11px] transition-all"
+              >
+                Reset All to ₹0
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Financial Highlights Bar */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-5 pt-1">
@@ -432,7 +621,7 @@ export const BudgetManager: React.FC<BudgetManagerProps> = ({
         </div>
       </div>
 
-      {/* Grid of Category Budgets (Showing ALL categories from Categories tab) */}
+      {/* Grid of Category Budgets */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {filteredBudgets.map((b) => {
           const spent = b.spent;
@@ -440,6 +629,8 @@ export const BudgetManager: React.FC<BudgetManagerProps> = ({
           const percent = limit > 0 ? Math.min(100, Math.round((spent / limit) * 100)) : 0;
           const isOver = spent > limit && limit > 0;
           const isNear = limit > 0 && percent >= 80 && !isOver;
+
+          const isCardSingleEditing = singleEditingCat === b.category;
 
           // Icon and Color styling
           const iconName = b.categoryDef?.icon || 'Tag';
@@ -450,7 +641,9 @@ export const BudgetManager: React.FC<BudgetManagerProps> = ({
             <div
               key={b.category}
               className={`p-4 rounded-2xl border transition-all duration-200 ${
-                isOver
+                isCardSingleEditing
+                  ? 'bg-slate-900 border-cyan-400 shadow-xl shadow-cyan-950/50 ring-1 ring-cyan-500/40'
+                  : isOver
                   ? 'bg-rose-950/20 border-rose-500/40 shadow-lg shadow-rose-950/20'
                   : isNear
                   ? 'bg-amber-950/15 border-amber-500/40 shadow-md shadow-amber-950/20'
@@ -509,7 +702,7 @@ export const BudgetManager: React.FC<BudgetManagerProps> = ({
                   )}
 
                   {/* Delete category button */}
-                  {b.category.toLowerCase() !== 'uncategorized' && (
+                  {b.category.toLowerCase() !== 'uncategorized' && !isBulkEditing && !isCardSingleEditing && (
                     <button
                       onClick={() => handleDeleteCategory(b.category, b.categoryDef?.id)}
                       disabled={deletingCatName === b.category}
@@ -527,27 +720,115 @@ export const BudgetManager: React.FC<BudgetManagerProps> = ({
                 <div className="text-slate-400">
                   SPENT: <span className="text-white font-bold">₹{spent.toLocaleString('en-IN')}</span>
                 </div>
-                {isEditing ? (
-                  <div className="flex items-center space-x-1.5">
-                    <span className="text-cyan-400 text-xs">LIMIT: ₹</span>
+
+                {/* Limit Section */}
+                {isBulkEditing ? (
+                  /* Bulk Editing Input */
+                  <div className="flex items-center space-x-1">
+                    <span className="text-cyan-400 text-xs">₹</span>
                     <input
-                      type="number"
-                      min="0"
-                      step="500"
-                      value={b.limit}
-                      onChange={(e) => handleLimitChange(b.category, parseInt(e.target.value) || 0)}
-                      className="w-24 px-2 py-1 bg-slate-950 border border-cyan-500/50 rounded-lg text-xs font-mono font-bold text-cyan-300 focus:outline-hidden focus:ring-1 focus:ring-cyan-400"
+                      type="text"
+                      inputMode="numeric"
+                      value={bulkInputValues[b.category] ?? String(b.limit)}
+                      placeholder="0"
+                      onChange={(e) => handleBulkInputChange(b.category, e.target.value)}
+                      className="w-24 px-2 py-1 bg-slate-950 border border-cyan-500/60 rounded-lg text-xs font-mono font-bold text-cyan-300 focus:outline-hidden focus:ring-1 focus:ring-cyan-400 text-right"
+                    />
+                  </div>
+                ) : isCardSingleEditing ? (
+                  /* Single Card Inline Editor */
+                  <div className="flex items-center space-x-1">
+                    <span className="text-cyan-400 text-xs font-bold">₹</span>
+                    <input
+                      ref={singleInputRef}
+                      type="text"
+                      inputMode="numeric"
+                      value={singleInputValue}
+                      placeholder="0"
+                      onChange={(e) => setSingleInputValue(e.target.value.replace(/[^0-9]/g, ''))}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') handleSaveSingleEdit(b.category);
+                        else if (e.key === 'Escape') handleCancelSingleEdit();
+                      }}
+                      className="w-24 px-2 py-1 bg-slate-950 border border-cyan-400 rounded-lg text-xs font-mono font-bold text-cyan-300 focus:outline-hidden ring-1 ring-cyan-400 text-right shadow-inner"
                     />
                   </div>
                 ) : (
-                  <div className="text-slate-400">
-                    LIMIT:{' '}
-                    <span className="text-cyan-400 font-bold">
-                      {limit > 0 ? `₹${limit.toLocaleString('en-IN')}` : '₹0 (Not Set)'}
-                    </span>
+                  /* Normal View with Quick Pencil / Edit Trigger */
+                  <div className="flex items-center space-x-1.5">
+                    <div
+                      onClick={() => handleStartSingleEdit(b.category, b.limit)}
+                      className="group flex items-center space-x-1 cursor-pointer bg-slate-950/60 hover:bg-cyan-950/40 border border-slate-800 hover:border-cyan-500/40 px-2 py-0.5 rounded-lg transition-all"
+                      title="Is category ki monthly budget limit edit karein"
+                    >
+                      <span className="text-slate-400 text-[11px]">LIMIT:</span>
+                      <span className="text-cyan-400 font-bold">
+                        {limit > 0 ? `₹${limit.toLocaleString('en-IN')}` : '₹0'}
+                      </span>
+                      <Edit2 className="w-3 h-3 text-slate-500 group-hover:text-cyan-400 transition-colors ml-0.5" />
+                    </div>
                   </div>
                 )}
               </div>
+
+              {/* Single Card Editing Action Panel & Quick Add Buttons */}
+              {isCardSingleEditing && (
+                <div className="mt-3 pt-2.5 border-t border-cyan-500/20 space-y-2">
+                  <div className="flex items-center justify-between gap-1">
+                    <div className="flex items-center space-x-1">
+                      <button
+                        type="button"
+                        onClick={() => handleSingleQuickAdd(500)}
+                        className="px-1.5 py-0.5 rounded bg-slate-950 border border-slate-800 hover:border-cyan-500/40 text-[10px] font-mono text-cyan-300"
+                      >
+                        +500
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleSingleQuickAdd(1000)}
+                        className="px-1.5 py-0.5 rounded bg-slate-950 border border-slate-800 hover:border-cyan-500/40 text-[10px] font-mono text-cyan-300"
+                      >
+                        +1k
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleSingleQuickAdd(5000)}
+                        className="px-1.5 py-0.5 rounded bg-slate-950 border border-slate-800 hover:border-cyan-500/40 text-[10px] font-mono text-cyan-300"
+                      >
+                        +5k
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleSingleQuickAdd(0)}
+                        className="px-1.5 py-0.5 rounded bg-slate-950 border border-slate-800 hover:border-rose-500/40 text-[10px] font-mono text-rose-300"
+                      >
+                        Clear
+                      </button>
+                    </div>
+
+                    <div className="flex items-center space-x-1">
+                      <button
+                        type="button"
+                        onClick={handleCancelSingleEdit}
+                        className="p-1 rounded-lg border border-slate-700 text-slate-400 hover:text-white hover:bg-slate-800 transition-all"
+                        title="Cancel"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        disabled={isSavingSingle}
+                        onClick={() => handleSaveSingleEdit(b.category)}
+                        className="px-2.5 py-1 rounded-lg bg-cyan-500 hover:bg-cyan-400 text-slate-950 text-xs font-mono font-bold flex items-center space-x-1 shadow-md transition-all cursor-pointer"
+                        title="Save limit"
+                      >
+                        <Check className="w-3.5 h-3.5 stroke-[3]" />
+                        <span>{isSavingSingle ? '...' : 'SAVE'}</span>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {/* Progress Bar */}
               <div className="mt-3">

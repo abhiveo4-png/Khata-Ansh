@@ -132,9 +132,12 @@ export default function App() {
 
   // Fetch category budgets
   const fetchBudgets = useCallback(async () => {
-    const { data } = await safeFetchJson<{ budgets?: CategoryBudget[] }>('/api/budgets');
+    const { data } = await safeFetchJson<{ budgets?: CategoryBudget[]; summary?: FinancialSummary }>('/api/budgets');
     if (data?.budgets) {
       setBudgets(data.budgets);
+    }
+    if (data?.summary) {
+      setSummary(data.summary);
     }
   }, []);
 
@@ -286,13 +289,16 @@ export default function App() {
   };
 
   const handleUpdateBudgets = async (newBudgets: CategoryBudget[]) => {
-    const { data } = await safeFetchJson<{ success?: boolean; budgets?: CategoryBudget[] }>('/api/budgets', {
+    const { data } = await safeFetchJson<{ success?: boolean; budgets?: CategoryBudget[]; summary?: FinancialSummary }>('/api/budgets', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ newBudgets }),
     });
     if (data?.success && data.budgets) {
       setBudgets(data.budgets);
+      if (data.summary) {
+        setSummary(data.summary);
+      }
       fetchTransactions();
     }
   };
