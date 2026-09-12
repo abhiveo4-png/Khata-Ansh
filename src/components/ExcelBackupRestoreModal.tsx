@@ -20,7 +20,10 @@ import {
   HardDrive,
   Copy,
   Check,
-  ExternalLink
+  ExternalLink,
+  Tag,
+  User,
+  Wallet
 } from 'lucide-react';
 import { safeFetchJson } from '../utils/api';
 import { Transaction, CategoryDef, CategoryBudget, FinancialSummary } from '../types';
@@ -43,7 +46,7 @@ interface ExcelBackupRestoreModalProps {
   onClose: () => void;
   transactions: Transaction[];
   categories: CategoryDef[];
-  currentUser: { name: string; id: string } | null;
+  currentUser: { name: string; id: string; telegramUsername?: string; telegramChatId?: string; linkCode?: string } | null;
   onRestoreSuccess: (result: {
     transactions: Transaction[];
     categories: CategoryDef[];
@@ -62,9 +65,12 @@ export const ExcelBackupRestoreModal: React.FC<ExcelBackupRestoreModalProps> = (
   currentUser,
   onRestoreSuccess,
 }) => {
-  const [activeTab, setActiveTab] = useState<'restore' | 'export' | 'storage'>('restore');
+  const [activeTab, setActiveTab] = useState<'export' | 'restore' | 'storage'>('export');
   const [file, setFile] = useState<File | null>(null);
+  const [fileBase64, setFileBase64] = useState<string | null>(null);
   const [parsedRows, setParsedRows] = useState<any[]>([]);
+  const [parsedCatRows, setParsedCatRows] = useState<any[]>([]);
+  const [detectedSheets, setDetectedSheets] = useState<string[]>([]);
   const [replaceExisting, setReplaceExisting] = useState<boolean>(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -132,22 +138,54 @@ export const ExcelBackupRestoreModal: React.FC<ExcelBackupRestoreModalProps> = (
 
     try {
       const data = await selectedFile.arrayBuffer();
-      const workbook = XLSX.read(data, { type: 'array' });
-      const firstSheetName = workbook.SheetNames[0];
-      const worksheet = workbook.Sheets[firstSheetName];
-      const rows = XLSX.utils.sheet_to_json<any>(worksheet);
+      
+      // Convert to Base64 for high-fidelity server restore
+      const bytes = new Uint8Array(data);
+      let binary = '';
+      for (let i = 0; i < bytes.byteLength; i++) {
+        binary += String.fromCharCode(bytes[i]);
+      }
+      const base64 = btoa(binary);
+      setFileBase64(base64);
 
-      if (!rows || rows.length === 0) {
+      // Read with XLSX on client for instant UI inspection
+      const workbook = XLSX.read(data, { type: 'array' });
+      setDetectedSheets(workbook.SheetNames);
+
+      let txRows: any[] = [];
+      let catRows: any[] = [];
+
+      for (const sName of workbook.SheetNames) {
+        const lowerName = sName.toLowerCase();
+        const sheet = workbook.Sheets[sName];
+        const rows = XLSX.utils.sheet_to_json<any>(sheet);
+        if (lowerName.includes('transaction') || lowerName.includes('ledger')) {
+          txRows = rows;
+        } else if (lowerName.includes('categor') || lowerName.includes('budget')) {
+          catRows = rows;
+        }
+      }
+
+      // If no explicit transaction sheet, use first sheet
+      if (txRows.length === 0 && workbook.SheetNames.length > 0) {
+        txRows = XLSX.utils.sheet_to_json<any>(workbook.Sheets[workbook.SheetNames[0]]);
+      }
+
+      if (txRows.length === 0 && catRows.length === 0) {
         setError('Uploaded file khali hai ya koi valid records nahi mile.');
         setParsedRows([]);
+        setParsedCatRows([]);
         return;
       }
 
-      setParsedRows(rows);
+      setParsedRows(txRows);
+      setParsedCatRows(catRows);
     } catch (err: any) {
       console.error('File parsing error', err);
       setError(`File padhne me error: ${err.message || 'Invalid Excel/CSV format'}`);
       setParsedRows([]);
+      setParsedCatRows([]);
+      setFileBase64(null);
     }
   };
 
@@ -167,8 +205,8 @@ export const ExcelBackupRestoreModal: React.FC<ExcelBackupRestoreModalProps> = (
 
   // Trigger restore API
   const handleRestore = async () => {
-    if (parsedRows.length === 0) {
-      setError('Pehle ek valid Excel ya CSV backup file chuniye.');
+    if (parsedRows.length === 0 && parsedCatRows.length === 0 && !fileBase64) {
+      setError('Pehle ek valid Excel (.xlsx) ya CSV backup file chuniye.');
       return;
     }
 
@@ -191,6 +229,8 @@ export const ExcelBackupRestoreModal: React.FC<ExcelBackupRestoreModalProps> = (
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           rows: parsedRows,
+          categoriesRows: parsedCatRows,
+          fileBase64: fileBase64,
           replaceExisting,
         }),
       });
@@ -200,12 +240,12 @@ export const ExcelBackupRestoreModal: React.FC<ExcelBackupRestoreModalProps> = (
         return;
       }
 
-      setSuccessMessage(data.message || `${data.restoredCount} transactions successfully restore ho gaye hain!`);
+      setSuccessMessage(data.message || `Pure account ka backup successfully restore ho gaya!`);
       onRestoreSuccess(data);
 
       setTimeout(() => {
         onClose();
-      }, 1800);
+      }, 1600);
     } catch (err: any) {
       setError(err?.message || 'Failed to restore transactions');
     } finally {
@@ -219,24 +259,24 @@ export const ExcelBackupRestoreModal: React.FC<ExcelBackupRestoreModalProps> = (
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/80 backdrop-blur-md overflow-y-auto">
-      <div className="bg-[#0b1220] border border-slate-800 rounded-3xl w-full max-w-2xl overflow-hidden shadow-2xl shadow-cyan-950/30 my-auto text-slate-100 flex flex-col max-h-[92vh]">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/85 backdrop-blur-md overflow-y-auto">
+      <div className="bg-[#0b1220] border border-slate-800 rounded-3xl w-full max-w-2xl overflow-hidden shadow-2xl shadow-cyan-950/40 my-auto text-slate-100 flex flex-col max-h-[92vh]">
         
         {/* Header */}
-        <div className="p-5 sm:p-6 border-b border-slate-800 flex items-center justify-between bg-gradient-to-r from-slate-900/90 to-cyan-950/40">
-          <div className="flex items-center space-x-3">
-            <div className="w-10 h-10 rounded-2xl bg-cyan-950/80 border border-cyan-500/50 flex items-center justify-center text-cyan-400 shadow-md shadow-cyan-950/50">
-              <FileSpreadsheet className="w-5 h-5" />
+        <div className="p-5 sm:p-6 border-b border-slate-800 flex items-center justify-between bg-gradient-to-r from-slate-900 via-indigo-950/50 to-cyan-950/40">
+          <div className="flex items-center space-x-3.5">
+            <div className="w-11 h-11 rounded-2xl bg-gradient-to-br from-indigo-600 to-cyan-500 flex items-center justify-center text-white shadow-lg shadow-indigo-900/40 shrink-0">
+              <FileSpreadsheet className="w-6 h-6" />
             </div>
             <div>
               <h2 className="text-base sm:text-lg font-bold text-white font-display flex items-center gap-2">
                 EXCEL BACKUP & RESTORE
                 <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-cyan-950 border border-cyan-500/40 text-cyan-300">
-                  RAW MESSAGE SUPPORT
+                  ALL-IN-ONE
                 </span>
               </h2>
-              <p className="text-xs text-slate-400 font-mono">
-                Puri transaction list, raw messages aur categories ka backup download karein ya naye khate me restore karein.
+              <p className="text-xs text-slate-400 font-mono mt-0.5">
+                Puri transaction list, categories, monthly budgets aur khate ka backup 1-click me download ya restore karein.
               </p>
             </div>
           </div>
@@ -251,26 +291,26 @@ export const ExcelBackupRestoreModal: React.FC<ExcelBackupRestoreModalProps> = (
         {/* Tab Toggle */}
         <div className="flex border-b border-slate-800 bg-slate-950/60 p-1.5 gap-1.5 overflow-x-auto">
           <button
-            onClick={() => setActiveTab('restore')}
-            className={`flex-1 min-w-[130px] py-2.5 rounded-xl text-xs font-mono font-semibold flex items-center justify-center space-x-2 transition-all cursor-pointer ${
-              activeTab === 'restore'
-                ? 'bg-cyan-950/80 text-cyan-300 border border-cyan-500/50 shadow-md shadow-cyan-950/40'
-                : 'text-slate-400 hover:text-slate-200'
-            }`}
-          >
-            <Upload className="w-4 h-4 text-cyan-400" />
-            <span>RESTORE / IMPORT</span>
-          </button>
-          <button
             onClick={() => setActiveTab('export')}
-            className={`flex-1 min-w-[130px] py-2.5 rounded-xl text-xs font-mono font-semibold flex items-center justify-center space-x-2 transition-all cursor-pointer ${
+            className={`flex-1 min-w-[140px] py-2.5 rounded-xl text-xs font-mono font-semibold flex items-center justify-center space-x-2 transition-all cursor-pointer ${
               activeTab === 'export'
-                ? 'bg-cyan-950/80 text-cyan-300 border border-cyan-500/50 shadow-md shadow-cyan-950/40'
+                ? 'bg-gradient-to-r from-indigo-950/90 to-cyan-950/90 text-cyan-300 border border-cyan-500/50 shadow-md shadow-cyan-950/40'
                 : 'text-slate-400 hover:text-slate-200'
             }`}
           >
             <Download className="w-4 h-4 text-cyan-400" />
             <span>DOWNLOAD BACKUP</span>
+          </button>
+          <button
+            onClick={() => setActiveTab('restore')}
+            className={`flex-1 min-w-[140px] py-2.5 rounded-xl text-xs font-mono font-semibold flex items-center justify-center space-x-2 transition-all cursor-pointer ${
+              activeTab === 'restore'
+                ? 'bg-gradient-to-r from-indigo-950/90 to-cyan-950/90 text-cyan-300 border border-cyan-500/50 shadow-md shadow-cyan-950/40'
+                : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <Upload className="w-4 h-4 text-cyan-400" />
+            <span>RESTORE / UPLOAD</span>
           </button>
           <button
             onClick={() => {
@@ -279,12 +319,12 @@ export const ExcelBackupRestoreModal: React.FC<ExcelBackupRestoreModalProps> = (
             }}
             className={`flex-1 min-w-[150px] py-2.5 rounded-xl text-xs font-mono font-semibold flex items-center justify-center space-x-2 transition-all cursor-pointer ${
               activeTab === 'storage'
-                ? 'bg-cyan-950/80 text-cyan-300 border border-cyan-500/50 shadow-md shadow-cyan-950/40'
+                ? 'bg-slate-900 text-emerald-300 border border-emerald-500/50 shadow-md'
                 : 'text-slate-400 hover:text-slate-200'
             }`}
           >
             <Database className="w-4 h-4 text-emerald-400" />
-            <span>PERMANENT STORAGE</span>
+            <span>PERMANENT DB</span>
             {storageStatus?.isPostgresConnected && (
               <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
             )}
@@ -308,7 +348,80 @@ export const ExcelBackupRestoreModal: React.FC<ExcelBackupRestoreModalProps> = (
             </div>
           )}
 
-          {/* TAB 1: RESTORE BACKUP */}
+          {/* TAB 1: EXPORT BACKUP */}
+          {activeTab === 'export' && (
+            <div className="space-y-4">
+              
+              {/* Featured Primary 1-Click Excel Backup Button Card */}
+              <div className="p-5 rounded-2xl bg-gradient-to-br from-indigo-950/50 via-slate-900 to-cyan-950/40 border border-cyan-500/40 space-y-4 shadow-xl shadow-cyan-950/30">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="space-y-1">
+                    <span className="text-[10px] font-bold text-cyan-400 uppercase tracking-wider bg-cyan-950/80 px-2 py-0.5 rounded-full border border-cyan-500/40">
+                      RECOMMENDED FOR FULL BACKUP
+                    </span>
+                    <h3 className="text-sm sm:text-base font-bold text-white mt-1">
+                      1-Click Complete Account Excel Backup (.xlsx)
+                    </h3>
+                    <p className="text-xs text-slate-300 leading-relaxed">
+                      Ek hi Excel file me aapke khate ke <b>Transactions</b>, <b>Custom Categories</b>, <b>Monthly Budgets</b>, aur <b>Telegram Account Info</b> sab download ho jayenge.
+                    </p>
+                  </div>
+                  <div className="w-12 h-12 rounded-2xl bg-emerald-950/80 border border-emerald-500/60 flex items-center justify-center text-emerald-400 shrink-0 shadow-lg">
+                    <FileSpreadsheet className="w-6 h-6" />
+                  </div>
+                </div>
+
+                {/* Account Summary Stats in Backup */}
+                <div className="grid grid-cols-3 gap-2 text-xs pt-1 border-t border-slate-800">
+                  <div className="p-2.5 rounded-xl bg-slate-950/80 border border-slate-800/80">
+                    <span className="text-[10px] text-slate-400 block">TRANSACTIONS</span>
+                    <span className="font-bold text-white mt-0.5 block text-sm">{transactions.length} Records</span>
+                  </div>
+                  <div className="p-2.5 rounded-xl bg-slate-950/80 border border-slate-800/80">
+                    <span className="text-[10px] text-slate-400 block">CATEGORIES</span>
+                    <span className="font-bold text-cyan-300 mt-0.5 block text-sm">{categories.length} Categories</span>
+                  </div>
+                  <div className="p-2.5 rounded-xl bg-slate-950/80 border border-slate-800/80">
+                    <span className="text-[10px] text-slate-400 block">KHATA USER</span>
+                    <span className="font-bold text-emerald-400 mt-0.5 block truncate text-xs">{currentUser?.name || 'Main User'}</span>
+                  </div>
+                </div>
+
+                {/* Big Download Button */}
+                <button
+                  onClick={() => handleDownloadBackup('xlsx')}
+                  className="w-full py-3.5 px-4 rounded-xl bg-gradient-to-r from-emerald-500 via-teal-500 to-cyan-500 hover:from-emerald-400 hover:to-cyan-400 text-slate-950 font-bold text-xs sm:text-sm flex items-center justify-center space-x-2.5 transition-all cursor-pointer shadow-lg shadow-emerald-950/60 group"
+                >
+                  <Download className="w-5 h-5 stroke-[2.5] group-hover:translate-y-0.5 transition-transform" />
+                  <span>DOWNLOAD FULL EXCEL BACKUP (.XLSX)</span>
+                </button>
+              </div>
+
+              {/* Secondary Option: Standard CSV */}
+              <div className="p-4 rounded-2xl bg-slate-950/70 border border-slate-800/80 flex items-center justify-between gap-3">
+                <div className="flex items-center space-x-3">
+                  <div className="w-9 h-9 rounded-xl bg-slate-900 border border-slate-700 flex items-center justify-center text-slate-300">
+                    <FileText className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h4 className="text-xs font-bold text-white">Standard CSV File (.CSV)</h4>
+                    <p className="text-[10px] text-slate-400">Google Sheets ya plain table ke liye single-sheet CSV export</p>
+                  </div>
+                </div>
+
+                <button
+                  onClick={() => handleDownloadBackup('csv')}
+                  className="px-3.5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-200 text-xs font-bold flex items-center space-x-1.5 transition-all cursor-pointer shrink-0"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>CSV Download</span>
+                </button>
+              </div>
+
+            </div>
+          )}
+
+          {/* TAB 2: RESTORE BACKUP */}
           {activeTab === 'restore' && (
             <div className="space-y-4">
               
@@ -316,7 +429,7 @@ export const ExcelBackupRestoreModal: React.FC<ExcelBackupRestoreModalProps> = (
               <div className="p-3.5 rounded-2xl bg-cyan-950/30 border border-cyan-500/30 flex items-start space-x-3 text-xs text-slate-300">
                 <Info className="w-4 h-4 text-cyan-400 shrink-0 mt-0.5" />
                 <p className="leading-relaxed">
-                  Aap TeleExpense se download kiye huye Excel ya CSV backup file ko yahan upload kar sakte hain. Isme date, time, raw message, amount aur categories sab naye khate me auto-record ho jayenge.
+                  Aap TeleExpense se download kiye gaye Excel (.xlsx) ya CSV file ko yahan upload karein. Isme <b>Transactions</b>, <b>Raw Telegram Messages</b>, <b>Custom Categories</b> aur <b>Budgets</b> sab automatic restore ho jayenge.
                 </p>
               </div>
 
@@ -355,20 +468,47 @@ export const ExcelBackupRestoreModal: React.FC<ExcelBackupRestoreModalProps> = (
                       {file.name}
                     </span>
                     <span className="text-[11px] text-slate-400 mt-1 block">
-                      {parsedRows.length} transactions mili hain • Click karke doosri file chuniye
+                      {parsedRows.length} transactions {parsedCatRows.length > 0 ? `• ${parsedCatRows.length} categories` : ''} mili hain • Click karke doosri file chuniye
                     </span>
                   </div>
                 ) : (
                   <div>
                     <span className="text-xs font-bold text-white block">
-                      Excel (.xlsx) ya CSV Backup File Chuniye ya Yahan Drop Karein
+                      Excel (.xlsx) ya CSV Backup File Yahan Upload Karein
                     </span>
                     <span className="text-[11px] text-slate-400 mt-1 block">
-                      Supports TeleExpense exported files with raw messages and dates
+                      Supports TeleExpense exported full backups with all categories & raw messages
                     </span>
                   </div>
                 )}
               </div>
+
+              {/* Detected Content Badges */}
+              {file && (
+                <div className="p-3.5 rounded-2xl bg-slate-950/80 border border-slate-800 space-y-2">
+                  <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block">
+                    FILE ME PAYA GAYA DATA:
+                  </span>
+                  <div className="flex flex-wrap gap-2 text-xs">
+                    <span className="px-2.5 py-1 rounded-lg bg-indigo-950/80 border border-indigo-500/40 text-indigo-300 flex items-center gap-1.5">
+                      <FileSpreadsheet className="w-3.5 h-3.5" />
+                      <b>{parsedRows.length}</b> Transactions
+                    </span>
+                    {parsedCatRows.length > 0 && (
+                      <span className="px-2.5 py-1 rounded-lg bg-cyan-950/80 border border-cyan-500/40 text-cyan-300 flex items-center gap-1.5">
+                        <Tag className="w-3.5 h-3.5" />
+                        <b>{parsedCatRows.length}</b> Categories & Budgets
+                      </span>
+                    )}
+                    {detectedSheets.length > 1 && (
+                      <span className="px-2.5 py-1 rounded-lg bg-emerald-950/80 border border-emerald-500/40 text-emerald-300 flex items-center gap-1.5">
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                        Multi-Sheet Complete Backup
+                      </span>
+                    )}
+                  </div>
+                </div>
+              )}
 
               {/* Restore Mode Toggle */}
               <div className="p-4 rounded-2xl bg-slate-950/80 border border-slate-800 space-y-3">
@@ -391,7 +531,7 @@ export const ExcelBackupRestoreModal: React.FC<ExcelBackupRestoreModalProps> = (
                       <span className="text-xs font-bold">Mojuda Data me Jodein (Append)</span>
                     </div>
                     <p className="text-[10px] text-slate-400 mt-1">
-                      Purane transactions safe rahenge, naye add ho jayenge.
+                      Purane transactions safe rahenge, naye records add ho jayenge.
                     </p>
                   </button>
 
@@ -409,7 +549,7 @@ export const ExcelBackupRestoreModal: React.FC<ExcelBackupRestoreModalProps> = (
                       <span className="text-xs font-bold">Fresh Restore (Replace All)</span>
                     </div>
                     <p className="text-[10px] text-slate-400 mt-1">
-                      Naye khate ke liye purana test data clear karke backup load karega.
+                      Pehle purane records clear karke backup wala pura data load karega.
                     </p>
                   </button>
                 </div>
@@ -420,14 +560,14 @@ export const ExcelBackupRestoreModal: React.FC<ExcelBackupRestoreModalProps> = (
                 <div className="space-y-2">
                   <div className="flex items-center justify-between text-xs text-slate-400">
                     <span className="font-bold text-slate-200">
-                      FILE DATA PREVIEW ({parsedRows.length} RECORDS)
+                      TRANSACTION PREVIEW ({parsedRows.length} RECORDS)
                     </span>
                     <span className="text-[10px] text-cyan-400">
                       Showing first 4 rows
                     </span>
                   </div>
 
-                  <div className="max-h-48 overflow-y-auto rounded-xl border border-slate-800 bg-slate-950/90 text-[11px]">
+                  <div className="max-h-44 overflow-y-auto rounded-xl border border-slate-800 bg-slate-950/90 text-[11px]">
                     <table className="w-full text-left">
                       <thead className="bg-slate-900/90 text-slate-400 sticky top-0 border-b border-slate-800 text-[10px]">
                         <tr>
@@ -443,7 +583,7 @@ export const ExcelBackupRestoreModal: React.FC<ExcelBackupRestoreModalProps> = (
                           const date = row.Date || row.date || row.Tareeq || '—';
                           const type = String(row.Type || row.type || 'expense').toLowerCase();
                           const amount = row['Amount (INR)'] || row.Amount || row.amount || row.rupaye || '0';
-                          const category = row.Category || row.category || 'Uncategorized';
+                          const category = row['Category Name'] || row.Category || row.category || 'Uncategorized';
                           const msg = row['Raw Message'] || row.rawMessage || row.Description || row.description || '—';
 
                           return (
@@ -468,76 +608,6 @@ export const ExcelBackupRestoreModal: React.FC<ExcelBackupRestoreModalProps> = (
                 </div>
               )}
 
-            </div>
-          )}
-
-          {/* TAB 2: EXPORT BACKUP */}
-          {activeTab === 'export' && (
-            <div className="space-y-4">
-              <div className="p-4 rounded-2xl bg-slate-950/80 border border-slate-800 space-y-3">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <h4 className="text-xs font-bold text-white uppercase tracking-wider">
-                      TOTAL TRANSACTIONS TO EXPORT
-                    </h4>
-                    <p className="text-[11px] text-slate-400 mt-0.5">
-                      Includes all dates, timestamps, amounts, categories, and Telegram raw messages.
-                    </p>
-                  </div>
-                  <div className="text-xl font-bold font-mono text-cyan-400">
-                    {transactions.length}
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-2 pt-2 border-t border-slate-800/80 text-xs">
-                  <div className="p-2.5 rounded-xl bg-slate-900 border border-slate-800">
-                    <span className="text-[10px] text-slate-400 block">TOTAL CATEGORIES</span>
-                    <span className="font-bold text-white mt-0.5 block">{categories.length} Categories</span>
-                  </div>
-                  <div className="p-2.5 rounded-xl bg-slate-900 border border-slate-800">
-                    <span className="text-[10px] text-slate-400 block">CURRENT ACCOUNT</span>
-                    <span className="font-bold text-white mt-0.5 block truncate">{currentUser?.name || 'Main Ledger'}</span>
-                  </div>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
-                <button
-                  onClick={() => handleDownloadBackup('xlsx')}
-                  className="p-4 rounded-2xl bg-emerald-950/60 hover:bg-emerald-900/60 border border-emerald-500/40 text-left transition-all cursor-pointer shadow-lg shadow-emerald-950/30 group"
-                >
-                  <div className="flex items-center justify-between">
-                    <div className="w-10 h-10 rounded-xl bg-emerald-900/60 border border-emerald-500/50 flex items-center justify-center text-emerald-300">
-                      <FileSpreadsheet className="w-5 h-5" />
-                    </div>
-                    <Download className="w-4 h-4 text-emerald-400 group-hover:translate-y-0.5 transition-transform" />
-                  </div>
-                  <h4 className="font-bold text-white text-xs mt-3">
-                    Excel Workbook (.XLSX)
-                  </h4>
-                  <p className="text-[10px] text-emerald-300/80 mt-1">
-                    Multi-sheet with Transactions Ledger & Categories. Recommended for Backup.
-                  </p>
-                </button>
-
-                <button
-                  onClick={() => handleDownloadBackup('csv')}
-                  className="p-4 rounded-2xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-left transition-all cursor-pointer shadow-md group"
-                >
-                  <div className="flex items-center justify-between">
-                    <div className="w-10 h-10 rounded-xl bg-slate-800 border border-slate-600 flex items-center justify-center text-slate-300">
-                      <FileText className="w-5 h-5" />
-                    </div>
-                    <Download className="w-4 h-4 text-slate-300 group-hover:translate-y-0.5 transition-transform" />
-                  </div>
-                  <h4 className="font-bold text-white text-xs mt-3">
-                    Standard CSV (.CSV)
-                  </h4>
-                  <p className="text-[10px] text-slate-400 mt-1">
-                    Compatible with Google Sheets and any spreadsheet app.
-                  </p>
-                </button>
-              </div>
             </div>
           )}
 
@@ -609,7 +679,7 @@ export const ExcelBackupRestoreModal: React.FC<ExcelBackupRestoreModalProps> = (
                 </div>
               </div>
 
-              {/* Step by Step Guide: Method 1 - Neon.tech (Lifetime Free & Permanent) */}
+              {/* Step by Step Guide: Method 1 - Neon.tech */}
               <div className="p-4 rounded-2xl bg-gradient-to-br from-slate-900 to-cyan-950/40 border border-cyan-500/40 space-y-3">
                 <div className="flex items-center justify-between flex-wrap gap-2">
                   <div className="flex items-center space-x-2">
@@ -664,7 +734,6 @@ export const ExcelBackupRestoreModal: React.FC<ExcelBackupRestoreModalProps> = (
                   </div>
                 </div>
 
-                {/* If DB is configured, show Sync button */}
                 {storageStatus?.isPostgresConfigured && (
                   <div className="pt-2">
                     <button
@@ -688,58 +757,6 @@ export const ExcelBackupRestoreModal: React.FC<ExcelBackupRestoreModalProps> = (
                 )}
               </div>
 
-              {/* Method 2: Supabase (Alternative Lifetime Free DB) */}
-              <div className="p-4 rounded-2xl bg-slate-900/60 border border-slate-800 space-y-3">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center space-x-2">
-                    <span className="w-5 h-5 rounded-full bg-slate-700 text-white flex items-center justify-center text-[11px] font-bold">2</span>
-                    <h4 className="font-bold text-white text-xs">
-                      OPTION 2: SUPABASE (500MB FREE PERMANENT POSTGRESQL)
-                    </h4>
-                  </div>
-                  <span className="text-[10px] text-slate-400 bg-slate-950 border border-slate-800 px-2 py-0.5 rounded-full">
-                    FREE FOREVER
-                  </span>
-                </div>
-
-                <div className="space-y-2 text-xs text-slate-400 leading-relaxed">
-                  <p>
-                    <a href="https://supabase.com" target="_blank" rel="noreferrer" className="text-cyan-400 underline font-semibold inline-flex items-center gap-0.5">Supabase.com <ExternalLink className="w-3 h-3" /></a> par Free Project banakar <b>Project Settings &gt; Database &gt; Connection String (URI)</b> copy karke Render ke <code>DATABASE_URL</code> me paste kar sakte hain.
-                  </p>
-                </div>
-              </div>
-
-              {/* Step by Step Guide: Method 2 - Persistent Disk */}
-              <div className="p-4 rounded-2xl bg-slate-900/60 border border-slate-800 space-y-3">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center space-x-2">
-                    <span className="w-5 h-5 rounded-full bg-slate-700 text-white flex items-center justify-center text-[11px] font-bold">2</span>
-                    <h4 className="font-bold text-white text-xs">
-                      TARIKA 2: RENDER PERSISTENT DISK MOUNT
-                    </h4>
-                  </div>
-                  <span className="text-[10px] text-slate-400 bg-slate-950 border border-slate-800 px-2 py-0.5 rounded-full">
-                    DISK ATTACH
-                  </span>
-                </div>
-
-                <div className="space-y-2 text-xs text-slate-400 leading-relaxed">
-                  <p>
-                    Agar aap Paid Render Service use kar rahe hain, to service ke <b>Disks</b> section me 1GB Disk attach karein Mount Path: <code>/var/data</code> aur Environment Variable me <code>DATA_DIR=/var/data</code> set karein.
-                  </p>
-                  <div className="p-2 rounded-lg bg-slate-950 border border-slate-800 flex items-center justify-between">
-                    <code className="text-cyan-300 text-[11px]">DATA_DIR = /var/data</code>
-                    <button
-                      onClick={() => handleCopy('DATA_DIR=/var/data', 'data_dir')}
-                      className="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-[10px] flex items-center gap-1 cursor-pointer"
-                    >
-                      {copiedKey === 'data_dir' ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
-                      {copiedKey === 'data_dir' ? 'COPIED' : 'COPY'}
-                    </button>
-                  </div>
-                </div>
-              </div>
-
             </div>
           )}
 
@@ -754,12 +771,22 @@ export const ExcelBackupRestoreModal: React.FC<ExcelBackupRestoreModalProps> = (
             BAND KAREIN
           </button>
 
+          {activeTab === 'export' && (
+            <button
+              onClick={() => handleDownloadBackup('xlsx')}
+              className="px-5 py-2.5 rounded-xl text-xs font-mono font-bold bg-gradient-to-r from-emerald-500 to-cyan-500 hover:from-emerald-400 hover:to-cyan-400 text-slate-950 shadow-lg shadow-emerald-950/50 flex items-center space-x-2 transition-all cursor-pointer"
+            >
+              <Download className="w-4 h-4 stroke-[2.5]" />
+              <span>DOWNLOAD EXCEL BACKUP</span>
+            </button>
+          )}
+
           {activeTab === 'restore' && (
             <button
               onClick={handleRestore}
-              disabled={isProcessing || parsedRows.length === 0}
+              disabled={isProcessing || (parsedRows.length === 0 && parsedCatRows.length === 0 && !fileBase64)}
               className={`px-5 py-2.5 rounded-xl text-xs font-mono font-bold flex items-center space-x-2 shadow-lg transition-all cursor-pointer ${
-                parsedRows.length > 0 && !isProcessing
+                (parsedRows.length > 0 || parsedCatRows.length > 0 || fileBase64) && !isProcessing
                   ? 'bg-cyan-500 hover:bg-cyan-400 text-slate-950 shadow-cyan-950/50'
                   : 'bg-slate-800 text-slate-500 cursor-not-allowed'
               }`}
@@ -767,12 +794,12 @@ export const ExcelBackupRestoreModal: React.FC<ExcelBackupRestoreModalProps> = (
               {isProcessing ? (
                 <>
                   <RefreshCw className="w-4 h-4 animate-spin" />
-                  <span>RESTORING...</span>
+                  <span>RESTORING SAB KUCHH...</span>
                 </>
               ) : (
                 <>
                   <Upload className="w-4 h-4 stroke-[2.5]" />
-                  <span>{parsedRows.length > 0 ? `RESTORE ${parsedRows.length} TRANSACTIONS` : 'FILE CHUNIYE'}</span>
+                  <span>{parsedRows.length > 0 ? `RESTORE SAB KUCHH (${parsedRows.length} TXS)` : 'FILE CHUNIYE'}</span>
                 </>
               )}
             </button>
@@ -780,11 +807,11 @@ export const ExcelBackupRestoreModal: React.FC<ExcelBackupRestoreModalProps> = (
 
           {activeTab === 'storage' && (
             <button
-              onClick={() => setActiveTab('restore')}
+              onClick={() => setActiveTab('export')}
               className="px-4 py-2.5 rounded-xl bg-cyan-950 border border-cyan-500/50 text-cyan-300 text-xs font-mono font-bold hover:bg-cyan-900/60 transition-all cursor-pointer flex items-center gap-1.5"
             >
-              <Upload className="w-3.5 h-3.5" />
-              <span>FILE RESTORE PAR JAYEIN</span>
+              <Download className="w-3.5 h-3.5" />
+              <span>BACKUP DOWNLOAD PAR JAYEIN</span>
             </button>
           )}
         </div>

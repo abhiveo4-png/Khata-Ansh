@@ -64,6 +64,15 @@ export interface LinkedMember {
   linkedAt: string;
 }
 
+export interface PendingMemberRequest {
+  id: string; // e.g. "req_123456789"
+  chatId: string;
+  name: string;
+  telegramUsername?: string;
+  linkCode: string;
+  requestedAt: string;
+}
+
 export interface UserProfile {
   id: string;
   name: string;
@@ -72,6 +81,7 @@ export interface UserProfile {
   telegramChatId?: string;
   telegramUsername?: string;
   linkedMembers?: LinkedMember[]; // Multiple connected family / team members
+  pendingRequests?: PendingMemberRequest[]; // New member link requests awaiting owner approval
   linkCode: string; // 6-digit linking code
   createdAt: string;
 }
@@ -725,6 +735,7 @@ function toSafeUser(u: UserProfile | null) {
     telegramChatId: u.telegramChatId,
     telegramUsername: u.telegramUsername,
     linkedMembers: u.linkedMembers || [],
+    pendingRequests: u.pendingRequests || [],
     linkCode: u.linkCode,
     createdAt: u.createdAt,
   };
@@ -1522,6 +1533,175 @@ ${categoryLines || 'ℹ️ Koi category budget nahi mila.'}
 💡 <i>Tip: Excel sheet bhej kar ya Web Dashboard se budget limit change kar sakte hain!</i>`;
 }
 
+// ---------------- Gullak (Unspent Monthly Budget Piggy Bank) Calculation Helpers ----------------
+
+export function calculateGullakSummary(userId: string) {
+  const store = getUserData(userId);
+  syncBudgetsWithCategories(store);
+
+  const nowInfo = getAppDateTime();
+  const currentMonth = nowInfo.date.substring(0, 7); // e.g. "2026-09"
+
+  // Gather all unique months from transactions plus current month
+  const monthsSet = new Set<string>();
+  monthsSet.add(currentMonth);
+  for (const t of store.transactions) {
+    if (t.date && t.date.length >= 7) {
+      monthsSet.add(t.date.substring(0, 7));
+    }
+  }
+
+  const sortedMonths = Array.from(monthsSet).sort().reverse(); // newest first
+  const monthlyHistory: any[] = [];
+  const categoryTotalsMap: Record<string, { totalSaved: number; currentMonthSaved: number }> = {};
+
+  let totalGullakSavings = 0;
+  let currentMonthSaved = 0;
+  let pastMonthsSaved = 0;
+
+  for (const ym of sortedMonths) {
+    const [yearStr, monthStr] = ym.split('-');
+    const yearNum = parseInt(yearStr, 10);
+    const monthNum = parseInt(monthStr, 10);
+    const d = new Date(Date.UTC(yearNum, monthNum - 1, 1, 12, 0, 0));
+    const monthName = new Intl.DateTimeFormat('en-IN', {
+      timeZone: APP_TIMEZONE,
+      month: 'long',
+      year: 'numeric',
+    }).format(d);
+
+    const monthExpenses = store.transactions.filter(
+      t => t.type === 'expense' && t.date && t.date.startsWith(ym)
+    );
+
+    const categorySavings: any[] = [];
+    let monthTotalBudget = 0;
+    let monthTotalSpent = 0;
+    let monthTotalSaved = 0;
+
+    for (const budget of store.budgets) {
+      const limit = Number(budget.limit) || 0;
+      if (limit <= 0) continue;
+
+      const spent = monthExpenses
+        .filter(t => t.category.toLowerCase() === budget.category.toLowerCase())
+        .reduce((sum, t) => sum + (Number(t.amount) || 0), 0);
+
+      monthTotalBudget += limit;
+      monthTotalSpent += spent;
+
+      const savedAmount = Math.max(0, limit - spent);
+      monthTotalSaved += savedAmount;
+
+      categorySavings.push({
+        category: budget.category,
+        month: ym,
+        budgetLimit: limit,
+        spent,
+        savedAmount,
+      });
+
+      if (!categoryTotalsMap[budget.category]) {
+        categoryTotalsMap[budget.category] = { totalSaved: 0, currentMonthSaved: 0 };
+      }
+      categoryTotalsMap[budget.category].totalSaved += savedAmount;
+      if (ym === currentMonth) {
+        categoryTotalsMap[budget.category].currentMonthSaved += savedAmount;
+      }
+    }
+
+    // Sort category savings descending by savedAmount
+    categorySavings.sort((a, b) => b.savedAmount - a.savedAmount);
+
+    monthlyHistory.push({
+      month: ym,
+      monthName,
+      totalBudget: monthTotalBudget,
+      totalSpent: monthTotalSpent,
+      totalSaved: monthTotalSaved,
+      categories: categorySavings,
+    });
+
+    totalGullakSavings += monthTotalSaved;
+    if (ym === currentMonth) {
+      currentMonthSaved += monthTotalSaved;
+    } else {
+      pastMonthsSaved += monthTotalSaved;
+    }
+  }
+
+  const categoryBreakdown = Object.entries(categoryTotalsMap).map(([catName, stats]) => {
+    const catDef = store.categories.find(c => c.name.toLowerCase() === catName.toLowerCase());
+    return {
+      category: catName,
+      totalSaved: stats.totalSaved,
+      currentMonthSaved: stats.currentMonthSaved,
+      icon: catDef?.icon || 'Tag',
+      color: catDef?.color || '#6366F1',
+    };
+  }).sort((a, b) => b.totalSaved - a.totalSaved);
+
+  return {
+    totalGullakSavings,
+    currentMonthSaved,
+    pastMonthsSaved,
+    activeMonthsCount: sortedMonths.length,
+    categoryBreakdown,
+    monthlyHistory,
+  };
+}
+
+export function buildGullakReportTelegramMessage(userId: string, userName: string): string {
+  const gullak = calculateGullakSummary(userId);
+  const nowInfo = getAppDateTime();
+  const currentMonthName = new Intl.DateTimeFormat('en-IN', {
+    timeZone: APP_TIMEZONE,
+    month: 'long',
+    year: 'numeric',
+  }).format(new Date());
+
+  const currentMonthRecord = gullak.monthlyHistory.find(m => m.month === nowInfo.date.substring(0, 7));
+  const currentSavedCats = currentMonthRecord?.categories.filter(c => c.budgetLimit > 0) || [];
+
+  let catDetails = '';
+  if (currentSavedCats.length > 0) {
+    catDetails = currentSavedCats.map(c => {
+      const emoji = getCategoryEmoji(c.category);
+      if (c.savedAmount > 0) {
+        return `${emoji} <b>${c.category}:</b> Bacha 🟢 <b>₹${c.savedAmount.toLocaleString('en-IN')}</b>\n   • Budget: ₹${c.budgetLimit.toLocaleString('en-IN')} | Kharcha: ₹${c.spent.toLocaleString('en-IN')}`;
+      } else {
+        const over = c.spent - c.budgetLimit;
+        return `${emoji} <b>${c.category}:</b> 🔴 Budget pura use hua (${over > 0 ? `₹${over.toLocaleString('en-IN')} over` : 'Limit reached'})`;
+      }
+    }).join('\n\n');
+  } else {
+    catDetails = 'ℹ️ Abhi tak koi category budget set nahi hai. Web Dashboard par budget set karein!';
+  }
+
+  // Top saved all-time categories
+  const topSavedLifetime = gullak.categoryBreakdown.filter(c => c.totalSaved > 0).slice(0, 3).map(c => {
+    const emoji = getCategoryEmoji(c.category);
+    return `• ${emoji} <b>${c.category}:</b> ₹${c.totalSaved.toLocaleString('en-IN')} Gullak me jama`;
+  }).join('\n');
+
+  return `🐷 <b>GULLAK (DIGITAL PIGGY BANK) REPORT</b>
+━━━━━━━━━━━━━━━━━━━━
+👤 <b>Khata:</b> ${userName}
+💰 <b>Kul Gullak Bachat (Total Saved):</b> <b>₹${gullak.totalGullakSavings.toLocaleString('en-IN')}</b>
+📅 <b>Is Mahine (${currentMonthName}) Ki Bachat:</b> ₹${gullak.currentMonthSaved.toLocaleString('en-IN')}
+⏳ <b>Pichle Mahino Ka Bacha Hua Fund:</b> ₹${gullak.pastMonthsSaved.toLocaleString('en-IN')}
+
+━━━━━━━━━━━━━━━━━━━━
+📂 <b>IS MAHINE KA BUDGET SE BACHA HISAAB:</b>
+
+${catDetails}
+
+${topSavedLifetime ? `\n━━━━━━━━━━━━━━━━━━━━\n🏆 <b>TOP ALL-TIME SAVINGS CATEGORIES:</b>\n${topSavedLifetime}` : ''}
+
+━━━━━━━━━━━━━━━━━━━━
+💡 <i>Tip: Har mahine category budget se jitna paisa bachta hai, wo automatically aapke Gullak me jama hota rehta hai!</i>`;
+}
+
 export function isPureDateQuery(rawText: string): string | null {
   if (!rawText) return null;
   const text = rawText.trim();
@@ -1639,11 +1819,199 @@ ${txListText}
 💡 <i>Tip: Kisi transaction ko delete karne ke liye <code>/delete &lt;number&gt;</code> ya <code>/undo</code> bhejein!</i>`;
 }
 
+// ---------------- Helper for Item-Specific Spending Queries (/spent <item>, "signature pe kitna kharch huwa") ----------------
+
+export function cleanItemKeyword(raw: string): string {
+  if (!raw) return '';
+  return raw
+    .trim()
+    .replace(/^["'`]|["'`]$/g, '')
+    .replace(/^(mera|meri|mere|apna|apne|the|my|all|total|kul)\s+/i, '')
+    .replace(/\s+(pe|par|me|mein|mai|ka|ki|ke|ko|par bhi|pe bhi)$/i, '')
+    .trim();
+}
+
+export function extractItemSpendingQuery(rawText: string): string | null {
+  if (!rawText) return null;
+  const text = rawText.trim();
+  const lower = text.toLowerCase();
+
+  // 1. Direct slash commands: /spent <item>, /item <item>, /merchant <item>, /search <item>, /kitna <item>
+  if (
+    lower.startsWith('/spent') ||
+    lower.startsWith('/item') ||
+    lower.startsWith('/merchant') ||
+    lower.startsWith('/search') ||
+    lower.startsWith('/kitna') ||
+    lower.startsWith('/itemkharcha')
+  ) {
+    const keyword = lower.replace(/^\/(?:spent|item|merchant|search|kitna|itemkharcha)\s*/i, '').trim();
+    const cleaned = cleanItemKeyword(keyword);
+    return cleaned.length > 0 ? cleaned : null;
+  }
+
+  // If text contains price amounts like "500 petrol" or "petrol 500 upi", it's an expense transaction entry, not a query.
+  const hasStandaloneNumber = /\b\d+(\.\d+)?\b/.test(lower);
+  if (hasStandaloneNumber) {
+    return null;
+  }
+
+  // Check for common command words that shouldn't be parsed as item queries
+  const excludedExactPhrases = [
+    'balance', 'summary', 'budget', 'budgets', 'gullak', 'tips', 'recent', 'undo', 'help', 'accounts', 'categories',
+    'aaj ka hisab', 'kal ka hisab', 'aaj', 'kal', 'parso', 'mahine ka hisaab', 'mahina', 'hisab',
+    'kitna bacha', 'bachat', 'faltu kharcha', 'menu', 'buttons', 'unlink', 'clearall'
+  ];
+  if (excludedExactPhrases.includes(lower)) {
+    return null;
+  }
+
+  // 2. English Query Patterns
+  // "how much spent on <item>", "how much did i spend on <item>", "total spent on <item>", "spending on <item>"
+  const enMatch1 = lower.match(/^(?:how much (?:did i )?(?:spend|spent) on|total spent on|total spending on|spending on|expense on|expenses on)\s+(.+)$/i);
+  if (enMatch1 && enMatch1[1]) {
+    const kw = cleanItemKeyword(enMatch1[1].replace(/[?.,!]+$/, ''));
+    if (kw.length >= 2) return kw;
+  }
+
+  const enMatch2 = lower.match(/^(.+?)\s+(?:total spent|total expense|total expenses|spending|total cost)$/i);
+  if (enMatch2 && enMatch2[1]) {
+    const kw = cleanItemKeyword(enMatch2[1].replace(/[?.,!]+$/, ''));
+    if (kw.length >= 2) return kw;
+  }
+
+  // 3. Hinglish & Hindi Query Patterns
+  // "<item> pe / par / me / mein kitna kharch huwa / hua / laga / gaya / tha"
+  // e.g. "signature pe kitna kharch huwa", "petrol me kitna gaya", "chai pe kitna laga"
+  const hinglishMatch1 = lower.match(/^(.+?)\s+(?:pe|par|me|mein|mai)\s+(?:kul\s+)?(?:kitna|kitne|total)\s+(?:paisa\s+)?(?:kharch|kharcha|kharche|gaya|gaye|laga|lage|spent)(?:\s+(?:hua|huwa|tha|huye|hai))?\s*[?.,!]*$/i);
+  if (hinglishMatch1 && hinglishMatch1[1]) {
+    const kw = cleanItemKeyword(hinglishMatch1[1]);
+    if (kw.length >= 2 && !['aaj', 'kal', 'parso', 'mahina', 'mahine'].includes(kw)) return kw;
+  }
+
+  // "<item> me/pe kitna gaya / laga"
+  // e.g. "petrol me kitna gaya", "uber me kitna gaya", "chai pe kitna laga"
+  const hinglishMatch4 = lower.match(/^(.+?)\s+(?:me|mein|mai|pe|par)\s+(?:kitna|kitne)\s+(?:gaya|gaye|laga|lage|kharcha)(?:\s+(?:hua|huwa|tha|huye|hai))?\s*[?.,!]*$/i);
+  if (hinglishMatch4 && hinglishMatch4[1]) {
+    const kw = cleanItemKeyword(hinglishMatch4[1]);
+    if (kw.length >= 2 && !['aaj', 'kal', 'parso', 'mahina', 'mahine'].includes(kw)) return kw;
+  }
+
+  // "<item> ka hisaab / hisab / total / total kharcha / kul kharcha"
+  // e.g. "signature ka hisaab", "zomato ka total kharcha", "swiggy ka kharcha", "petrol ka hisab"
+  const hinglishMatch2 = lower.match(/^(.+?)\s+(?:ka|ki|ke)\s+(?:kul\s+)?(?:hisaab|hisab|total kharcha|total kharche|total|kul kharcha|kharcha|spending|report|details)\s*[?.,!]*$/i);
+  if (hinglishMatch2 && hinglishMatch2[1]) {
+    const kw = cleanItemKeyword(hinglishMatch2[1]);
+    if (kw.length >= 2 && !['aaj', 'kal', 'parso', 'mahina', 'mahine', 'is mahine', 'budget', 'gullak', 'paisa', 'sab', 'aaj ka', 'kal ka'].includes(kw)) {
+      return kw;
+    }
+  }
+
+  // "kitna kharch hua / gaya <item> pe / par / me" or "kitna kharcha hua <item> ka"
+  // e.g. "kitna kharch hua signature pe", "kitna gaya petrol me"
+  const hinglishMatch3 = lower.match(/^(?:kitna|kitne|total)\s+(?:kharch|kharcha|kharche|gaya|gaye|laga|lage|paisa gaya)(?:\s+(?:hua|huwa|tha|huye|hai))?\s+(?:pe|par|me|mein|mai|ka|ki|ke|on)?\s+(.+?)\s*[?.,!]*$/i);
+  if (hinglishMatch3 && hinglishMatch3[1]) {
+    const kw = cleanItemKeyword(hinglishMatch3[1]);
+    if (kw.length >= 2 && !['aaj', 'kal', 'parso', 'mahina', 'mahine'].includes(kw)) return kw;
+  }
+
+  return null;
+}
+
+export function buildItemSpendingReportTelegramMessage(userId: string, itemQuery: string, userName: string): string {
+  const store = getUserData(userId);
+  const cleanQ = itemQuery.toLowerCase().trim();
+
+  // Search matching transactions in description, category, tags, and rawMessage
+  const matchingExpenses = store.transactions.filter(t => {
+    if (t.type !== 'expense') return false;
+    const desc = (t.description || '').toLowerCase();
+    const cat = (t.category || '').toLowerCase();
+    const raw = (t.rawMessage || '').toLowerCase();
+    const tags = (t.tags || []).map(tg => tg.toLowerCase());
+
+    return (
+      desc.includes(cleanQ) ||
+      cat.includes(cleanQ) ||
+      raw.includes(cleanQ) ||
+      tags.some(tg => tg.includes(cleanQ))
+    );
+  });
+
+  const matchingIncomes = store.transactions.filter(t => {
+    if (t.type !== 'income') return false;
+    const desc = (t.description || '').toLowerCase();
+    const cat = (t.category || '').toLowerCase();
+    const raw = (t.rawMessage || '').toLowerCase();
+    const tags = (t.tags || []).map(tg => tg.toLowerCase());
+
+    return (
+      desc.includes(cleanQ) ||
+      cat.includes(cleanQ) ||
+      raw.includes(cleanQ) ||
+      tags.some(tg => tg.includes(cleanQ))
+    );
+  });
+
+  const displayKeyword = itemQuery.charAt(0).toUpperCase() + itemQuery.slice(1);
+
+  if (matchingExpenses.length === 0 && matchingIncomes.length === 0) {
+    return `🔍 <b>ITEM EXPENSE REPORT: "${displayKeyword.toUpperCase()}"</b>
+━━━━━━━━━━━━━━━━━━━━
+👤 <b>Khata:</b> ${userName}
+
+ℹ️ <b>"${itemQuery}" ke naam se koi bhi kharcha ya transaction nahi mila.</b>
+
+💡 <b>Aise try karein:</b>
+• Naya kharcha add karein: <code>250 ${itemQuery} upi</code>
+• Kisi doosre item/merchant ko search karein: <code>/spent petrol</code> ya <code>zomato ka kharcha</code>
+• Saare recent transactions dekhne ke liye <code>/recent</code> bhejein.`;
+  }
+
+  const totalSpent = matchingExpenses.reduce((sum, t) => sum + (Number(t.amount) || 0), 0);
+  const totalPurchases = matchingExpenses.length;
+  const avgPerPurchase = totalPurchases > 0 ? Math.round(totalSpent / totalPurchases) : 0;
+  const highestSinglePurchase = matchingExpenses.length > 0 ? Math.max(...matchingExpenses.map(t => Number(t.amount) || 0)) : 0;
+
+  // Recent 5-6 purchases list
+  const recentPurchases = matchingExpenses.slice(0, 6);
+  const purchasesList = recentPurchases.map((t, idx) => {
+    const pm = t.paymentMethod ? `[${t.paymentMethod}]` : '[UPI]';
+    const timeStr = t.time ? ` (${t.time})` : '';
+    const emoji = getCategoryEmoji(t.category);
+    return `<b>[#${idx + 1}]</b> 🔴 <b>₹${Number(t.amount).toLocaleString('en-IN')}</b> • <b>${t.description}</b> (${emoji} ${t.category}) ${pm}\n   📅 <i>${t.date}${timeStr}</i>`;
+  }).join('\n\n');
+
+  // Income summary if any (e.g. refund / cashback / income from same keyword)
+  let incomeNote = '';
+  if (matchingIncomes.length > 0) {
+    const totalInc = matchingIncomes.reduce((sum, t) => sum + (Number(t.amount) || 0), 0);
+    incomeNote = `\n🟢 <b>Income / Cashback Received:</b> ₹${totalInc.toLocaleString('en-IN')} (${matchingIncomes.length} baar)\n`;
+  }
+
+  return `🔍 <b>ITEM HISAB REPORT: "${displayKeyword.toUpperCase()}"</b>
+━━━━━━━━━━━━━━━━━━━━
+👤 <b>Khata:</b> ${userName}
+🔴 <b>Kul Kharcha (Total Spent):</b> <b>₹${totalSpent.toLocaleString('en-IN')}</b>
+🔢 <b>Kitni Baar Liya (Total Purchases):</b> <b>${totalPurchases} baar</b>
+📊 <b>Average Per Purchase:</b> <b>₹${avgPerPurchase.toLocaleString('en-IN')}</b>
+${highestSinglePurchase > 0 ? `🔝 <b>Sabse Bada Single Kharcha:</b> ₹${highestSinglePurchase.toLocaleString('en-IN')}\n` : ''}${incomeNote}
+━━━━━━━━━━━━━━━━━━━━
+📋 <b>RECENT PURCHASES LIST:</b>
+
+${purchasesList}
+
+━━━━━━━━━━━━━━━━━━━━
+💡 <i>Tip: Naya kharcha log karne ke liye likhein (jaise: <code>300 ${itemQuery} cash</code>)</i>`;
+}
+
 // ---------------- Helper to send Telegram message & Handy Buttons ----------------
 
 export const TELEGRAM_BOT_COMMANDS = [
   { command: 'balance', description: '💰 Net balance aur kul bachat dekhein' },
   { command: 'summary', description: '📊 Mahine ki income, kharcha & bachat report' },
+  { command: 'spent', description: '🔍 Kisi item/merchant ka kharcha (e.g. /spent petrol)' },
+  { command: 'gullak', description: '🐷 Monthly budget se bachi hui Gullak bachat' },
   { command: 'accounts', description: '👥 Linked accounts dekhein & unlink buttons' },
   { command: 'budget', description: '🎯 Category-wise kharcha aur bacha budget' },
   { command: 'date', description: '📅 Kisi bhi tareeq ka kharcha & income dekhein' },
@@ -1661,9 +2029,9 @@ export const TELEGRAM_BOT_COMMANDS = [
 export const TELEGRAM_HANDY_KEYBOARD = {
   keyboard: [
     [{ text: '💰 Balance' }, { text: '📊 Summary' }],
-    [{ text: '👥 My Accounts' }, { text: '🎯 Category Budget' }],
-    [{ text: '📅 Aaj Ka Hisab' }, { text: '🤖 AI Tips & Bachat' }],
-    [{ text: '🕒 Recent 5 Tx' }, { text: '🏷️ Categories' }],
+    [{ text: '🐷 Gullak' }, { text: '🎯 Category Budget' }],
+    [{ text: '👥 My Accounts' }, { text: '📅 Aaj Ka Hisab' }],
+    [{ text: '🤖 AI Tips & Bachat' }, { text: '🕒 Recent 5 Tx' }],
     [{ text: '↩️ Undo Last' }, { text: '❓ Help & Guide' }],
   ],
   resize_keyboard: true,
@@ -1677,16 +2045,16 @@ export const INLINE_KB_MAIN_COMMANDS = {
       { text: '📊 Summary', callback_data: 'cmd_summary' },
     ],
     [
-      { text: '👥 My Accounts', callback_data: 'cmd_accounts' },
+      { text: '🐷 Gullak', callback_data: 'cmd_gullak' },
       { text: '🎯 Category Budget', callback_data: 'cmd_budget' },
     ],
     [
+      { text: '👥 My Accounts', callback_data: 'cmd_accounts' },
       { text: '📅 Aaj Ka Hisab', callback_data: 'cmd_date_today' },
-      { text: '🤖 AI Faltu Kharcha', callback_data: 'cmd_tips' },
     ],
     [
+      { text: '🤖 AI Faltu Kharcha', callback_data: 'cmd_tips' },
       { text: '🕒 Recent 5 Tx', callback_data: 'cmd_recent' },
-      { text: '↩️ Undo Last', callback_data: 'cmd_undo' },
     ],
   ],
 };
@@ -1958,11 +2326,114 @@ async function handleTelegramCallbackQuery(callbackQuery: any) {
     return;
   }
 
+  // 4. Handle Approve Member Link Request Callback
+  if (data.startsWith('approve_req_')) {
+    const reqId = data.replace('approve_req_', '').trim();
+    users = loadJson<UserProfile[]>(USERS_FILE, users);
+    let targetUser: UserProfile | undefined;
+    let foundReq: any;
+
+    for (const u of users) {
+      if (u.pendingRequests) {
+        const r = u.pendingRequests.find(req => req.id === reqId);
+        if (r) {
+          targetUser = u;
+          foundReq = r;
+          break;
+        }
+      }
+    }
+
+    if (!targetUser || !foundReq) {
+      await answerTelegramCallbackQuery(token, callbackId, 'Request nahi mili ya pehle hi process ho chuki hai.');
+      return;
+    }
+
+    await answerTelegramCallbackQuery(token, callbackId, `Approved: ${foundReq.name}`);
+
+    // Remove from pending
+    targetUser.pendingRequests = (targetUser.pendingRequests || []).filter(r => r.id !== reqId);
+
+    // Add to linkedMembers if not exists
+    if (!targetUser.linkedMembers) targetUser.linkedMembers = [];
+    if (!targetUser.linkedMembers.some(m => String(m.telegramChatId) === String(foundReq.chatId))) {
+      targetUser.linkedMembers.push({
+        id: `mem_${foundReq.chatId}`,
+        name: foundReq.name,
+        customAlias: foundReq.name,
+        role: 'family',
+        telegramChatId: foundReq.chatId,
+        telegramUsername: foundReq.telegramUsername,
+        linkedAt: new Date().toISOString(),
+      });
+    }
+
+    saveUsers(users);
+    setActiveAccountForChat(foundReq.chatId, targetUser.id);
+
+    // Notify owner
+    await sendTelegramReply(
+      token,
+      chatId,
+      `✅ <b>Member Request Approved!</b>\n\n<b>${foundReq.name}</b> (@${foundReq.telegramUsername || 'N/A'}) ko aapke khate (<b>${targetUser.name}</b>) me add kar diya gaya hai.\n👥 Kul members: ${targetUser.linkedMembers.length}`
+    );
+
+    // Notify approved member
+    await sendTelegramReply(
+      token,
+      foundReq.chatId,
+      `🎉 <b>Badhaai Ho! Request Approve Ho Gayi!</b>\n\nOwner <b>${targetUser.name}</b> ne aapki link request approve kar di hai. Aap successfully jud chuke hain!\n\n💡 <b>Ab aap kharcha ya kamai sidhe log kar sakte hain:</b>\n• <code>500 sabzi cash</code>\n• <code>300 petrol upi</code>\n• <code>1200 groceries card</code>`
+    );
+    return;
+  }
+
+  // 5. Handle Reject Member Link Request Callback
+  if (data.startsWith('reject_req_')) {
+    const reqId = data.replace('reject_req_', '').trim();
+    users = loadJson<UserProfile[]>(USERS_FILE, users);
+    let targetUser: UserProfile | undefined;
+    let foundReq: any;
+
+    for (const u of users) {
+      if (u.pendingRequests) {
+        const r = u.pendingRequests.find(req => req.id === reqId);
+        if (r) {
+          targetUser = u;
+          foundReq = r;
+          break;
+        }
+      }
+    }
+
+    if (!targetUser || !foundReq) {
+      await answerTelegramCallbackQuery(token, callbackId, 'Request pehle hi process ho chuki hai.');
+      return;
+    }
+
+    await answerTelegramCallbackQuery(token, callbackId, 'Request reject kar di.');
+    targetUser.pendingRequests = (targetUser.pendingRequests || []).filter(r => r.id !== reqId);
+    saveUsers(users);
+
+    await sendTelegramReply(
+      token,
+      chatId,
+      `❌ <b>Member Request Rejected.</b>\n\n<b>${foundReq.name}</b> ki link request ko reject kar diya gaya hai.`
+    );
+
+    await sendTelegramReply(
+      token,
+      foundReq.chatId,
+      `❌ <b>Request Rejected.</b>\n\nOwner ne <b>${targetUser.name}</b> ke ledger ke liye aapki link request reject kar di hai.`
+    );
+    return;
+  }
+
   await answerTelegramCallbackQuery(token, callbackId);
 
   let simulatedText = '';
   if (data === 'cmd_balance') simulatedText = '/balance';
   else if (data === 'cmd_summary') simulatedText = '/summary';
+  else if (data === 'cmd_gullak') simulatedText = '/gullak';
   else if (data === 'cmd_accounts') simulatedText = '/accounts';
   else if (data === 'cmd_budget' || data === 'cmd_catbudget') simulatedText = '/budget';
   else if (data === 'cmd_date_today') simulatedText = '/date today';
@@ -2013,41 +2484,92 @@ async function handleTelegramMessage(messageObj: any) {
         userToLink.linkedMembers = [];
       }
 
-      const isFirst = userToLink.linkedMembers.length === 0 && !userToLink.telegramChatId;
-      const memberName = messageObj.from?.first_name || userName || (isFirst ? userToLink.name : 'Family Member');
-      const existingMemberIdx = userToLink.linkedMembers.findIndex(m => String(m.telegramChatId) === String(chatId));
+      const isOwnerSelfLink = (!userToLink.telegramChatId || String(userToLink.telegramChatId) === String(chatId)) && userToLink.linkedMembers.length === 0;
+      const isAlreadyLinked = userToLink.linkedMembers.some(m => String(m.telegramChatId) === String(chatId)) || String(userToLink.telegramChatId) === String(chatId);
+      const memberName = messageObj.from?.first_name || userName || 'Family Member';
 
-      if (existingMemberIdx >= 0) {
-        userToLink.linkedMembers[existingMemberIdx].name = memberName;
-        userToLink.linkedMembers[existingMemberIdx].telegramUsername = messageObj.from?.username || userName;
-      } else {
+      if (isOwnerSelfLink) {
+        // First owner initial self-link
+        userToLink.telegramChatId = chatId;
+        userToLink.telegramUsername = messageObj.from?.username || userName;
         userToLink.linkedMembers.push({
           id: `mem_${chatId}`,
           name: memberName,
-          customAlias: isFirst ? `${userToLink.name} (Owner)` : memberName,
-          role: isFirst ? 'owner' : 'family',
+          customAlias: `${userToLink.name} (Owner)`,
+          role: 'owner',
           telegramChatId: chatId,
           telegramUsername: messageObj.from?.username || userName,
           linkedAt: new Date().toISOString(),
         });
+        saveUsers(users);
+        setActiveAccountForChat(chatId, userToLink.id);
+
+        await sendTelegramReply(
+          botToken,
+          chatId,
+          `🎉 <b>Khata Owner Telegram se Connect Ho Gaya!</b>\n\nNamaste <b>${memberName}</b>! Aapka Telegram account <b>${userToLink.name}</b> (<code>${userToLink.email}</code>) se jud chuka hai.`
+        );
+        return;
       }
 
-      if (!userToLink.telegramChatId) {
-        userToLink.telegramChatId = chatId;
-        userToLink.telegramUsername = messageObj.from?.username || userName;
+      if (isAlreadyLinked) {
+        setActiveAccountForChat(chatId, userToLink.id);
+        await sendTelegramReply(
+          botToken,
+          chatId,
+          `✅ <b>Aap Pehle Se Hi Jude Hue Hain!</b>\n\nAap <b>${userToLink.name}</b> (<code>${userToLink.email}</code>) ke khate se pehle hi connected hain aur ye aapka active default account hai.\n\n💡 <i>Accounts switch karne ya dekhne ke liye <code>/accounts</code> bhejein.</i>`
+        );
+        return;
       }
 
+      // If it's a new member joining an existing ledger: Require Owner Approval
+      if (!userToLink.pendingRequests) userToLink.pendingRequests = [];
+      const existingPending = userToLink.pendingRequests.find(r => String(r.chatId) === String(chatId));
+
+      if (existingPending) {
+        await sendTelegramReply(
+          botToken,
+          chatId,
+          `⏳ <b>Aapki Link Request Pehle Se Pending Hai!</b>\n\nAapne <b>${userToLink.name}</b> (${userToLink.email}) ke ledger se judne ki request bheji hui hai.\n\nJaise hi Owner (<b>${userToLink.name}</b>) Telegram ya Web Dashboard se isko <b>Approve</b> karenge, aapka account connect ho jayega!`
+        );
+        return;
+      }
+
+      const reqId = `req_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`;
+      const newReq: any = {
+        id: reqId,
+        chatId: String(chatId),
+        name: memberName,
+        telegramUsername: messageObj.from?.username || userName,
+        linkCode,
+        requestedAt: new Date().toISOString(),
+      };
+      userToLink.pendingRequests.push(newReq);
       saveUsers(users);
-      setActiveAccountForChat(chatId, userToLink.id);
 
-      const allLinkedForChat = getLinkedUsersForChat(chatId);
-
-      const totalMembers = userToLink.linkedMembers.length;
+      // Reply to the requesting user
       await sendTelegramReply(
         botToken,
         chatId,
-        `🎉 <b>${userToLink.name} ke Shared Khate se Connect ho gaye!</b>\n\nNamaste <b>${memberName}</b>! Aap successfully <b>${userToLink.name}</b> ke ledger (<b>${userToLink.email}</b>) se jud gaye hain.\n👥 <b>Is khate ke total members:</b> ${totalMembers}\n📊 <b>Aap kul ${allLinkedForChat.length} account(s) se jude hue hain.</b>\n\n💡 <b>Ab aap kharcha ya kamai sidhe log kar sakte hain:</b>\n• <code>500 sabzi cash</code>\n• <code>300 petrol upi</code>\n• <code>1200 groceries card</code>\n\n💡 <i>Saare accounts dekhne, switch karne ya unlink karne ke liye <code>/accounts</code> command bhejein!</i>`
+        `⏳ <b>Link Request Bhej Di Gayi Hai!</b>\n\nNamaste <b>${memberName}</b>! Aapne <b>${userToLink.name}</b> (${userToLink.email}) ke ledger se judne ki request bhej di hai.\n\n🔒 <b>Owner Approval Zaroori Hai:</b>\nJaise hi Owner (<b>${userToLink.name}</b>) isko <b>Approve</b> karenge, aapka account link ho jayega aur aap is khate me kharcha log kar payenge!`
       );
+
+      // Notify the Owner via Telegram if owner has a linked chat ID
+      if (userToLink.telegramChatId && String(userToLink.telegramChatId) !== String(chatId)) {
+        await sendTelegramReply(
+          botToken,
+          userToLink.telegramChatId,
+          `🔔 <b>NAYI MEMBER LINK REQUEST AAYI HAI!</b>\n\n👤 <b>Member:</b> <b>${memberName}</b> (@${messageObj.from?.username || 'N/A'})\n🔑 <b>Chat ID:</b> <code>${chatId}</code>\n📂 <b>Ledger:</b> ${userToLink.name} (${userToLink.email})\n\nKya aap is member ko apne khate me kharcha & kamai add karne ki permission dena chahte hain?`,
+          {
+            inline_keyboard: [
+              [
+                { text: `✅ Approve ${memberName}`, callback_data: `approve_req_${reqId}` },
+                { text: `❌ Reject`, callback_data: `reject_req_${reqId}` },
+              ],
+            ],
+          }
+        );
+      }
       return;
     } else {
       await sendTelegramReply(
@@ -2280,7 +2802,10 @@ Aap neeche diye gaye inline buttons par tap karein, keyboard buttons use karein 
 • <code>salary 50000 bank transfer</code>
 • <code>1200 ki jeans card se</code>
 
-🎯 <b>Budget & Date Reports:</b>
+🎯 <b>Budget, Date & Item Reports:</b>
+• <code>/spent signature</code> ya <code>signature pe kitna kharch huwa</code> - Kisi bhi item/merchant ka kul kharcha, total purchases aur average
+• <code>petrol me kitna gaya</code> ya <code>zomato ka total kharcha</code> - Natural language spending query
+• <code>/gullak</code> - Unspent category budget se bachi hui Gullak bachat
 • <code>/budget</code> - Kon si category me kitna kharcha hua aur kitna balance bacha
 • <code>/date 2 sep</code> ya <code>kal ka kharcha</code> - Kisi specific date ka hisaab-kitaab
 
@@ -2407,6 +2932,39 @@ Aap neeche diye gaye inline buttons par tap karein, keyboard buttons use karein 
         [
           { text: '📅 Aaj Ka Hisab', callback_data: 'cmd_date_today' },
           { text: '🏷️ Categories', callback_data: 'cmd_categories' },
+        ],
+      ],
+    });
+    return;
+  }
+
+  // 6.25. Gullak (Piggy Bank) Savings from Unspent Monthly Budget Command
+  const isGullakQuery =
+    command === '/gullak' ||
+    command === '/piggybank' ||
+    command === '/gullakbatao' ||
+    command === '/bachatkhata' ||
+    lowerText === 'gullak' ||
+    lowerText === 'piggy bank' ||
+    lowerText.includes('🐷 gullak') ||
+    lowerText.includes('gullak hisab') ||
+    lowerText.includes('gullak me kitna') ||
+    lowerText.includes('gullak dekh') ||
+    lowerText.includes('kitna bacha budget') ||
+    lowerText.includes('bacha hua budget') ||
+    lowerText.includes('budget bachat');
+
+  if (isGullakQuery) {
+    const gullakMsg = buildGullakReportTelegramMessage(userId, targetUser.name);
+    await sendTelegramReply(botToken, chatId, gullakMsg, {
+      inline_keyboard: [
+        [
+          { text: '💰 Check Balance', callback_data: 'cmd_balance' },
+          { text: '🎯 Category Budget', callback_data: 'cmd_budget' },
+        ],
+        [
+          { text: '📊 Monthly Summary', callback_data: 'cmd_summary' },
+          { text: '🤖 AI Tips & Bachat', callback_data: 'cmd_tips' },
         ],
       ],
     });
@@ -2703,6 +3261,25 @@ ${tipsText}
         [
           { text: '📊 Summary', callback_data: 'cmd_summary' },
           { text: '🤖 AI Tips', callback_data: 'cmd_tips' },
+        ],
+      ],
+    });
+    return;
+  }
+
+  // 8.75. Item-Specific Natural Language Spending Query (e.g. /spent signature, signature pe kitna kharch huwa, petrol me kitna gaya, zomato ka total kharcha)
+  const itemQuery = extractItemSpendingQuery(rawText);
+  if (itemQuery) {
+    const itemReportMsg = buildItemSpendingReportTelegramMessage(userId, itemQuery, targetUser.name);
+    await sendTelegramReply(botToken, chatId, itemReportMsg, {
+      inline_keyboard: [
+        [
+          { text: '💰 Check Balance', callback_data: 'cmd_balance' },
+          { text: '📊 Monthly Summary', callback_data: 'cmd_summary' },
+        ],
+        [
+          { text: '🎯 Category Budget', callback_data: 'cmd_budget' },
+          { text: '🕒 Recent 5 Tx', callback_data: 'cmd_recent' },
         ],
       ],
     });
@@ -3112,6 +3689,111 @@ app.post('/api/auth/regenerate-linkcode', (req, res) => {
   user.linkCode = generateLinkCode();
   saveJson(USERS_FILE, users);
   res.json({ success: true, linkCode: user.linkCode, user: toSafeUser(user) });
+});
+
+// Member Request Approval / Rejection Endpoints for Web Dashboard
+app.get(['/api/members/pending-requests', '/api/auth/members/pending-requests'], (req, res) => {
+  const user = getRequestUser(req);
+  if (!user) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  res.json({ pendingRequests: user.pendingRequests || [] });
+});
+
+app.post(['/api/members/approve-request', '/api/auth/members/approve-request'], async (req, res) => {
+  const user = getRequestUser(req);
+  if (!user) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  const { requestId } = req.body;
+  if (!requestId) {
+    return res.status(400).json({ error: 'requestId is required' });
+  }
+
+  if (!user.pendingRequests) user.pendingRequests = [];
+  const foundReq = user.pendingRequests.find(r => r.id === requestId);
+  if (!foundReq) {
+    return res.status(404).json({ error: 'Pending request not found' });
+  }
+
+  user.pendingRequests = user.pendingRequests.filter(r => r.id !== requestId);
+  if (!user.linkedMembers) user.linkedMembers = [];
+  if (!user.linkedMembers.some(m => String(m.telegramChatId) === String(foundReq.chatId))) {
+    user.linkedMembers.push({
+      id: `mem_${foundReq.chatId}`,
+      name: foundReq.name,
+      customAlias: foundReq.name,
+      role: 'family',
+      telegramChatId: foundReq.chatId,
+      telegramUsername: foundReq.telegramUsername,
+      linkedAt: new Date().toISOString(),
+    });
+  }
+
+  saveJson(USERS_FILE, users);
+  setActiveAccountForChat(foundReq.chatId, user.id);
+
+  // Notify member on Telegram
+  const botToken = botConfig.botToken || process.env.TELEGRAM_BOT_TOKEN;
+  if (botToken) {
+    sendTelegramReply(
+      botToken,
+      foundReq.chatId,
+      `🎉 <b>Badhaai Ho! Request Approve Ho Gayi!</b>\n\nOwner <b>${user.name}</b> ne Web Dashboard se aapki link request approve kar di hai.\n\n💡 <b>Ab aap is shared ledger me kharcha ya kamai sidhe log kar sakte hain:</b>\n• <code>500 sabzi cash</code>\n• <code>300 petrol upi</code>`
+    ).catch(() => {});
+  }
+
+  res.json({
+    success: true,
+    message: `Member ${foundReq.name} approved successfully!`,
+    members: user.linkedMembers,
+    pendingRequests: user.pendingRequests,
+    user: toSafeUser(user),
+  });
+});
+
+app.post(['/api/members/reject-request', '/api/auth/members/reject-request'], async (req, res) => {
+  const user = getRequestUser(req);
+  if (!user) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  const { requestId } = req.body;
+  if (!requestId) {
+    return res.status(400).json({ error: 'requestId is required' });
+  }
+
+  if (!user.pendingRequests) user.pendingRequests = [];
+  const foundReq = user.pendingRequests.find(r => r.id === requestId);
+  if (!foundReq) {
+    return res.status(404).json({ error: 'Pending request not found' });
+  }
+
+  user.pendingRequests = user.pendingRequests.filter(r => r.id !== requestId);
+  saveJson(USERS_FILE, users);
+
+  const botToken = botConfig.botToken || process.env.TELEGRAM_BOT_TOKEN;
+  if (botToken) {
+    sendTelegramReply(
+      botToken,
+      foundReq.chatId,
+      `❌ <b>Request Rejected.</b>\n\nOwner ne <b>${user.name}</b> ke ledger ke liye aapki link request reject kar di hai.`
+    ).catch(() => {});
+  }
+
+  res.json({
+    success: true,
+    message: 'Request rejected',
+    pendingRequests: user.pendingRequests,
+    user: toSafeUser(user),
+  });
+});
+
+// Gullak (Unspent Monthly Budget Piggy Bank) API
+app.get('/api/gullak', (req, res) => {
+  const user = getRequestUser(req);
+  const targetUserId = user ? user.id : (users[0]?.id || 'default_user');
+  const summary = calculateGullakSummary(targetUserId);
+  res.json(summary);
 });
 
 // 2. Custom Categories Management APIs
@@ -3761,11 +4443,13 @@ app.get('/api/budgets/template', (req, res) => {
   }
 });
 
-// Full Ledger Backup Restore Function
+// Full Ledger & Account Multi-Sheet Backup Restore Function
 export function restoreTransactionsBackup(
   userId: string,
   rawRows: any[],
-  replaceExisting: boolean = false
+  replaceExisting: boolean = false,
+  rawCategoriesRows: any[] = [],
+  rawBudgetsRows: any[] = []
 ): {
   restoredCount: number;
   categoriesCreated: number;
@@ -3778,12 +4462,76 @@ export function restoreTransactionsBackup(
   let restoredCount = 0;
   let categoriesCreated = 0;
 
+  // 1. Restore/Merge Categories if provided
+  if (Array.isArray(rawCategoriesRows) && rawCategoriesRows.length > 0) {
+    for (const cRow of rawCategoriesRows) {
+      if (!cRow || typeof cRow !== 'object') continue;
+      const cObj: Record<string, any> = {};
+      for (const k of Object.keys(cRow)) {
+        cObj[k.trim().toLowerCase().replace(/[\s_\-\(\)]+/g, '')] = cRow[k];
+      }
+
+      const catName = String(cObj['categoryname'] ?? cObj['category'] ?? cObj['name'] ?? '').trim();
+      if (!catName) continue;
+
+      const catType = String(cObj['type'] ?? 'expense').toLowerCase().includes('income') ? 'income' : 'expense';
+      const catIcon = String(cObj['icon'] ?? 'Folder').trim();
+      const catColor = String(cObj['color'] ?? 'indigo').trim();
+      const rawKeywords = cObj['keywords'] ?? cObj['keyword'] ?? '';
+      const keywords = typeof rawKeywords === 'string'
+        ? rawKeywords.split(',').map(k => k.trim().toLowerCase()).filter(Boolean)
+        : Array.isArray(rawKeywords) ? rawKeywords.map(String) : [];
+      const isCustom = String(cObj['customcategory'] ?? cObj['iscustom'] ?? 'yes').toLowerCase().includes('y');
+
+      const existingCatIndex = store.categories.findIndex(c => c.name.toLowerCase() === catName.toLowerCase());
+      if (existingCatIndex >= 0) {
+        store.categories[existingCatIndex] = {
+          ...store.categories[existingCatIndex],
+          icon: catIcon || store.categories[existingCatIndex].icon,
+          color: catColor || store.categories[existingCatIndex].color,
+          keywords: keywords.length > 0 ? keywords : store.categories[existingCatIndex].keywords,
+          type: catType as 'income' | 'expense',
+        };
+      } else {
+        store.categories.push({
+          id: `cat_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+          name: catName.charAt(0).toUpperCase() + catName.slice(1),
+          type: catType as 'income' | 'expense',
+          icon: catIcon || 'Folder',
+          color: catColor || 'indigo',
+          keywords,
+          isCustom,
+        });
+        categoriesCreated++;
+      }
+
+      // Budget Limit
+      const rawLimit = cObj['monthlybudgetlimitinr'] ?? cObj['monthlybudget'] ?? cObj['budget'] ?? cObj['limit'];
+      if (rawLimit !== undefined && rawLimit !== null && !isNaN(Number(rawLimit))) {
+        const limitNum = Math.max(0, parseFloat(String(rawLimit)));
+        const budgetIndex = store.budgets.findIndex(b => b.category.toLowerCase() === catName.toLowerCase());
+        if (budgetIndex >= 0) {
+          store.budgets[budgetIndex].limit = limitNum;
+        } else {
+          store.budgets.push({
+            category: catName,
+            limit: limitNum,
+            spent: 0,
+            period: 'monthly',
+          });
+        }
+      }
+    }
+  }
+
+  // 2. Clear transactions if replaceExisting
   if (replaceExisting) {
     store.transactions = [];
   }
 
   const existingTxIds = new Set(store.transactions.map(t => t.id));
 
+  // 3. Restore Transactions
   for (const rawRow of rawRows) {
     if (!rawRow || typeof rawRow !== 'object') continue;
 
@@ -3899,8 +4647,8 @@ export function restoreTransactionsBackup(
       tags = rawTags.split(',').map(t => t.trim()).filter(Boolean);
     }
 
-    const txId = rowObj['id'] && !existingTxIds.has(String(rowObj['id']))
-      ? String(rowObj['id'])
+    const txId = (rowObj['transactionid'] || rowObj['id']) && !existingTxIds.has(String(rowObj['transactionid'] || rowObj['id']))
+      ? String(rowObj['transactionid'] || rowObj['id'])
       : `tx_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
 
     const newTx: Transaction = {
@@ -3947,7 +4695,7 @@ export function restoreTransactionsBackup(
   };
 }
 
-// RESTORE TRANSACTIONS BACKUP ENDPOINT
+// RESTORE TRANSACTIONS & FULL ACCOUNT BACKUP ENDPOINT
 app.post('/api/transactions/restore-backup', (req, res) => {
   try {
     const user = getRequestUser(req);
@@ -3955,33 +4703,125 @@ app.post('/api/transactions/restore-backup', (req, res) => {
       return res.status(401).json({ error: 'User session not found. Please log in.' });
     }
 
-    const { rows, fileBase64, replaceExisting = false } = req.body;
-    let parsedRows: any[] = [];
+    const { rows, fileBase64, categoriesRows, budgetsRows, replaceExisting = false } = req.body;
+    let parsedTxRows: any[] = [];
+    let parsedCatRows: any[] = Array.isArray(categoriesRows) ? categoriesRows : [];
+    let parsedBudRows: any[] = Array.isArray(budgetsRows) ? budgetsRows : [];
 
-    if (Array.isArray(rows) && rows.length > 0) {
-      parsedRows = rows;
-    } else if (fileBase64) {
+    if (fileBase64) {
       try {
         const buffer = Buffer.from(fileBase64, 'base64');
         const workbook = XLSX.read(buffer, { type: 'buffer' });
-        const sheetName = workbook.SheetNames[0];
-        const sheet = workbook.Sheets[sheetName];
-        parsedRows = XLSX.utils.sheet_to_json(sheet);
+
+        // 1. Check for High-Fidelity JSON snapshot sheet
+        const metaSheet = workbook.Sheets['_TeleExpense_Backup_Data_'];
+        if (metaSheet) {
+          const metaRows = XLSX.utils.sheet_to_json<any>(metaSheet);
+          if (metaRows.length > 0 && metaRows[0].DataJSON) {
+            try {
+              const fullData = JSON.parse(metaRows[0].DataJSON);
+              const store = getUserData(user.id);
+              let restoredCount = 0;
+              let categoriesCreated = 0;
+
+              // Restore categories
+              if (Array.isArray(fullData.categories)) {
+                for (const cat of fullData.categories) {
+                  const existingIdx = store.categories.findIndex(c => c.name.toLowerCase() === cat.name.toLowerCase());
+                  if (existingIdx >= 0) {
+                    store.categories[existingIdx] = { ...store.categories[existingIdx], ...cat };
+                  } else {
+                    store.categories.push(cat);
+                    categoriesCreated++;
+                  }
+                }
+              }
+
+              // Restore budgets
+              if (Array.isArray(fullData.budgets)) {
+                for (const b of fullData.budgets) {
+                  const existingBIdx = store.budgets.findIndex(item => item.category.toLowerCase() === b.category.toLowerCase());
+                  if (existingBIdx >= 0) {
+                    store.budgets[existingBIdx].limit = b.limit;
+                  } else {
+                    store.budgets.push(b);
+                  }
+                }
+              }
+
+              // Restore transactions
+              if (replaceExisting) {
+                store.transactions = [];
+              }
+              const existingTxIds = new Set(store.transactions.map(t => t.id));
+              if (Array.isArray(fullData.transactions)) {
+                for (const t of fullData.transactions) {
+                  if (!existingTxIds.has(t.id)) {
+                    store.transactions.push({ ...t, userId: user.id });
+                    existingTxIds.add(t.id);
+                    restoredCount++;
+                  }
+                }
+              }
+
+              store.transactions.sort((a, b) => {
+                const timeA = new Date(`${a.date}T${a.time || '00:00'}`).getTime();
+                const timeB = new Date(`${b.date}T${b.time || '00:00'}`).getTime();
+                return timeB - timeA;
+              });
+
+              syncBudgetsWithCategories(store);
+              saveUserData(user.id, store);
+
+              return res.json({
+                success: true,
+                message: `Pure account ka backup successfully restore ho gaya! (${restoredCount} transactions, ${categoriesCreated} nayi categories)`,
+                restoredCount,
+                categoriesCreated,
+                transactions: store.transactions,
+                categories: store.categories,
+                budgets: store.budgets,
+                summary: calculateUserSummary(user.id),
+              });
+            } catch (jsonErr) {
+              console.warn('JSON sheet parse fallback to normal sheets', jsonErr);
+            }
+          }
+        }
+
+        // 2. Parse Multi-Sheets
+        for (const sName of workbook.SheetNames) {
+          const lowerName = sName.toLowerCase();
+          const s = workbook.Sheets[sName];
+          const sRows = XLSX.utils.sheet_to_json(s);
+          if (lowerName.includes('transaction') || lowerName.includes('ledger')) {
+            parsedTxRows = sRows;
+          } else if (lowerName.includes('categor') || lowerName.includes('budget')) {
+            parsedCatRows = sRows;
+          }
+        }
+
+        // Fallback: If no sheet matched transaction, take the first sheet
+        if (parsedTxRows.length === 0 && workbook.SheetNames.length > 0) {
+          parsedTxRows = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]]);
+        }
       } catch (e: any) {
-        return res.status(400).json({ error: `Excel/CSV file parse error: ${e.message}` });
+        return res.status(400).json({ error: `Excel file parse error: ${e.message}` });
       }
+    } else if (Array.isArray(rows) && rows.length > 0) {
+      parsedTxRows = rows;
     } else {
       return res.status(400).json({ error: 'No transaction rows or fileBase64 provided' });
     }
 
-    if (parsedRows.length === 0) {
-      return res.status(400).json({ error: 'Backup file me koi valid transaction data nahi mila' });
+    if (parsedTxRows.length === 0 && parsedCatRows.length === 0) {
+      return res.status(400).json({ error: 'Backup file me koi valid transaction ya category data nahi mila' });
     }
 
-    const result = restoreTransactionsBackup(user.id, parsedRows, replaceExisting);
+    const result = restoreTransactionsBackup(user.id, parsedTxRows, replaceExisting, parsedCatRows, parsedBudRows);
     return res.json({
       success: true,
-      message: `${result.restoredCount} transactions successfully restore ho gaye hain! (${result.categoriesCreated} nayi categories create hui)`,
+      message: `${result.restoredCount} transactions aur ${result.categories.length} categories successfully restore ho gaye hain!`,
       ...result,
     });
   } catch (err: any) {
@@ -3990,13 +4830,59 @@ app.post('/api/transactions/restore-backup', (req, res) => {
   }
 });
 
+// ITEM-SPECIFIC SPENDING REPORT API
+app.get('/api/transactions/item-spending', (req, res) => {
+  try {
+    const user = getRequestUser(req);
+    if (!user) {
+      return res.status(401).json({ error: 'User session not found' });
+    }
+    const query = String(req.query.q || '').trim();
+    if (!query) {
+      return res.status(400).json({ error: 'Query parameter "q" is required' });
+    }
+    const store = getUserData(user.id);
+    const cleanQ = query.toLowerCase();
+
+    const matchingExpenses = store.transactions.filter(t => {
+      if (t.type !== 'expense') return false;
+      const desc = (t.description || '').toLowerCase();
+      const cat = (t.category || '').toLowerCase();
+      const raw = (t.rawMessage || '').toLowerCase();
+      const tags = (t.tags || []).map(tg => tg.toLowerCase());
+      return desc.includes(cleanQ) || cat.includes(cleanQ) || raw.includes(cleanQ) || tags.some(tg => tg.includes(cleanQ));
+    });
+
+    const totalSpent = matchingExpenses.reduce((sum, t) => sum + (Number(t.amount) || 0), 0);
+    const totalPurchases = matchingExpenses.length;
+    const avgPerPurchase = totalPurchases > 0 ? Math.round(totalSpent / totalPurchases) : 0;
+    const highestSinglePurchase = matchingExpenses.length > 0 ? Math.max(...matchingExpenses.map(t => Number(t.amount) || 0)) : 0;
+
+    return res.json({
+      success: true,
+      query,
+      totalSpent,
+      totalPurchases,
+      avgPerPurchase,
+      highestSinglePurchase,
+      recentPurchases: matchingExpenses.slice(0, 10),
+    });
+  } catch (err: any) {
+    console.error('Error fetching item spending:', err);
+    return res.status(500).json({ error: err?.message || 'Failed to calculate item spending' });
+  }
+});
+
 // EXPORT COMPREHENSIVE BACKUP FILE (EXCEL / CSV)
 app.get('/api/transactions/export-backup', (req, res) => {
   try {
     const user = getRequestUser(req);
-    const store = getUserData(user ? user.id : 'default');
+    const userId = user ? user.id : 'default';
+    const store = getUserData(userId);
+    const summary = calculateUserSummary(userId);
     const format = req.query.format === 'csv' ? 'csv' : 'xlsx';
 
+    // 1. Transactions Sheet Data
     const transactionsData = store.transactions.map((t) => ({
       'Date': t.date,
       'Time': t.time || '12:00',
@@ -4009,27 +4895,95 @@ app.get('/api/transactions/export-backup', (req, res) => {
       'Raw Message': t.rawMessage || '',
       'Telegram User': t.telegramUser || (user?.name || ''),
       'Tags': Array.isArray(t.tags) ? t.tags.join(', ') : '',
+      'Transaction ID': t.id,
     }));
 
-    const categoriesData = store.categories.map((c) => ({
-      'Category': c.name,
-      'Type': c.type,
-      'Monthly Budget': store.budgets.find(b => b.category.toLowerCase() === c.name.toLowerCase())?.limit || 0,
-      'Keywords': c.keywords ? c.keywords.join(', ') : '',
-    }));
+    // 2. Categories & Budgets Sheet Data
+    const categoriesData = store.categories.map((c) => {
+      const budgetObj = store.budgets.find(b => b.category.toLowerCase() === c.name.toLowerCase());
+      return {
+        'Category Name': c.name,
+        'Type': c.type,
+        'Monthly Budget Limit (INR)': budgetObj ? budgetObj.limit : 0,
+        'Icon': c.icon || 'Folder',
+        'Color': c.color || 'indigo',
+        'Keywords': c.keywords ? c.keywords.join(', ') : '',
+        'Custom Category': c.isCustom ? 'YES' : 'NO',
+      };
+    });
+
+    // 3. Account Details Sheet Data
+    const accountData = [
+      { 'Setting / Property': 'Account Name', 'Value': user?.name || 'Main Ledger' },
+      { 'Setting / Property': 'Account ID', 'Value': userId },
+      { 'Setting / Property': 'Telegram Chat ID', 'Value': user?.telegramChatId || 'Not Linked' },
+      { 'Setting / Property': 'Telegram Username', 'Value': user?.telegramUsername ? `@${user.telegramUsername}` : 'Not Set' },
+      { 'Setting / Property': 'Link Code', 'Value': user?.linkCode ? `/link ${user.linkCode}` : 'N/A' },
+      { 'Setting / Property': 'Backup Created At', 'Value': new Date().toLocaleString('en-IN') },
+      { 'Setting / Property': 'Total Transactions Count', 'Value': store.transactions.length },
+      { 'Setting / Property': 'Total Categories Count', 'Value': store.categories.length },
+      { 'Setting / Property': 'Total Income (INR)', 'Value': summary.totalIncome },
+      { 'Setting / Property': 'Total Expense (INR)', 'Value': summary.totalExpense },
+      { 'Setting / Property': 'Net Balance (INR)', 'Value': summary.netSavings },
+      { 'Setting / Property': 'Savings Rate', 'Value': `${summary.savingsRate}%` },
+    ];
+
+    // 4. Linked Family Members Sheet Data
+    const linkedMembersData = (user?.linkedMembers && user.linkedMembers.length > 0)
+      ? user.linkedMembers.map(m => ({
+          'Member Name': m.name,
+          'Telegram Chat ID': m.telegramChatId,
+          'Telegram Username': m.telegramUsername ? `@${m.telegramUsername}` : 'N/A',
+          'Role': m.role || 'member',
+          'Linked At': m.linkedAt || '',
+        }))
+      : [{ 'Member Name': user?.name || 'Owner', 'Telegram Chat ID': user?.telegramChatId || '', 'Telegram Username': user?.telegramUsername || '', 'Role': 'owner', 'Linked At': '' }];
+
+    // 5. Raw Full State JSON (for 100% loss-free roundtrip restore)
+    const rawBackupPayload = [
+      {
+        'BackupVersion': '2.0',
+        'ExportDate': new Date().toISOString(),
+        'UserId': userId,
+        'DataJSON': JSON.stringify({
+          version: '2.0',
+          exportedAt: new Date().toISOString(),
+          user: user ? { id: user.id, name: user.name, telegramChatId: user.telegramChatId, telegramUsername: user.telegramUsername, linkCode: user.linkCode, linkedMembers: user.linkedMembers } : null,
+          categories: store.categories,
+          budgets: store.budgets,
+          transactions: store.transactions,
+        }),
+      }
+    ];
 
     const workbook = XLSX.utils.book_new();
-    const wsTx = XLSX.utils.json_to_sheet(transactionsData);
+
+    // Add Sheet 1: Transactions Ledger
+    const wsTx = XLSX.utils.json_to_sheet(transactionsData.length > 0 ? transactionsData : [{ 'Date': '', 'Type': '', 'Amount (INR)': '', 'Category': '', 'Description': '' }]);
     XLSX.utils.book_append_sheet(workbook, wsTx, 'Transactions Ledger');
 
+    // Add Sheet 2: Categories & Budgets
     const wsCats = XLSX.utils.json_to_sheet(categoriesData);
     XLSX.utils.book_append_sheet(workbook, wsCats, 'Categories & Budgets');
 
-    const fileName = `TeleExpense_Backup_${user?.name || 'Ledger'}_${new Date().toISOString().split('T')[0]}`;
+    // Add Sheet 3: Account & Summary
+    const wsAcc = XLSX.utils.json_to_sheet(accountData);
+    XLSX.utils.book_append_sheet(workbook, wsAcc, 'Account Details');
+
+    // Add Sheet 4: Linked Members
+    const wsMembers = XLSX.utils.json_to_sheet(linkedMembersData);
+    XLSX.utils.book_append_sheet(workbook, wsMembers, 'Linked Members');
+
+    // Add Sheet 5: Internal Metadata
+    const wsMeta = XLSX.utils.json_to_sheet(rawBackupPayload);
+    XLSX.utils.book_append_sheet(workbook, wsMeta, '_TeleExpense_Backup_Data_');
+
+    const sanitizedName = (user?.name || 'Ledger').replace(/[^a-zA-Z0-9_]/g, '_');
+    const fileName = `TeleExpense_Full_Backup_${sanitizedName}_${new Date().toISOString().split('T')[0]}`;
 
     if (format === 'csv') {
       const csvContent = XLSX.utils.sheet_to_csv(wsTx);
-      res.setHeader('Content-Type', 'text/csv');
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
       res.setHeader('Content-Disposition', `attachment; filename="${fileName}.csv"`);
       return res.send(csvContent);
     } else {

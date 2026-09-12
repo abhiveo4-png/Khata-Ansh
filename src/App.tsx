@@ -8,7 +8,8 @@ import {
   RefreshCw,
   Lock,
   Coins,
-  PiggyBank
+  PiggyBank,
+  Users
 } from 'lucide-react';
 import { Transaction, FinancialSummary, BotConfig, CategoryBudget, UserProfile, CategoryDef } from './types';
 import { safeFetchJson, setActiveUserId, setAuthSession, getActiveUserId } from './utils/api';
@@ -26,6 +27,7 @@ import { CategoryManager } from './components/CategoryManager';
 import { AuthModal } from './components/AuthModal';
 import { AiInsightsModal } from './components/AiInsightsModal';
 import { ExcelBackupRestoreModal } from './components/ExcelBackupRestoreModal';
+import { GullakView } from './components/GullakView';
 
 export default function App() {
   // Multi-user Profile State
@@ -53,7 +55,7 @@ export default function App() {
   const [botConfig, setBotConfig] = useState<BotConfig | null>(null);
   const [webhookUrl, setWebhookUrl] = useState('');
   const [appUrl, setAppUrl] = useState('');
-  const [activeTab, setActiveTab] = useState<'transactions' | 'investments' | 'categories' | 'analytics' | 'budgets'>('transactions');
+  const [activeTab, setActiveTab] = useState<'transactions' | 'gullak' | 'investments' | 'categories' | 'analytics' | 'budgets'>('transactions');
 
   // Modals state
   const [isBotSetupOpen, setIsBotSetupOpen] = useState(false);
@@ -387,6 +389,39 @@ export default function App() {
           </div>
         )}
 
+        {/* Pending Member Requests Notification Banner */}
+        {currentUser?.pendingRequests && currentUser.pendingRequests.length > 0 && (
+          <div className="bg-amber-950/40 rounded-2xl p-4 sm:p-5 border border-amber-500/40 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-lg animate-in fade-in">
+            <div className="flex items-start sm:items-center space-x-3.5">
+              <div className="w-10 h-10 rounded-xl bg-amber-500/20 border border-amber-500/30 flex items-center justify-center text-amber-300 shrink-0">
+                <Users className="w-5 h-5" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h3 className="font-semibold text-sm text-white">
+                    {currentUser.pendingRequests.length} Naye Member Link Requests Aaye Hain!
+                  </h3>
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40">
+                    Action Required
+                  </span>
+                </div>
+                <p className="text-xs text-slate-300 mt-0.5">
+                  {currentUser.pendingRequests.map(r => r.name).join(', ')} ne aapke khate se judne ke liye request bheji hai.
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={() => {
+                setAuthModalInitialTab('family');
+                setIsAuthModalOpen(true);
+              }}
+              className="w-full sm:w-auto px-4 py-2 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold rounded-xl text-xs shrink-0 cursor-pointer text-center transition-all shadow-md"
+            >
+              Requests Review & Approve Karein
+            </button>
+          </div>
+        )}
+
         {/* Summary Cards */}
         <OverviewCards summary={summary} />
 
@@ -404,6 +439,23 @@ export default function App() {
             >
               <FileText className="w-4 h-4" />
               <span>Kharcha & Kamai ({transactions.length})</span>
+            </button>
+
+            <button
+              onClick={() => setActiveTab('gullak')}
+              className={`pb-3 text-xs sm:text-sm font-semibold border-b-2 flex items-center space-x-2 transition-all shrink-0 cursor-pointer ${
+                activeTab === 'gullak'
+                  ? 'border-amber-500 text-amber-400'
+                  : 'border-transparent text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <PiggyBank className="w-4 h-4 text-amber-400" />
+              <span className="flex items-center gap-1.5">
+                Gullak (Bacha Budget)
+                <span className="text-[10px] font-mono px-1.5 py-0.2 rounded-md bg-amber-950/90 text-amber-300 border border-amber-500/40">
+                  Savings
+                </span>
+              </span>
             </button>
 
             <button
@@ -487,6 +539,12 @@ export default function App() {
               onClearAll={handleClearAll}
             />
           </div>
+        )}
+
+        {activeTab === 'gullak' && (
+          <GullakView
+            authToken={localStorage.getItem('teleexpense_auth_token')}
+          />
         )}
 
         {activeTab === 'investments' && (

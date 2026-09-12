@@ -15,6 +15,7 @@ import {
   Users,
   LogOut,
   UserCheck,
+  UserX,
   Heart,
   Share2,
   Trash2,
@@ -27,9 +28,10 @@ import {
   Unlock,
   Eye,
   EyeOff,
-  ShieldAlert
+  ShieldAlert,
+  Clock
 } from 'lucide-react';
-import { UserProfile, LinkedMember } from '../types';
+import { UserProfile, LinkedMember, PendingMemberRequest } from '../types';
 import { safeFetchJson, setAuthSession } from '../utils/api';
 
 interface AuthModalProps {
@@ -236,6 +238,54 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       }
     } catch (err) {
       console.error(err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleApproveRequest = async (requestId: string) => {
+    setLoading(true);
+    try {
+      const { data, error: apiErr } = await safeFetchJson<{ success?: boolean; user?: UserProfile; message?: string }>(
+        '/api/auth/members/approve-request',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ requestId }),
+        }
+      );
+      if (data?.user) {
+        await onRefreshUsers();
+        if (onSelectUser) onSelectUser(data.user);
+      } else if (apiErr) {
+        setError(apiErr);
+      }
+    } catch (err) {
+      console.error('Failed to approve member request:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleRejectRequest = async (requestId: string) => {
+    setLoading(true);
+    try {
+      const { data, error: apiErr } = await safeFetchJson<{ success?: boolean; user?: UserProfile }>(
+        '/api/auth/members/reject-request',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ requestId }),
+        }
+      );
+      if (data?.user) {
+        await onRefreshUsers();
+        if (onSelectUser) onSelectUser(data.user);
+      } else if (apiErr) {
+        setError(apiErr);
+      }
+    } catch (err) {
+      console.error('Failed to reject member request:', err);
     } finally {
       setLoading(false);
     }
@@ -658,10 +708,78 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                   <ol className="list-decimal list-inside space-y-1 text-slate-400 pl-1 font-mono">
                     <li>Open Telegram and search for <b className="text-white">@{botUsername}</b></li>
                     <li>Send this message: <code className="bg-cyan-950 text-cyan-300 px-1.5 py-0.5 rounded font-bold">/link {currentUser.linkCode}</code></li>
-                    <li>Done! Any expenses sent (e.g. <code className="text-slate-300">500 sabzi cash</code>) flow straight to this shared vault.</li>
+                    <li>Done! You (Owner) will receive an approval prompt here and in Telegram before they get access.</li>
                   </ol>
                 </div>
               </div>
+
+              {/* Pending Join Requests (Owner Approval Queue) */}
+              {currentUser.pendingRequests && currentUser.pendingRequests.length > 0 && (
+                <div className="p-4 bg-amber-950/40 border border-amber-500/40 rounded-2xl space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center space-x-2">
+                      <Clock className="w-4 h-4 text-amber-400 animate-pulse" />
+                      <span className="text-xs font-bold text-amber-300 uppercase tracking-wider">
+                        PENDING JOIN REQUESTS ({currentUser.pendingRequests.length})
+                      </span>
+                    </div>
+                    <span className="text-[10px] bg-amber-500/20 text-amber-300 px-2 py-0.5 rounded-full border border-amber-500/30">
+                      Owner Approval Required
+                    </span>
+                  </div>
+
+                  <p className="text-[11px] text-slate-300">
+                    Naye members ne link code use karke judne ki request bheji hai. Approve karne par hi wo khate me add honge:
+                  </p>
+
+                  <div className="space-y-2">
+                    {currentUser.pendingRequests.map((req) => (
+                      <div
+                        key={req.id}
+                        className="p-3 bg-slate-950/90 rounded-xl border border-amber-500/30 flex items-center justify-between gap-3"
+                      >
+                        <div className="flex items-center space-x-3 min-w-0">
+                          <div className="w-8 h-8 rounded-lg bg-amber-500/20 border border-amber-500/30 text-amber-300 font-bold flex items-center justify-center text-xs shrink-0">
+                            {req.name.charAt(0).toUpperCase()}
+                          </div>
+                          <div className="min-w-0">
+                            <div className="text-xs font-bold text-white flex items-center gap-1.5 truncate">
+                              <span>{req.name}</span>
+                              {req.telegramUsername && (
+                                <span className="text-[10px] text-slate-400 font-normal">
+                                  @{req.telegramUsername}
+                                </span>
+                              )}
+                            </div>
+                            <div className="text-[10px] text-slate-400 font-mono">
+                              Chat ID: {req.chatId} • {new Date(req.requestedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center space-x-1.5 shrink-0">
+                          <button
+                            onClick={() => handleApproveRequest(req.id)}
+                            disabled={loading}
+                            className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold flex items-center space-x-1 transition-all shadow-sm cursor-pointer"
+                          >
+                            <Check className="w-3.5 h-3.5" />
+                            <span>Approve</span>
+                          </button>
+                          <button
+                            onClick={() => handleRejectRequest(req.id)}
+                            disabled={loading}
+                            className="px-2.5 py-1.5 bg-rose-950 hover:bg-rose-900 border border-rose-800 text-rose-300 rounded-lg text-xs font-bold flex items-center space-x-1 transition-all cursor-pointer"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                            <span>Reject</span>
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               {/* Connected Telegram Members List */}
               <div className="space-y-2.5">

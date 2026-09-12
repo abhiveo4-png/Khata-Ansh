@@ -12,6 +12,15 @@ export interface LinkedMember {
   linkedAt: string;
 }
 
+export interface PendingMemberRequest {
+  id: string; // e.g. "req_123456789"
+  chatId: string;
+  name: string;
+  telegramUsername?: string;
+  linkCode: string;
+  requestedAt: string;
+}
+
 export interface UserProfile {
   id: string;
   name: string;
@@ -20,6 +29,7 @@ export interface UserProfile {
   telegramChatId?: string;
   telegramUsername?: string;
   linkedMembers?: LinkedMember[]; // Multiple Telegram members connected to this shared ledger
+  pendingRequests?: PendingMemberRequest[]; // New member link requests awaiting owner approval
   linkCode: string; // 6-digit linking code e.g. "729104"
   createdAt: string;
 }
@@ -129,4 +139,37 @@ export interface AiFinancialInsights {
     items: AvoidableExpenseItem[];
   };
 }
+
+export interface GullakCategorySaving {
+  category: string;
+  month: string; // YYYY-MM
+  budgetLimit: number;
+  spent: number;
+  savedAmount: number; // limit - spent (if > 0)
+}
+
+export interface GullakMonthRecord {
+  month: string; // YYYY-MM
+  monthName: string; // e.g. "September 2026"
+  totalBudget: number;
+  totalSpent: number;
+  totalSaved: number;
+  categories: GullakCategorySaving[];
+}
+
+export interface GullakSummary {
+  totalGullakSavings: number; // Lifetime total unspent savings
+  currentMonthSaved: number; // Current month's active unspent budget
+  pastMonthsSaved: number; // Settled past months saved
+  activeMonthsCount: number;
+  categoryBreakdown: Array<{
+    category: string;
+    totalSaved: number;
+    currentMonthSaved: number;
+    icon?: string;
+    color?: string;
+  }>;
+  monthlyHistory: GullakMonthRecord[];
+}
+
 
