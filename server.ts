@@ -3613,6 +3613,129 @@ app.post('/api/auth/change-password', (req, res) => {
   res.json({ success: true, message: 'Security password updated successfully!', user: toSafeUser(user) });
 });
 
+// Permanent Account Deletion Endpoint
+app.post(['/api/auth/delete-account', '/api/users/delete'], async (req, res) => {
+  users = loadJson<UserProfile[]>(USERS_FILE, users);
+  const user = getRequestUser(req);
+  if (!user) {
+    return res.status(401).json({ error: 'Unauthorized. Please sign in first.' });
+  }
+
+  const { password, confirmText } = req.body || {};
+  const targetId = user.id;
+
+  // Verify password if user has one configured
+  if (user.password) {
+    const sPassword = String(password || '').trim();
+    if (!sPassword) {
+      return res.status(400).json({ error: 'Account password is required to confirm deletion.' });
+    }
+    if (user.password !== sPassword) {
+      return res.status(401).json({ error: 'Incorrect password. Account deletion failed.' });
+    }
+  } else {
+    // If no password set, verify confirmation keyword
+    if (confirmText !== 'DELETE' && confirmText !== 'delete') {
+      return res.status(400).json({ error: 'Please type DELETE to confirm.' });
+    }
+  }
+
+  // 1. Remove user from users array
+  users = users.filter(u => u.id !== targetId);
+
+  // If no users left, create a clean initial user
+  if (users.length === 0) {
+    users.push({
+      id: `user_${Date.now()}`,
+      name: 'Default User',
+      email: 'user@teleexpense.ai',
+      linkedMembers: [],
+      linkCode: generateLinkCode(),
+      createdAt: new Date().toISOString(),
+    });
+  }
+  saveJson(USERS_FILE, users);
+
+  // 2. Remove user data file
+  try {
+    const filePath = getUserDataFilePath(targetId);
+    if (fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
+    }
+  } catch (err) {
+    console.error('Error deleting user file:', err);
+  }
+  userDataCache.delete(targetId);
+
+  // 3. Remove chat mappings in chatActiveAccounts
+  try {
+    for (const [chatId, mappedUserId] of Object.entries(chatActiveAccounts)) {
+      if (mappedUserId === targetId) {
+        delete chatActiveAccounts[chatId];
+      }
+    }
+    saveActiveAccounts(chatActiveAccounts);
+  } catch (err) {
+    console.error('Error cleaning chat mappings:', err);
+  }
+
+  // 4. Optionally notify telegram chat if linked
+  if (user.telegramChatId) {
+    const botToken = botConfig.botToken || process.env.TELEGRAM_BOT_TOKEN;
+    if (botToken) {
+      sendTelegramReply(
+        botToken,
+        user.telegramChatId,
+        `⚠️ <b>Khata Delete Ho Gaya Hai</b>\n\nAapka TeleExpense Web khata <b>${user.name}</b> aur iske sabhi transactions permanently delete kar diye gaye hain.`
+      ).catch(() => {});
+    }
+  }
+
+  res.json({
+    success: true,
+    message: `Account "${user.name}" permanently deleted successfully.`,
+    remainingUsers: users.map(u => toSafeUser(u)),
+  });
+});
+
+app.delete('/api/auth/account', async (req, res) => {
+  users = loadJson<UserProfile[]>(USERS_FILE, users);
+  const user = getRequestUser(req);
+  if (!user) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  const targetId = user.id;
+  users = users.filter(u => u.id !== targetId);
+  if (users.length === 0) {
+    users.push({
+      id: `user_${Date.now()}`,
+      name: 'Default User',
+      email: 'user@teleexpense.ai',
+      linkedMembers: [],
+      linkCode: generateLinkCode(),
+      createdAt: new Date().toISOString(),
+    });
+  }
+  saveJson(USERS_FILE, users);
+
+  try {
+    const filePath = getUserDataFilePath(targetId);
+    if (fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
+    }
+  } catch (err) {
+    console.error('Error deleting user file:', err);
+  }
+  userDataCache.delete(targetId);
+
+  res.json({
+    success: true,
+    message: `Account permanently deleted.`,
+    remainingUsers: users.map(u => toSafeUser(u)),
+  });
+});
+
 app.post('/api/auth/link-telegram', (req, res) => {
   const user = getRequestUser(req);
   if (!user) {
@@ -4741,78 +4864,84 @@ app.post('/api/transactions/restore-backup', (req, res) => {
         const buffer = Buffer.from(fileBase64, 'base64');
         const workbook = XLSX.read(buffer, { type: 'buffer' });
 
-        // 1. Check for High-Fidelity JSON snapshot sheet
+        // 1. Check for High-Fidelity JSON snapshot sheet (supports single-row or chunked multi-rows)
         const metaSheet = workbook.Sheets['_TeleExpense_Backup_Data_'];
         if (metaSheet) {
           const metaRows = XLSX.utils.sheet_to_json<any>(metaSheet);
-          if (metaRows.length > 0 && metaRows[0].DataJSON) {
-            try {
-              const fullData = JSON.parse(metaRows[0].DataJSON);
-              const store = getUserData(user.id);
-              let restoredCount = 0;
-              let categoriesCreated = 0;
+          if (metaRows.length > 0) {
+            // Concatenate all chunks
+            const fullJsonStr = metaRows.map(r => r.DataJSON || r.ChunkText || '').join('');
+            if (fullJsonStr.trim().startsWith('{')) {
+              try {
+                const fullData = JSON.parse(fullJsonStr);
+                const store = getUserData(user.id);
+                let restoredCount = 0;
+                let categoriesCreated = 0;
 
-              // Restore categories
-              if (Array.isArray(fullData.categories)) {
-                for (const cat of fullData.categories) {
-                  const existingIdx = store.categories.findIndex(c => c.name.toLowerCase() === cat.name.toLowerCase());
-                  if (existingIdx >= 0) {
-                    store.categories[existingIdx] = { ...store.categories[existingIdx], ...cat };
-                  } else {
-                    store.categories.push(cat);
-                    categoriesCreated++;
+                // Restore categories
+                if (Array.isArray(fullData.categories)) {
+                  for (const cat of fullData.categories) {
+                    if (!cat || !cat.name) continue;
+                    const existingIdx = store.categories.findIndex(c => c.name.toLowerCase() === cat.name.toLowerCase());
+                    if (existingIdx >= 0) {
+                      store.categories[existingIdx] = { ...store.categories[existingIdx], ...cat };
+                    } else {
+                      store.categories.push(cat);
+                      categoriesCreated++;
+                    }
                   }
                 }
-              }
 
-              // Restore budgets
-              if (Array.isArray(fullData.budgets)) {
-                for (const b of fullData.budgets) {
-                  const existingBIdx = store.budgets.findIndex(item => item.category.toLowerCase() === b.category.toLowerCase());
-                  if (existingBIdx >= 0) {
-                    store.budgets[existingBIdx].limit = b.limit;
-                  } else {
-                    store.budgets.push(b);
+                // Restore budgets
+                if (Array.isArray(fullData.budgets)) {
+                  for (const b of fullData.budgets) {
+                    if (!b || !b.category) continue;
+                    const existingBIdx = store.budgets.findIndex(item => item.category.toLowerCase() === b.category.toLowerCase());
+                    if (existingBIdx >= 0) {
+                      store.budgets[existingBIdx].limit = Number(b.limit) || 0;
+                    } else {
+                      store.budgets.push({ ...b, limit: Number(b.limit) || 0 });
+                    }
                   }
                 }
-              }
 
-              // Restore transactions
-              if (replaceExisting) {
-                store.transactions = [];
-              }
-              const existingTxIds = new Set(store.transactions.map(t => t.id));
-              if (Array.isArray(fullData.transactions)) {
-                for (const t of fullData.transactions) {
-                  if (!existingTxIds.has(t.id)) {
-                    store.transactions.push({ ...t, userId: user.id });
-                    existingTxIds.add(t.id);
-                    restoredCount++;
+                // Restore transactions
+                if (replaceExisting) {
+                  store.transactions = [];
+                }
+                const existingTxIds = new Set(store.transactions.map(t => t.id));
+                if (Array.isArray(fullData.transactions)) {
+                  for (const t of fullData.transactions) {
+                    if (t && t.id && !existingTxIds.has(t.id)) {
+                      store.transactions.push({ ...t, userId: user.id });
+                      existingTxIds.add(t.id);
+                      restoredCount++;
+                    }
                   }
                 }
+
+                store.transactions.sort((a, b) => {
+                  const timeA = new Date(`${a.date}T${a.time || '00:00'}`).getTime();
+                  const timeB = new Date(`${b.date}T${b.time || '00:00'}`).getTime();
+                  return timeB - timeA;
+                });
+
+                syncBudgetsWithCategories(store);
+                saveUserData(user.id, store);
+
+                return res.json({
+                  success: true,
+                  message: `Pure account ka backup successfully restore ho gaya! (${restoredCount} transactions, ${categoriesCreated} nayi categories)`,
+                  restoredCount,
+                  categoriesCreated,
+                  transactions: store.transactions,
+                  categories: store.categories,
+                  budgets: store.budgets,
+                  summary: calculateUserSummary(user.id),
+                });
+              } catch (jsonErr) {
+                console.warn('JSON sheet parse fallback to normal sheets', jsonErr);
               }
-
-              store.transactions.sort((a, b) => {
-                const timeA = new Date(`${a.date}T${a.time || '00:00'}`).getTime();
-                const timeB = new Date(`${b.date}T${b.time || '00:00'}`).getTime();
-                return timeB - timeA;
-              });
-
-              syncBudgetsWithCategories(store);
-              saveUserData(user.id, store);
-
-              return res.json({
-                success: true,
-                message: `Pure account ka backup successfully restore ho gaya! (${restoredCount} transactions, ${categoriesCreated} nayi categories)`,
-                restoredCount,
-                categoriesCreated,
-                transactions: store.transactions,
-                categories: store.categories,
-                budgets: store.budgets,
-                summary: calculateUserSummary(user.id),
-              });
-            } catch (jsonErr) {
-              console.warn('JSON sheet parse fallback to normal sheets', jsonErr);
             }
           }
         }
@@ -4911,35 +5040,38 @@ app.get('/api/transactions/export-backup', (req, res) => {
     }
     const userId = user ? user.id : (users[0]?.id || 'default');
     const store = getUserData(userId);
-    const summary = calculateUserSummary(userId);
+    const summary = calculateUserSummary(userId) || { totalIncome: 0, totalExpense: 0, netSavings: 0, savingsRate: 0 };
     const format = req.query.format === 'csv' ? 'csv' : 'xlsx';
 
     // 1. Transactions Sheet Data
-    const transactionsData = store.transactions.map((t) => ({
-      'Date': t.date,
+    const txList = Array.isArray(store.transactions) ? store.transactions : [];
+    const transactionsData = txList.map((t) => ({
+      'Date': t.date || '',
       'Time': t.time || '12:00',
-      'Type': t.type.toUpperCase(),
-      'Amount (INR)': t.amount,
-      'Category': t.category,
-      'Description': t.description,
+      'Type': String(t.type || 'expense').toUpperCase(),
+      'Amount (INR)': Number(t.amount) || 0,
+      'Category': t.category || 'Uncategorized',
+      'Description': t.description || '',
       'Payment Method': t.paymentMethod || 'UPI',
       'Source': t.source || 'manual',
       'Raw Message': t.rawMessage || '',
       'Telegram User': t.telegramUser || (user?.name || ''),
       'Tags': Array.isArray(t.tags) ? t.tags.join(', ') : '',
-      'Transaction ID': t.id,
+      'Transaction ID': t.id || '',
     }));
 
     // 2. Categories & Budgets Sheet Data
-    const categoriesData = store.categories.map((c) => {
-      const budgetObj = store.budgets.find(b => b.category.toLowerCase() === c.name.toLowerCase());
+    const categoriesList = Array.isArray(store.categories) ? store.categories : DEFAULT_CATEGORIES;
+    const budgetsList = Array.isArray(store.budgets) ? store.budgets : DEFAULT_BUDGETS;
+    const categoriesData = categoriesList.map((c) => {
+      const budgetObj = budgetsList.find(b => b.category.toLowerCase() === c.name.toLowerCase());
       return {
         'Category Name': c.name,
-        'Type': c.type,
-        'Monthly Budget Limit (INR)': budgetObj ? budgetObj.limit : 0,
+        'Type': c.type || 'expense',
+        'Monthly Budget Limit (INR)': budgetObj ? (Number(budgetObj.limit) || 0) : 0,
         'Icon': c.icon || 'Folder',
         'Color': c.color || 'indigo',
-        'Keywords': c.keywords ? c.keywords.join(', ') : '',
+        'Keywords': Array.isArray(c.keywords) ? c.keywords.join(', ') : '',
         'Custom Category': c.isCustom ? 'YES' : 'NO',
       };
     });
@@ -4952,41 +5084,48 @@ app.get('/api/transactions/export-backup', (req, res) => {
       { 'Setting / Property': 'Telegram Username', 'Value': user?.telegramUsername ? `@${user.telegramUsername}` : 'Not Set' },
       { 'Setting / Property': 'Link Code', 'Value': user?.linkCode ? `/link ${user.linkCode}` : 'N/A' },
       { 'Setting / Property': 'Backup Created At', 'Value': new Date().toLocaleString('en-IN') },
-      { 'Setting / Property': 'Total Transactions Count', 'Value': store.transactions.length },
-      { 'Setting / Property': 'Total Categories Count', 'Value': store.categories.length },
-      { 'Setting / Property': 'Total Income (INR)', 'Value': summary.totalIncome },
-      { 'Setting / Property': 'Total Expense (INR)', 'Value': summary.totalExpense },
-      { 'Setting / Property': 'Net Balance (INR)', 'Value': summary.netSavings },
-      { 'Setting / Property': 'Savings Rate', 'Value': `${summary.savingsRate}%` },
+      { 'Setting / Property': 'Total Transactions Count', 'Value': txList.length },
+      { 'Setting / Property': 'Total Categories Count', 'Value': categoriesList.length },
+      { 'Setting / Property': 'Total Income (INR)', 'Value': summary.totalIncome || 0 },
+      { 'Setting / Property': 'Total Expense (INR)', 'Value': summary.totalExpense || 0 },
+      { 'Setting / Property': 'Net Balance (INR)', 'Value': summary.netSavings || 0 },
+      { 'Setting / Property': 'Savings Rate', 'Value': `${summary.savingsRate || 0}%` },
     ];
 
     // 4. Linked Family Members Sheet Data
-    const linkedMembersData = (user?.linkedMembers && user.linkedMembers.length > 0)
+    const linkedMembersData = (user?.linkedMembers && Array.isArray(user.linkedMembers) && user.linkedMembers.length > 0)
       ? user.linkedMembers.map(m => ({
-          'Member Name': m.name,
-          'Telegram Chat ID': m.telegramChatId,
+          'Member Name': m.name || 'Member',
+          'Telegram Chat ID': m.telegramChatId || '',
           'Telegram Username': m.telegramUsername ? `@${m.telegramUsername}` : 'N/A',
           'Role': m.role || 'member',
           'Linked At': m.linkedAt || '',
         }))
       : [{ 'Member Name': user?.name || 'Owner', 'Telegram Chat ID': user?.telegramChatId || '', 'Telegram Username': user?.telegramUsername || '', 'Role': 'owner', 'Linked At': '' }];
 
-    // 5. Raw Full State JSON (for 100% loss-free roundtrip restore)
-    const rawBackupPayload = [
-      {
+    // 5. Raw Full State JSON chunked safely (Never exceed Excel 32,767 cell limit)
+    const fullJsonString = JSON.stringify({
+      version: '2.0',
+      exportedAt: new Date().toISOString(),
+      user: user ? { id: user.id, name: user.name, telegramChatId: user.telegramChatId, telegramUsername: user.telegramUsername, linkCode: user.linkCode, linkedMembers: user.linkedMembers } : null,
+      categories: categoriesList,
+      budgets: budgetsList,
+      transactions: txList,
+    });
+
+    const CHUNK_SIZE = 15000;
+    const rawBackupPayload: any[] = [];
+    const totalChunks = Math.ceil(fullJsonString.length / CHUNK_SIZE) || 1;
+
+    for (let i = 0; i < totalChunks; i++) {
+      const slice = fullJsonString.substring(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
+      rawBackupPayload.push({
         'BackupVersion': '2.0',
-        'ExportDate': new Date().toISOString(),
-        'UserId': userId,
-        'DataJSON': JSON.stringify({
-          version: '2.0',
-          exportedAt: new Date().toISOString(),
-          user: user ? { id: user.id, name: user.name, telegramChatId: user.telegramChatId, telegramUsername: user.telegramUsername, linkCode: user.linkCode, linkedMembers: user.linkedMembers } : null,
-          categories: store.categories,
-          budgets: store.budgets,
-          transactions: store.transactions,
-        }),
-      }
-    ];
+        'ChunkIndex': i + 1,
+        'TotalChunks': totalChunks,
+        'DataJSON': slice,
+      });
+    }
 
     const workbook = XLSX.utils.book_new();
 
@@ -4995,7 +5134,7 @@ app.get('/api/transactions/export-backup', (req, res) => {
     XLSX.utils.book_append_sheet(workbook, wsTx, 'Transactions Ledger');
 
     // Add Sheet 2: Categories & Budgets
-    const wsCats = XLSX.utils.json_to_sheet(categoriesData);
+    const wsCats = XLSX.utils.json_to_sheet(categoriesData.length > 0 ? categoriesData : [{ 'Category Name': 'Default', 'Type': 'expense', 'Monthly Budget Limit (INR)': 0 }]);
     XLSX.utils.book_append_sheet(workbook, wsCats, 'Categories & Budgets');
 
     // Add Sheet 3: Account & Summary
@@ -5020,13 +5159,15 @@ app.get('/api/transactions/export-backup', (req, res) => {
       return res.send(csvContent);
     } else {
       const buffer = XLSX.write(workbook, { bookType: 'xlsx', type: 'buffer' });
+      const nodeBuffer = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer);
       res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
       res.setHeader('Content-Disposition', `attachment; filename="${fileName}.xlsx"`);
-      return res.send(buffer);
+      res.setHeader('Content-Length', nodeBuffer.length);
+      return res.end(nodeBuffer);
     }
   } catch (err: any) {
     console.error('Error exporting backup:', err);
-    return res.status(500).json({ error: 'Failed to export backup' });
+    return res.status(500).json({ error: err?.message || 'Failed to export backup' });
   }
 });
 

@@ -85,6 +85,14 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const [showNewPassword, setShowNewPassword] = useState(false);
   const [passwordSuccess, setPasswordSuccess] = useState('');
 
+  // Delete account state
+  const [showDeleteAccount, setShowDeleteAccount] = useState(false);
+  const [deletePassword, setDeletePassword] = useState('');
+  const [deleteConfirmText, setDeleteConfirmText] = useState('');
+  const [isDeletingAccount, setIsDeletingAccount] = useState(false);
+  const [deleteError, setDeleteError] = useState('');
+  const [deleteSuccess, setDeleteSuccess] = useState('');
+
   // UI helpers
   const [copiedCode, setCopiedCode] = useState(false);
   const [copiedInvite, setCopiedInvite] = useState(false);
@@ -117,6 +125,11 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       setError('');
       setPasswordSuccess('');
       setShowChangePassword(false);
+      setShowDeleteAccount(false);
+      setDeletePassword('');
+      setDeleteConfirmText('');
+      setDeleteError('');
+      setDeleteSuccess('');
       setEditingMemberId(null);
       setShowAddMember(false);
     }
@@ -438,6 +451,52 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       setError(err?.message || 'Failed to update password');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleDeleteAccount = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!currentUser) return;
+
+    setDeleteError('');
+    setIsDeletingAccount(true);
+
+    try {
+      const token = localStorage.getItem('auth_token') || localStorage.getItem('teleexpense_auth_token');
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+      };
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+      headers['x-user-id'] = currentUser.id;
+
+      const res = await fetch('/api/auth/delete-account', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          password: deletePassword.trim(),
+          confirmText: deleteConfirmText.trim(),
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || 'Failed to delete account');
+      }
+
+      setDeleteSuccess(data.message || 'Khata successfully delete ho gaya.');
+      setShowDeleteAccount(false);
+      setDeletePassword('');
+      setDeleteConfirmText('');
+
+      if (onLogout) {
+        onLogout();
+      }
+      await onRefreshUsers();
+      setActiveTab('switch');
+    } catch (err: any) {
+      setDeleteError(err?.message || 'Account delete karne me error aaya.');
+    } finally {
+      setIsDeletingAccount(false);
     }
   };
 
@@ -935,6 +994,118 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                       );
                     })}
                   </div>
+                )}
+              </div>
+
+              {/* Danger Zone: Permanent Account Deletion */}
+              <div className="bg-rose-950/20 border border-rose-500/30 rounded-2xl p-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center space-x-2">
+                    <Trash2 className="w-4 h-4 text-rose-400" />
+                    <span className="text-xs font-bold text-rose-300 uppercase">DANGER ZONE: DELETE ACCOUNT (KHATA DELETE)</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowDeleteAccount(!showDeleteAccount);
+                      setDeleteError('');
+                      setDeleteSuccess('');
+                      setDeletePassword('');
+                      setDeleteConfirmText('');
+                    }}
+                    className="text-[10px] text-rose-400 hover:text-rose-300 underline font-bold cursor-pointer"
+                  >
+                    {showDeleteAccount ? 'CANCEL' : 'DELETE MY ACCOUNT'}
+                  </button>
+                </div>
+
+                <p className="text-[11px] text-slate-400">
+                  Aapka yeh khata, sabhi transactions, custom categories, monthly budgets, Gullak savings aur Telegram connections permanently delete ho jayenge.
+                </p>
+
+                {deleteSuccess && (
+                  <div className="bg-emerald-950/90 border border-emerald-500/50 text-emerald-300 px-3 py-2 rounded-xl text-xs flex items-center space-x-2">
+                    <Check className="w-4 h-4 text-emerald-400 shrink-0" />
+                    <span>{deleteSuccess}</span>
+                  </div>
+                )}
+
+                {showDeleteAccount && (
+                  <form onSubmit={handleDeleteAccount} className="p-3.5 bg-slate-950 border border-rose-500/40 rounded-xl space-y-3 mt-2 animate-in fade-in">
+                    <div className="text-xs font-bold text-rose-300 flex items-center space-x-1.5">
+                      <ShieldAlert className="w-4 h-4 text-rose-400" />
+                      <span>Permanent Account Deletion Confirmation</span>
+                    </div>
+
+                    <div className="p-2.5 rounded-lg bg-rose-950/60 border border-rose-500/30 text-[11px] text-rose-200">
+                      ⚠️ <strong>Chetawani:</strong> Yeh action bilkul irreversible hai. Data ek baar delete hone ke baad dubara wapas nahi laya ja sakega.
+                    </div>
+
+                    {deleteError && (
+                      <div className="bg-rose-950/90 border border-rose-500/50 text-rose-300 px-3 py-1.5 rounded-lg text-[11px]">
+                        {deleteError}
+                      </div>
+                    )}
+
+                    {currentUser.hasPassword ? (
+                      <div>
+                        <label className="block text-[10px] text-slate-400 uppercase mb-1">
+                          Account Password / Security PIN Darj Karein *
+                        </label>
+                        <input
+                          type="password"
+                          required
+                          placeholder="Enter your account password to confirm"
+                          value={deletePassword}
+                          onChange={(e) => setDeletePassword(e.target.value)}
+                          className="w-full px-3 py-2 bg-slate-900 border border-rose-500/40 rounded-lg text-xs text-white outline-hidden focus:border-rose-400"
+                        />
+                      </div>
+                    ) : (
+                      <div>
+                        <label className="block text-[10px] text-slate-400 uppercase mb-1">
+                          Confirm karne ke liye <strong className="text-rose-400 font-mono font-bold">DELETE</strong> type karein *
+                        </label>
+                        <input
+                          type="text"
+                          required
+                          placeholder="Type DELETE to confirm"
+                          value={deleteConfirmText}
+                          onChange={(e) => setDeleteConfirmText(e.target.value)}
+                          className="w-full px-3 py-2 bg-slate-900 border border-rose-500/40 rounded-lg text-xs text-rose-300 outline-hidden focus:border-rose-400 uppercase"
+                        />
+                      </div>
+                    )}
+
+                    <div className="flex items-center justify-end space-x-2 pt-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowDeleteAccount(false);
+                          setDeleteError('');
+                          setDeletePassword('');
+                          setDeleteConfirmText('');
+                        }}
+                        className="px-3 py-1.5 rounded-lg text-xs text-slate-400 hover:text-white cursor-pointer"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="submit"
+                        disabled={isDeletingAccount || (currentUser.hasPassword ? !deletePassword.trim() : deleteConfirmText.trim().toUpperCase() !== 'DELETE')}
+                        className="px-4 py-2 bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold rounded-lg shadow-md transition-all flex items-center space-x-1.5 cursor-pointer disabled:opacity-50"
+                      >
+                        {isDeletingAccount ? (
+                          <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                        ) : (
+                          <>
+                            <Trash2 className="w-3.5 h-3.5" />
+                            <span>Ha, Mera Khata Permanently Delete Karein</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  </form>
                 )}
               </div>
 

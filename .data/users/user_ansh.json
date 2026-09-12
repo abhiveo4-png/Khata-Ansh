@@ -1,26 +1,5 @@
 {
-  "transactions": [
-    {
-      "id": "tx_1788413920036_3y7a5a",
-      "userId": "user_ansh",
-      "type": "expense",
-      "amount": 500,
-      "category": "Food & Dining",
-      "description": "Daru",
-      "date": "2026-09-03",
-      "time": "11:08",
-      "paymentMethod": "UPI",
-      "source": "telegram",
-      "telegramChatId": "838107368",
-      "telegramMessageId": 441,
-      "telegramUser": "Demo Account (Owner)",
-      "rawMessage": "500 daru",
-      "createdAt": "2026-09-03T05:38:40.028Z",
-      "tags": [
-        "daru"
-      ]
-    }
-  ],
+  "transactions": [],
   "budgets": [
     {
       "category": "Food & Dining",
@@ -512,5 +491,7 @@
       "isDefault": true,
       "description": "Auto-assigned when item does not match existing categories or needs review"
     }
-  ]
+  ],
+  "debts": [],
+  "goals": []
 }

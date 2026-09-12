@@ -264,7 +264,7 @@ export const ExcelBackupRestoreModal: React.FC<ExcelBackupRestoreModalProps> = (
       const url = `/api/transactions/export-backup?format=${format}${userIdParam}`;
       
       const headers: Record<string, string> = {};
-      const token = localStorage.getItem('auth_token');
+      const token = localStorage.getItem('teleexpense_auth_token') || localStorage.getItem('auth_token');
       if (token) {
         headers['Authorization'] = `Bearer ${token}`;
       }
