@@ -238,16 +238,23 @@ export const BudgetManager: React.FC<BudgetManagerProps> = ({
         };
       });
 
-      // Update local state immediately
-      setBulkInputValues((prev) => ({
-        ...prev,
-        [categoryName]: String(parsedLimit),
-      }));
+      // Send to server
+      const { data, error } = await safeFetchJson<{
+        success: boolean;
+        budgets: CategoryBudget[];
+      }>('/api/budgets', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ category: categoryName, limit: parsedLimit, newBudgets: updatedList }),
+      });
 
-      // Call parent update which persists to /api/budgets
-      await onUpdateBudgets(updatedList);
-      setSingleEditingCat(null);
-      showToast(`✅ "${categoryName}" ka monthly budget ₹${parsedLimit.toLocaleString('en-IN')} successfully update ho gaya!`);
+      if (error || !data?.success) {
+        showToast(error || 'Budget update karne me dikkat aayi', 'error');
+      } else {
+        await onUpdateBudgets(data.budgets || updatedList);
+        setSingleEditingCat(null);
+        showToast(`✅ "${categoryName}" ka monthly budget ₹${parsedLimit.toLocaleString('en-IN')} set ho gaya!`);
+      }
     } catch (err: any) {
       console.error('Failed to save single budget', err);
       showToast('Budget save karne me error aaya: ' + (err.message || 'Unknown error'), 'error');
