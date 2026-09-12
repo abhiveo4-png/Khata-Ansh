@@ -26,6 +26,7 @@ if (!fs.existsSync(USERS_DIR)) fs.mkdirSync(USERS_DIR, { recursive: true });
 const USERS_FILE = path.join(DATA_DIR, 'users.json');
 const BOT_CONFIG_FILE = path.join(DATA_DIR, 'bot_config.json');
 const LOGS_FILE = path.join(DATA_DIR, 'telegram_logs.json');
+const ACTIVE_ACCOUNTS_FILE = path.join(DATA_DIR, 'active_accounts.json');
 
 // Global Legacy files (for auto-migration)
 const LEGACY_TX_FILE = path.join(DATA_DIR, 'transactions.json');
@@ -442,6 +443,7 @@ interface UserDataStore {
 
 let users: UserProfile[] = loadJson<UserProfile[]>(USERS_FILE, []);
 let telegramLogs: TelegramLog[] = loadJson<TelegramLog[]>(LOGS_FILE, []);
+let chatActiveAccounts: Record<string, string> = loadJson<Record<string, string>>(ACTIVE_ACCOUNTS_FILE, {});
 let botConfig: BotConfig = loadJson<BotConfig>(BOT_CONFIG_FILE, {
   botToken: process.env.TELEGRAM_BOT_TOKEN || '8805911705:AAFqlnYNiguHCdar15R3XX8JJkuI0nXNanc',
   isWebhookSet: true,
@@ -508,6 +510,11 @@ async function initPgDatabase(): Promise<boolean> {
             telegramLogs = row.data;
             saveJson(LOGS_FILE, telegramLogs);
           }
+        } else if (row.key === 'active_accounts') {
+          if (row.data && typeof row.data === 'object') {
+            chatActiveAccounts = row.data;
+            saveJson(ACTIVE_ACCOUNTS_FILE, chatActiveAccounts);
+          }
         } else if (row.key.startsWith('user_data:')) {
           const uid = row.key.replace('user_data:', '');
           if (row.data) {
@@ -523,6 +530,7 @@ async function initPgDatabase(): Promise<boolean> {
         await persistToPg('users', users);
         await persistToPg('bot_config', botConfig);
         await persistToPg('telegram_logs', telegramLogs);
+        await persistToPg('active_accounts', chatActiveAccounts);
         for (const [uid, store] of userDataCache.entries()) {
           await persistToPg(`user_data:${uid}`, store);
         }
@@ -556,6 +564,35 @@ function saveTelegramLogs(updatedLogs: TelegramLog[]): void {
   telegramLogs = updatedLogs;
   saveJson(LOGS_FILE, telegramLogs);
   persistToPg('telegram_logs', telegramLogs).catch(() => {});
+}
+
+function saveActiveAccounts(updated: Record<string, string>): void {
+  chatActiveAccounts = updated;
+  saveJson(ACTIVE_ACCOUNTS_FILE, chatActiveAccounts);
+  persistToPg('active_accounts', chatActiveAccounts).catch(() => {});
+}
+
+function setActiveAccountForChat(chatId: string, userId: string): void {
+  chatActiveAccounts[String(chatId)] = userId;
+  saveActiveAccounts(chatActiveAccounts);
+}
+
+export function getLinkedUsersForChat(chatId: string): UserProfile[] {
+  const cId = String(chatId);
+  return users.filter(
+    u => (u.linkedMembers && u.linkedMembers.some(m => String(m.telegramChatId) === cId)) ||
+         String(u.telegramChatId) === cId
+  );
+}
+
+export function getActiveAccountForChat(chatId: string, linkedUsers: UserProfile[]): UserProfile | null {
+  if (!linkedUsers || linkedUsers.length === 0) return null;
+  const activeId = chatActiveAccounts[String(chatId)];
+  if (activeId) {
+    const found = linkedUsers.find(u => u.id === activeId);
+    if (found) return found;
+  }
+  return linkedUsers[0];
 }
 
 // Initialize default users if empty & migrate linkedMembers
@@ -1607,6 +1644,7 @@ ${txListText}
 export const TELEGRAM_BOT_COMMANDS = [
   { command: 'balance', description: '💰 Net balance aur kul bachat dekhein' },
   { command: 'summary', description: '📊 Mahine ki income, kharcha & bachat report' },
+  { command: 'accounts', description: '👥 Linked accounts dekhein & unlink buttons' },
   { command: 'budget', description: '🎯 Category-wise kharcha aur bacha budget' },
   { command: 'date', description: '📅 Kisi bhi tareeq ka kharcha & income dekhein' },
   { command: 'tips', description: '🤖 AI Faltu Kharcha & Bachat Tips' },
@@ -1614,6 +1652,7 @@ export const TELEGRAM_BOT_COMMANDS = [
   { command: 'buttons', description: '📱 Handy Quick Action Buttons on screen' },
   { command: 'categories', description: '🏷️ Active categories aur keywords dekhein' },
   { command: 'undo', description: '↩️ Aakhri transaction undo / delete karein' },
+  { command: 'unlink', description: '❌ Account se Telegram unlink karein' },
   { command: 'clearall', description: '🗑️ Saare transactions clear karein' },
   { command: 'link', description: '🔗 Web account se Telegram link karein' },
   { command: 'help', description: '❓ Kaise use karein & full command list' },
@@ -1622,10 +1661,10 @@ export const TELEGRAM_BOT_COMMANDS = [
 export const TELEGRAM_HANDY_KEYBOARD = {
   keyboard: [
     [{ text: '💰 Balance' }, { text: '📊 Summary' }],
-    [{ text: '🎯 Category Budget' }, { text: '📅 Aaj Ka Hisab' }],
-    [{ text: '🤖 AI Tips & Bachat' }, { text: '🕒 Recent 5 Tx' }],
-    [{ text: '🏷️ Categories' }, { text: '↩️ Undo Last' }],
-    [{ text: '❓ Help & Guide' }, { text: '📱 Handy Buttons' }],
+    [{ text: '👥 My Accounts' }, { text: '🎯 Category Budget' }],
+    [{ text: '📅 Aaj Ka Hisab' }, { text: '🤖 AI Tips & Bachat' }],
+    [{ text: '🕒 Recent 5 Tx' }, { text: '🏷️ Categories' }],
+    [{ text: '↩️ Undo Last' }, { text: '❓ Help & Guide' }],
   ],
   resize_keyboard: true,
   is_persistent: true,
@@ -1638,19 +1677,119 @@ export const INLINE_KB_MAIN_COMMANDS = {
       { text: '📊 Summary', callback_data: 'cmd_summary' },
     ],
     [
+      { text: '👥 My Accounts', callback_data: 'cmd_accounts' },
       { text: '🎯 Category Budget', callback_data: 'cmd_budget' },
+    ],
+    [
       { text: '📅 Aaj Ka Hisab', callback_data: 'cmd_date_today' },
-    ],
-    [
       { text: '🤖 AI Faltu Kharcha', callback_data: 'cmd_tips' },
-      { text: '🕒 Recent 5 Tx', callback_data: 'cmd_recent' },
     ],
     [
-      { text: '🏷️ Categories', callback_data: 'cmd_categories' },
+      { text: '🕒 Recent 5 Tx', callback_data: 'cmd_recent' },
       { text: '↩️ Undo Last', callback_data: 'cmd_undo' },
     ],
   ],
 };
+
+export function buildAccountsReportTelegramMessage(chatId: string | number, userName: string): { text: string; replyMarkup: any } {
+  users = loadJson<UserProfile[]>(USERS_FILE, users);
+  const cId = String(chatId);
+  const linkedUsers = getLinkedUsersForChat(cId);
+
+  if (linkedUsers.length === 0) {
+    const text = `👥 <b>AAPKE LINKED ACCOUNTS</b>
+━━━━━━━━━━━━━━━━━━━━
+ℹ️ <b>Aapka Telegram account abhi kisi bhi khate se judaa nahi hai.</b>
+
+🔑 <b>Aapka Telegram Chat ID:</b> <code>${cId}</code>
+
+💡 <b>Khata connect kaise karein:</b>
+1. TeleExpense Web Dashboard par login karein
+2. Apna 6-digit Link Code dekhein (jaise: <code>838107</code>)
+3. Yahan command bhejein:
+<code>/link &lt;CODE&gt;</code>
+
+<i>Udaharan:</i> <code>/link 838107</code>`;
+
+    return {
+      text,
+      replyMarkup: {
+        inline_keyboard: [
+          [
+            { text: '❓ Help & Guide', callback_data: 'cmd_help' },
+            { text: '📱 Handy Buttons', callback_data: 'cmd_buttons' },
+          ],
+        ],
+      },
+    };
+  }
+
+  const activeUser = getActiveAccountForChat(cId, linkedUsers);
+  let text = `👥 <b>AAPKE LINKED ACCOUNTS</b>
+━━━━━━━━━━━━━━━━━━━━
+👤 <b>Telegram User:</b> ${userName} (ID: <code>${cId}</code>)
+📊 <b>Kul Jude Hue Accounts:</b> <b>${linkedUsers.length}</b>
+
+Aap neeche diye gaye accounts me added hain:
+
+`;
+
+  const inlineKeyboard: Array<Array<{ text: string; callback_data: string }>> = [];
+
+  linkedUsers.forEach((u, idx) => {
+    const isActive = activeUser?.id === u.id;
+    const member = u.linkedMembers?.find(m => String(m.telegramChatId) === cId);
+    let roleLabel = 'Member';
+    if (member?.role === 'owner' || String(u.telegramChatId) === cId) {
+      roleLabel = '👑 Owner (Khata Malik)';
+    } else if (member?.role) {
+      roleLabel = `👤 ${member.role}`;
+    }
+
+    const summary = calculateUserSummary(u.id);
+
+    text += `<b>[#${idx + 1}] ${u.name}</b> ${isActive ? '🟢 <b>(ACTIVE DEFAULT)</b>' : '⚪'}\n`;
+    text += `• 📧 <b>Email:</b> <code>${u.email}</code>\n`;
+    text += `• 🏷️ <b>Role:</b> ${roleLabel}\n`;
+    text += `• 💰 <b>Balance:</b> ₹${summary.netSavings.toLocaleString('en-IN')} (Kharcha: ₹${summary.totalExpense.toLocaleString('en-IN')})\n`;
+    text += `• 🔑 <b>Link Code:</b> <code>${u.linkCode}</code>\n`;
+    if (isActive) {
+      text += `• ⚡ <i>(Abhi naye kharche is account me record honge)</i>\n`;
+    }
+    text += `\n`;
+
+    const row: Array<{ text: string; callback_data: string }> = [];
+    if (linkedUsers.length > 1) {
+      if (isActive) {
+        row.push({ text: `🟢 Active: ${u.name}`, callback_data: `noop_active_${u.id}` });
+      } else {
+        row.push({ text: `🔄 Switch to ${u.name}`, callback_data: `switch_${u.id}` });
+      }
+    }
+    // Unlink button for this specific account
+    row.push({ text: `❌ Unlink ${u.name}`, callback_data: `unlink_${u.id}` });
+    inlineKeyboard.push(row);
+  });
+
+  text += `━━━━━━━━━━━━━━━━━━━━\n`;
+  text += `💡 <b>Kaise manage karein:</b>\n`;
+  text += `• Kisi account se hatne ke liye uske saamne <b>❌ Unlink</b> button dabayein\n`;
+  if (linkedUsers.length > 1) {
+    text += `• Kharcha record karne ka account badalne ke liye <b>🔄 Switch</b> button dabayein\n`;
+  }
+  text += `• Kisi aur naye account se judne ke liye: <code>/link &lt;CODE&gt;</code>`;
+
+  inlineKeyboard.push([
+    { text: '💰 Balance', callback_data: 'cmd_balance' },
+    { text: '📊 Summary', callback_data: 'cmd_summary' },
+  ]);
+  inlineKeyboard.push([
+    { text: '🎯 Category Budget', callback_data: 'cmd_budget' },
+    { text: '🕒 Recent 5 Tx', callback_data: 'cmd_recent' },
+  ]);
+
+  return { text, replyMarkup: { inline_keyboard: inlineKeyboard } };
+}
 
 async function syncTelegramBotCommandsAndMenu(botToken: string): Promise<boolean> {
   if (!botToken) return false;
@@ -1744,12 +1883,87 @@ async function handleTelegramCallbackQuery(callbackQuery: any) {
   const data = (callbackQuery.data || '').trim();
   const chatId = String(callbackQuery.message?.chat?.id || callbackQuery.from?.id);
   const fromUser = callbackQuery.from || {};
+  const userName = fromUser.first_name || fromUser.username || 'User';
+
+  // 1. Handle Unlink Button Callback
+  if (data.startsWith('unlink_')) {
+    const targetUserId = data.replace('unlink_', '').trim();
+    users = loadJson<UserProfile[]>(USERS_FILE, users);
+    const targetUser = users.find(u => u.id === targetUserId);
+
+    if (!targetUser) {
+      await answerTelegramCallbackQuery(token, callbackId, 'Account nahi mila ya pehle hi unlink ho gaya.');
+      return;
+    }
+
+    await answerTelegramCallbackQuery(token, callbackId, `${targetUser.name} unlink ho raha hai...`);
+
+    // Remove this chatId from targetUser's linkedMembers
+    if (targetUser.linkedMembers) {
+      targetUser.linkedMembers = targetUser.linkedMembers.filter(m => String(m.telegramChatId) !== String(chatId));
+    }
+    if (String(targetUser.telegramChatId) === String(chatId)) {
+      targetUser.telegramChatId = targetUser.linkedMembers?.[0]?.telegramChatId || undefined;
+      targetUser.telegramUsername = targetUser.linkedMembers?.[0]?.telegramUsername || undefined;
+    }
+    saveUsers(users);
+
+    // Update active accounts map if this unlinked account was active
+    const remaining = getLinkedUsersForChat(chatId);
+    if (chatActiveAccounts[chatId] === targetUser.id) {
+      if (remaining.length > 0) {
+        setActiveAccountForChat(chatId, remaining[0].id);
+      } else {
+        delete chatActiveAccounts[chatId];
+        saveActiveAccounts(chatActiveAccounts);
+      }
+    }
+
+    await sendTelegramReply(
+      token,
+      chatId,
+      `✅ <b>Account Safaltapoorvak Unlink Ho Gaya!</b>\n\nAap <b>${targetUser.name}</b> (<code>${targetUser.email}</code>) ke ledger se successfully disconnect ho chuke hain.\n👥 <b>Bache hue accounts:</b> ${remaining.length}`
+    );
+
+    const updatedReport = buildAccountsReportTelegramMessage(chatId, userName);
+    await sendTelegramReply(token, chatId, updatedReport.text, updatedReport.replyMarkup);
+    return;
+  }
+
+  // 2. Handle Switch Account Button Callback
+  if (data.startsWith('switch_')) {
+    const targetUserId = data.replace('switch_', '').trim();
+    users = loadJson<UserProfile[]>(USERS_FILE, users);
+    const targetUser = users.find(u => u.id === targetUserId);
+
+    if (targetUser) {
+      setActiveAccountForChat(chatId, targetUser.id);
+      await answerTelegramCallbackQuery(token, callbackId, `Switched to ${targetUser.name}`);
+      await sendTelegramReply(
+        token,
+        chatId,
+        `🔄 <b>Active Default Khata Switch Ho Gaya!</b>\n\nAb aapka active khata <b>${targetUser.name}</b> (<code>${targetUser.email}</code>) set ho gaya hai.\n\nAb jo bhi kharcha ya income aap likhenge (jaise: <code>300 petrol upi</code>), wo <b>${targetUser.name}</b> ke khate me record hoga.`
+      );
+      const updatedReport = buildAccountsReportTelegramMessage(chatId, userName);
+      await sendTelegramReply(token, chatId, updatedReport.text, updatedReport.replyMarkup);
+    } else {
+      await answerTelegramCallbackQuery(token, callbackId, 'Account nahi mila.');
+    }
+    return;
+  }
+
+  // 3. Handle No-op on currently active account button
+  if (data.startsWith('noop_active_')) {
+    await answerTelegramCallbackQuery(token, callbackId, 'Ye khata pehle se hi active default hai!');
+    return;
+  }
 
   await answerTelegramCallbackQuery(token, callbackId);
 
   let simulatedText = '';
   if (data === 'cmd_balance') simulatedText = '/balance';
   else if (data === 'cmd_summary') simulatedText = '/summary';
+  else if (data === 'cmd_accounts') simulatedText = '/accounts';
   else if (data === 'cmd_budget' || data === 'cmd_catbudget') simulatedText = '/budget';
   else if (data === 'cmd_date_today') simulatedText = '/date today';
   else if (data === 'cmd_date_yesterday') simulatedText = '/date yesterday';
@@ -1795,19 +2009,6 @@ async function handleTelegramMessage(messageObj: any) {
     const userToLink = users.find(u => u.linkCode === linkCode);
 
     if (userToLink) {
-      // Clean up this chatId from all other users so there's no conflict
-      for (const u of users) {
-        if (u.id !== userToLink.id) {
-          if (String(u.telegramChatId) === String(chatId)) {
-            delete u.telegramChatId;
-            delete u.telegramUsername;
-          }
-          if (u.linkedMembers) {
-            u.linkedMembers = u.linkedMembers.filter(m => String(m.telegramChatId) !== String(chatId));
-          }
-        }
-      }
-
       if (!userToLink.linkedMembers) {
         userToLink.linkedMembers = [];
       }
@@ -1836,13 +2037,16 @@ async function handleTelegramMessage(messageObj: any) {
         userToLink.telegramUsername = messageObj.from?.username || userName;
       }
 
-      saveJson(USERS_FILE, users);
+      saveUsers(users);
+      setActiveAccountForChat(chatId, userToLink.id);
+
+      const allLinkedForChat = getLinkedUsersForChat(chatId);
 
       const totalMembers = userToLink.linkedMembers.length;
       await sendTelegramReply(
         botToken,
         chatId,
-        `🎉 <b>${userToLink.name} ke Shared Khate se Connect ho gaye!</b>\n\nNamaste <b>${memberName}</b>! Aap successfully <b>${userToLink.name}</b> ke ledger (<b>${userToLink.email}</b>) se jud gaye hain.\n👥 <b>Total Connected Members:</b> ${totalMembers}\n\n💡 <b>Ab aap kharcha ya kamai sidhe log kar sakte hain:</b>\n• <code>500 sabzi cash</code>\n• <code>300 petrol upi</code>\n• <code>1200 groceries card</code>\n\nAapke saare transactions shared web dashboard par live dikhenge!`
+        `🎉 <b>${userToLink.name} ke Shared Khate se Connect ho gaye!</b>\n\nNamaste <b>${memberName}</b>! Aap successfully <b>${userToLink.name}</b> ke ledger (<b>${userToLink.email}</b>) se jud gaye hain.\n👥 <b>Is khate ke total members:</b> ${totalMembers}\n📊 <b>Aap kul ${allLinkedForChat.length} account(s) se jude hue hain.</b>\n\n💡 <b>Ab aap kharcha ya kamai sidhe log kar sakte hain:</b>\n• <code>500 sabzi cash</code>\n• <code>300 petrol upi</code>\n• <code>1200 groceries card</code>\n\n💡 <i>Saare accounts dekhne, switch karne ya unlink karne ke liye <code>/accounts</code> command bhejein!</i>`
       );
       return;
     } else {
@@ -1855,13 +2059,9 @@ async function handleTelegramMessage(messageObj: any) {
     }
   }
 
-  // 2. Resolve User from Chat ID (Search in linkedMembers first, then primary ID)
-  let targetUser = users.find(
-    u => u.linkedMembers && u.linkedMembers.some(m => String(m.telegramChatId) === String(chatId))
-  );
-  if (!targetUser) {
-    targetUser = users.find(u => String(u.telegramChatId) === String(chatId));
-  }
+  // 2. Resolve User from Chat ID
+  const linkedUsersForChat = getLinkedUsersForChat(chatId);
+  let targetUser = getActiveAccountForChat(chatId, linkedUsersForChat);
 
   // If unlinked user
   if (!targetUser) {
@@ -1882,15 +2082,129 @@ async function handleTelegramMessage(messageObj: any) {
           linkedAt: new Date().toISOString(),
         });
       }
-      saveJson(USERS_FILE, users);
+      saveUsers(users);
+      setActiveAccountForChat(chatId, targetUser.id);
     } else {
       await sendTelegramReply(
         botToken,
         chatId,
-        `👋 <b>TeleExpense AI Khate me Aapka Swagat Hai!</b>\n\nAapka Telegram account abhi kisi khate se link nahi hai.\n\n🔑 <b>Aapka Telegram Chat ID:</b> <code>${chatId}</code>\n\n<b>Connect kaise karein:</b>\n1. Apna TeleExpense Web Dashboard kholein aur 6-digit ka <b>Link Code</b> dekhein\n2. Yahan reply karein:\n<code>/link &lt;AAPKA_CODE&gt;</code>\n\n<i>Udaharan:</i> <code>/link 513919</code>\n\n💡 <i>Ek hi khate se multiple family members connect ho sakte hain!</i>`
+        `👋 <b>TeleExpense AI Khate me Aapka Swagat Hai!</b>\n\nAapka Telegram account abhi kisi khate se link nahi hai.\n\n🔑 <b>Aapka Telegram Chat ID:</b> <code>${chatId}</code>\n\n<b>Connect kaise karein:</b>\n1. Apna TeleExpense Web Dashboard kholein aur 6-digit ka <b>Link Code</b> dekhein\n2. Yahan reply karein:\n<code>/link &lt;AAPKA_CODE&gt;</code>\n\n<i>Udaharan:</i> <code>/link 513919</code>\n\n💡 <i>Ek Telegram user multiple accounts se connect ho sakta hai!</i>`
       );
       return;
     }
+  }
+
+  // 3. Accounts & Unlink Commands (/accounts, /myaccounts, /linked, /unlink)
+  const isAccountsQuery =
+    command === '/accounts' ||
+    command === '/myaccounts' ||
+    command === '/linked' ||
+    command === '/account' ||
+    lowerText === 'accounts' ||
+    lowerText === 'my accounts' ||
+    lowerText === 'mere accounts' ||
+    lowerText.includes('👥 my accounts') ||
+    lowerText.includes('👥 accounts') ||
+    lowerText.includes('kitne account') ||
+    lowerText.includes('mere account');
+
+  if (isAccountsQuery) {
+    const report = buildAccountsReportTelegramMessage(chatId, userName);
+    await sendTelegramReply(botToken, chatId, report.text, report.replyMarkup);
+    return;
+  }
+
+  // 4. Unlink Command (/unlink [account_name_or_id])
+  if (command === '/unlink' || command === '/disconnect') {
+    const linked = getLinkedUsersForChat(chatId);
+    if (linked.length === 0) {
+      await sendTelegramReply(botToken, chatId, 'ℹ️ Aap kisi bhi khate se judaa nahi hain.');
+      return;
+    }
+
+    if (commandArg) {
+      const q = commandArg.toLowerCase().trim();
+      const toUnlink = linked.find(u =>
+        u.id.toLowerCase() === q ||
+        u.name.toLowerCase().includes(q) ||
+        u.email.toLowerCase().includes(q) ||
+        u.linkCode === q
+      );
+
+      if (toUnlink) {
+        if (toUnlink.linkedMembers) {
+          toUnlink.linkedMembers = toUnlink.linkedMembers.filter(m => String(m.telegramChatId) !== String(chatId));
+        }
+        if (String(toUnlink.telegramChatId) === String(chatId)) {
+          toUnlink.telegramChatId = toUnlink.linkedMembers?.[0]?.telegramChatId || undefined;
+          toUnlink.telegramUsername = toUnlink.linkedMembers?.[0]?.telegramUsername || undefined;
+        }
+        saveUsers(users);
+
+        const remaining = getLinkedUsersForChat(chatId);
+        if (chatActiveAccounts[chatId] === toUnlink.id) {
+          if (remaining.length > 0) {
+            setActiveAccountForChat(chatId, remaining[0].id);
+          } else {
+            delete chatActiveAccounts[chatId];
+            saveActiveAccounts(chatActiveAccounts);
+          }
+        }
+
+        await sendTelegramReply(
+          botToken,
+          chatId,
+          `✅ <b>Account Safaltapoorvak Unlink Ho Gaya!</b>\n\nAap <b>${toUnlink.name}</b> (<code>${toUnlink.email}</code>) ke khate se disconnect ho chuke hain.\n👥 <b>Bache hue accounts:</b> ${remaining.length}`
+        );
+        const updatedReport = buildAccountsReportTelegramMessage(chatId, userName);
+        await sendTelegramReply(botToken, chatId, updatedReport.text, updatedReport.replyMarkup);
+        return;
+      } else {
+        await sendTelegramReply(botToken, chatId, `⚠️ "${commandArg}" se milta julta koi linked account nahi mila. Saare accounts dekhne ke liye <code>/accounts</code> bhejein.`);
+        return;
+      }
+    }
+
+    // If no argument passed, show the accounts report with Unlink buttons
+    const report = buildAccountsReportTelegramMessage(chatId, userName);
+    await sendTelegramReply(botToken, chatId, `❌ <b>Kripya wo account chunein jise aap unlink karna chahte hain:</b>\n\n` + report.text, report.replyMarkup);
+    return;
+  }
+
+  // 5. Switch Active Account Command (/switch [name_or_code])
+  if (command === '/switch') {
+    const linked = getLinkedUsersForChat(chatId);
+    if (linked.length <= 1 && !commandArg) {
+      const report = buildAccountsReportTelegramMessage(chatId, userName);
+      await sendTelegramReply(botToken, chatId, report.text, report.replyMarkup);
+      return;
+    }
+
+    if (commandArg) {
+      const q = commandArg.toLowerCase().trim();
+      const targetSwitch = linked.find(u =>
+        u.id.toLowerCase() === q ||
+        u.name.toLowerCase().includes(q) ||
+        u.email.toLowerCase().includes(q) ||
+        u.linkCode === q
+      );
+
+      if (targetSwitch) {
+        setActiveAccountForChat(chatId, targetSwitch.id);
+        await sendTelegramReply(
+          botToken,
+          chatId,
+          `🔄 <b>Active Default Khata Switch Ho Gaya!</b>\n\nAb aapka active khata <b>${targetSwitch.name}</b> (<code>${targetSwitch.email}</code>) set ho gaya hai.\n\nAb jo bhi kharcha ya income aap likhenge, wo <b>${targetSwitch.name}</b> ke khate me record hoga.`
+        );
+        const updatedReport = buildAccountsReportTelegramMessage(chatId, userName);
+        await sendTelegramReply(botToken, chatId, updatedReport.text, updatedReport.replyMarkup);
+        return;
+      }
+    }
+
+    const report = buildAccountsReportTelegramMessage(chatId, userName);
+    await sendTelegramReply(botToken, chatId, `🔄 <b>Switch karne ke liye account chunein:</b>\n\n` + report.text, report.replyMarkup);
+    return;
   }
 
   const userId = targetUser.id;
@@ -1979,10 +2293,12 @@ Aap neeche diye gaye inline buttons par tap karein, keyboard buttons use karein 
 📊 <b>Handy Commands:</b>
 /balance - Kul bacha hua balance check karein
 /summary - Mahine ki summary report
+/accounts - Jude hue accounts dekhein, switch karein & unlink buttons
 /budget - Category-wise kharcha aur bacha budget
 /date - Tareeq ka hisaab (jaise: <code>/date 2 sep</code> ya <code>kal</code>)
 /tips - Gemini AI se janein kaha faltu kharcha hua aur bachat tips
 /recent - Aakhri 5 transactions dekhein
+/unlink - Account se Telegram unlink karein
 /buttons - Handy quick buttons screen par layein
 /categories - Active categories ki list dekhein
 /help - Ye guide dobara dekhne ke liye`;
