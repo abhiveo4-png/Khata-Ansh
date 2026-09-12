@@ -726,7 +726,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 <div className="flex items-center justify-between">
                   <div className="flex items-center space-x-2">
                     <Key className="w-4 h-4 text-cyan-400" />
-                    <span className="text-xs font-bold text-cyan-200 uppercase">SHARED TELEGRAM LINK CODE</span>
+                    <span className="text-xs font-bold text-cyan-200 uppercase">TELEGRAM LINK CODE & DEEP LINK</span>
                   </div>
                   <button
                     onClick={handleRegenerateCode}
@@ -736,39 +736,53 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                   </button>
                 </div>
 
-                <div className="flex items-center space-x-2">
+                <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
                   <div className="flex-1 bg-slate-950 border border-slate-700 px-4 py-2.5 rounded-xl flex items-center justify-between font-mono text-lg font-black text-cyan-300 tracking-widest">
                     <span>{currentUser.linkCode || '838107'}</span>
                     <span className="text-xs text-slate-500 font-normal tracking-normal">
                       /link {currentUser.linkCode || '838107'}
                     </span>
                   </div>
-                  <button
-                    onClick={handleCopyLinkCode}
-                    className="px-3.5 py-2.5 bg-cyan-500 hover:bg-cyan-400 text-slate-950 rounded-xl text-xs font-bold flex items-center space-x-1 transition-all shrink-0 cursor-pointer"
-                  >
-                    {copiedCode ? <Check className="w-4 h-4 stroke-[3]" /> : <Copy className="w-4 h-4" />}
-                    <span>{copiedCode ? 'COPIED' : 'COPY'}</span>
-                  </button>
-                  <button
-                    onClick={handleCopyInviteMessage}
-                    className="px-3.5 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold flex items-center space-x-1 transition-all shrink-0 cursor-pointer"
-                  >
-                    {copiedInvite ? <Check className="w-4 h-4 stroke-[3]" /> : <Share2 className="w-4 h-4" />}
-                    <span>{copiedInvite ? 'DONE!' : 'SHARE'}</span>
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={handleCopyLinkCode}
+                      className="flex-1 sm:flex-none px-3.5 py-2.5 bg-cyan-500 hover:bg-cyan-400 text-slate-950 rounded-xl text-xs font-bold flex items-center justify-center space-x-1 transition-all shrink-0 cursor-pointer"
+                    >
+                      {copiedCode ? <Check className="w-4 h-4 stroke-[3]" /> : <Copy className="w-4 h-4" />}
+                      <span>{copiedCode ? 'COPIED' : 'COPY /link'}</span>
+                    </button>
+                    <a
+                      href={`https://t.me/${botUsername || 'khata_ansh_bot'}?start=${currentUser.linkCode}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="flex-1 sm:flex-none px-3.5 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold flex items-center justify-center space-x-1.5 transition-all shrink-0 cursor-pointer"
+                      title="Direct 1-Click Link in Telegram"
+                    >
+                      <Bot className="w-4 h-4" />
+                      <span>1-CLICK LINK</span>
+                    </a>
+                  </div>
                 </div>
 
                 {/* Cyber Onboarding Guide */}
-                <div className="text-[11px] text-slate-300 bg-slate-950/80 p-3 rounded-xl border border-slate-800 space-y-1.5">
+                <div className="text-[11px] text-slate-300 bg-slate-950/80 p-3 rounded-xl border border-slate-800 space-y-2">
                   <p className="font-bold text-cyan-300 flex items-center space-x-1">
-                    <span>📡 Instructions for Wife & Family Members:</span>
+                    <span>📡 Telegram Bot se Connect Karne ke 3 Tareeqe:</span>
                   </p>
-                  <ol className="list-decimal list-inside space-y-1 text-slate-400 pl-1 font-mono">
-                    <li>Open Telegram and search for <b className="text-white">@{botUsername}</b></li>
-                    <li>Send this message: <code className="bg-cyan-950 text-cyan-300 px-1.5 py-0.5 rounded font-bold">/link {currentUser.linkCode}</code></li>
-                    <li>Done! You (Owner) will receive an approval prompt here and in Telegram before they get access.</li>
-                  </ol>
+                  <ul className="space-y-1 text-slate-400 pl-1 font-mono">
+                    <li className="flex items-start gap-1.5">
+                      <span className="text-cyan-400 font-bold">1.</span>
+                      <span>Bot <b className="text-white">@{botUsername}</b> ko 6-digit code bhejein: <code className="bg-cyan-950 text-cyan-300 px-1.5 py-0.5 rounded font-bold">/link {currentUser.linkCode}</code></span>
+                    </li>
+                    <li className="flex items-start gap-1.5">
+                      <span className="text-cyan-400 font-bold">2.</span>
+                      <span>Ya apna registered Email address bhejein: <code className="bg-cyan-950 text-cyan-300 px-1.5 py-0.5 rounded font-bold">/link {currentUser.email}</code></span>
+                    </li>
+                    <li className="flex items-start gap-1.5">
+                      <span className="text-cyan-400 font-bold">3.</span>
+                      <span>Ya neeche <b>"Direct Chat ID Link"</b> me apna Telegram Chat ID daal kar click karein.</span>
+                    </li>
+                  </ul>
                 </div>
               </div>
 

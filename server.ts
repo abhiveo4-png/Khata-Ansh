@@ -2502,55 +2502,123 @@ async function handleTelegramMessage(messageObj: any) {
   const command = rawText.split(' ')[0].toLowerCase();
   const commandArg = rawText.split(' ').slice(1).join(' ').trim();
 
-  // 1. Check for Linking Command (/link <code> or /start <code>)
-  if (command === '/link' || (command === '/start' && commandArg && /^\d{6}$/.test(commandArg))) {
-    const linkCode = commandArg.replace(/[^0-9]/g, '');
-    const userToLink = users.find(u => u.linkCode === linkCode);
+  // 1. Check for Linking Command (/link <code>, /link <email>, /start <code>, link <code>, or pure 6-digit code)
+  const cleanCmd = command.split('@')[0].toLowerCase();
+  const isLinkDirect = cleanCmd === '/link' || cleanCmd === 'link' || cleanCmd === '/connect' || cleanCmd === 'connect';
+  const isStartWithCode = cleanCmd === '/start' && Boolean(commandArg);
+  const isPure6DigitCode = /^\d{6}$/.test(rawText.trim());
+
+  if (isLinkDirect || isStartWithCode || isPure6DigitCode) {
+    // Reload users from disk & cache
+    users = loadJson<UserProfile[]>(USERS_FILE, users);
+
+    let extractedArg = commandArg ? commandArg.trim() : '';
+    if (isPure6DigitCode) {
+      extractedArg = rawText.trim();
+    }
+    
+    // Clean potential prefixes like "link_", "code:", ":", etc.
+    extractedArg = extractedArg.replace(/^link[:_\s]*/i, '').replace(/^code[:_\s]*/i, '').replace(/^[=:]\s*/, '').trim();
+
+    // 1. Check if user typed `/link` without arguments
+    if (!extractedArg && isLinkDirect) {
+      await sendTelegramReply(
+        botToken,
+        chatId,
+        `🔗 <b>TeleExpense Account Link Kaise Karein:</b>\n━━━━━━━━━━━━━━━━━━━━\n📌 <b>Aapka Telegram Chat ID:</b> <code>${chatId}</code>\n\n💡 <b>2 Aasaan Tareeqe:</b>\n1️⃣ <b>6-digit Code se:</b>\n   Apne Web Dashboard par 6-digit code dekhein aur bhejein:\n   <code>/link 838107</code>\n\n2️⃣ <b>Email se:</b>\n   Apna registered email address bhejein:\n   <code>/link ${users[0]?.email || 'aapka_email@example.com'}</code>\n\n🌐 <i>Aap Web Dashboard par "Direct Chat ID Link" me apni Chat ID <code>${chatId}</code> daal kar bhi instant connect kar sakte hain!</i>`
+      );
+      return;
+    }
+
+    // Extract potential 6-digit numeric code or email
+    const numericCode = extractedArg.replace(/[^0-9]/g, '');
+    const isEmail = extractedArg.includes('@');
+    const cleanEmail = extractedArg.toLowerCase();
+
+    // Search user
+    let userToLink: UserProfile | undefined;
+
+    // A. Match by 6-digit numeric code
+    if (numericCode && numericCode.length === 6) {
+      userToLink = users.find(u => String(u.linkCode || '').trim() === numericCode);
+    }
+
+    // B. Match by Email
+    if (!userToLink && isEmail) {
+      userToLink = users.find(u => u.email.toLowerCase() === cleanEmail);
+    }
+
+    // C. Match by User ID
+    if (!userToLink && extractedArg) {
+      userToLink = users.find(u => u.id === extractedArg || u.id === `user_${extractedArg}`);
+    }
+
+    // D. Match by Name (case-insensitive)
+    if (!userToLink && extractedArg && extractedArg.length >= 3) {
+      userToLink = users.find(u => u.name.toLowerCase() === extractedArg.toLowerCase());
+    }
+
+    // E. Fallback: If only 1 user exists in the entire database (single-user deployment on Render)
+    if (!userToLink && users.length === 1) {
+      userToLink = users[0];
+    }
 
     if (userToLink) {
       if (!userToLink.linkedMembers) {
         userToLink.linkedMembers = [];
       }
 
-      const isOwnerSelfLink = (!userToLink.telegramChatId || String(userToLink.telegramChatId) === String(chatId)) && userToLink.linkedMembers.length === 0;
-      const isAlreadyLinked = userToLink.linkedMembers.some(m => String(m.telegramChatId) === String(chatId)) || String(userToLink.telegramChatId) === String(chatId);
-      const memberName = messageObj.from?.first_name || userName || 'Family Member';
-
-      if (isOwnerSelfLink) {
-        // First owner initial self-link
-        userToLink.telegramChatId = chatId;
-        userToLink.telegramUsername = messageObj.from?.username || userName;
-        userToLink.linkedMembers.push({
-          id: `mem_${chatId}`,
-          name: memberName,
-          customAlias: `${userToLink.name} (Owner)`,
-          role: 'owner',
-          telegramChatId: chatId,
-          telegramUsername: messageObj.from?.username || userName,
-          linkedAt: new Date().toISOString(),
-        });
-        saveUsers(users);
-        setActiveAccountForChat(chatId, userToLink.id);
-
-        await sendTelegramReply(
-          botToken,
-          chatId,
-          `🎉 <b>Khata Owner Telegram se Connect Ho Gaya!</b>\n\nNamaste <b>${memberName}</b>! Aapka Telegram account <b>${userToLink.name}</b> (<code>${userToLink.email}</code>) se jud chuka hai.`
-        );
-        return;
-      }
+      const memberName = messageObj.from?.first_name || userName || userToLink.name;
+      const isAlreadyLinked = 
+        String(userToLink.telegramChatId) === String(chatId) || 
+        userToLink.linkedMembers.some(m => String(m.telegramChatId) === String(chatId));
 
       if (isAlreadyLinked) {
         setActiveAccountForChat(chatId, userToLink.id);
         await sendTelegramReply(
           botToken,
           chatId,
-          `✅ <b>Aap Pehle Se Hi Jude Hue Hain!</b>\n\nAap <b>${userToLink.name}</b> (<code>${userToLink.email}</code>) ke khate se pehle hi connected hain aur ye aapka active default account hai.\n\n💡 <i>Accounts switch karne ya dekhne ke liye <code>/accounts</code> bhejein.</i>`
+          `✅ <b>Aap Pehle Se Hi Jude Hue Hain!</b>\n\nAapka Telegram account <b>${userToLink.name}</b> (<code>${userToLink.email}</code>) ke ledger se successfully connected hai aur ye aapka active default account hai.\n\n💡 <i>Kharcha record karne ke liye sidhe bhejein:</i>\n• <code>500 sabzi cash</code>\n• <code>300 petrol upi</code>\n• <code>1200 restaurant card</code>`
         );
         return;
       }
 
-      // If it's a new member joining an existing ledger: Require Owner Approval
+      // If owner telegramChatId is not set, or matches this chat, or no owners yet: Direct Owner Link!
+      const hasOwner = Boolean(userToLink.telegramChatId) && userToLink.linkedMembers.some(m => m.role === 'owner');
+
+      if (!hasOwner || String(userToLink.telegramChatId) === String(chatId)) {
+        userToLink.telegramChatId = chatId;
+        userToLink.telegramUsername = messageObj.from?.username || userName;
+        
+        // Add or update owner in linkedMembers
+        const existingMemIdx = userToLink.linkedMembers.findIndex(m => String(m.telegramChatId) === String(chatId));
+        if (existingMemIdx >= 0) {
+          userToLink.linkedMembers[existingMemIdx].role = 'owner';
+          userToLink.linkedMembers[existingMemIdx].customAlias = `${userToLink.name} (Owner)`;
+        } else {
+          userToLink.linkedMembers.push({
+            id: `mem_${chatId}`,
+            name: memberName,
+            customAlias: `${userToLink.name} (Owner)`,
+            role: 'owner',
+            telegramChatId: chatId,
+            telegramUsername: messageObj.from?.username || userName,
+            linkedAt: new Date().toISOString(),
+          });
+        }
+
+        saveUsers(users);
+        setActiveAccountForChat(chatId, userToLink.id);
+
+        await sendTelegramReply(
+          botToken,
+          chatId,
+          `🎉 <b>Khata Owner Telegram se Connect Ho Gaya!</b>\n\nNamaste <b>${memberName}</b>! Aapka Telegram account <b>${userToLink.name}</b> (<code>${userToLink.email}</code>) se successfully link ho chuka hai.\n\n💡 <b>Ab aap kharcha aur income sidhe Telegram se record kar sakte hain:</b>\n• <code>500 sabzi cash</code>\n• <code>350 zomato upi</code>\n• <code>+25000 salary</code>\n• <code>/balance</code> ya <code>/summary</code>`
+        );
+        return;
+      }
+
+      // Secondary member joining an already claimed owner ledger -> Owner approval workflow
       if (!userToLink.pendingRequests) userToLink.pendingRequests = [];
       const existingPending = userToLink.pendingRequests.find(r => String(r.chatId) === String(chatId));
 
@@ -2569,20 +2637,19 @@ async function handleTelegramMessage(messageObj: any) {
         chatId: String(chatId),
         name: memberName,
         telegramUsername: messageObj.from?.username || userName,
-        linkCode,
+        linkCode: userToLink.linkCode,
         requestedAt: new Date().toISOString(),
       };
       userToLink.pendingRequests.push(newReq);
       saveUsers(users);
 
-      // Reply to the requesting user
       await sendTelegramReply(
         botToken,
         chatId,
-        `⏳ <b>Link Request Bhej Di Gayi Hai!</b>\n\nNamaste <b>${memberName}</b>! Aapne <b>${userToLink.name}</b> (${userToLink.email}) ke ledger se judne ki request bhej di hai.\n\n🔒 <b>Owner Approval Zaroori Hai:</b>\nJaise hi Owner (<b>${userToLink.name}</b>) isko <b>Approve</b> karenge, aapka account link ho jayega aur aap is khate me kharcha log kar payenge!`
+        `⏳ <b>Link Request Bhej Di Gayi Hai!</b>\n\nNamaste <b>${memberName}</b>! Aapne <b>${userToLink.name}</b> (${userToLink.email}) ke ledger se judne ki request bhej di hai.\n\n🔒 <b>Owner Approval Zaroori Hai:</b>\nJaise hi Owner (<b>${userToLink.name}</b>) Telegram ya Web Dashboard se <b>Approve</b> karenge, aapka account connect ho jayega!`
       );
 
-      // Notify the Owner via Telegram if owner has a linked chat ID
+      // Notify Owner
       if (userToLink.telegramChatId && String(userToLink.telegramChatId) !== String(chatId)) {
         await sendTelegramReply(
           botToken,
@@ -2600,10 +2667,11 @@ async function handleTelegramMessage(messageObj: any) {
       }
       return;
     } else {
+      // Code mismatch or user not found
       await sendTelegramReply(
         botToken,
         chatId,
-        `❌ <b>Galat Link Code.</b>\n\nKripya TeleExpense Dashboard par apna 6-digit link code check karein aur dobara try karein:\n<code>/link 123456</code>`
+        `❌ <b>Link Code Match Nahi Hua.</b>\n\n📌 <b>Aapka Telegram Chat ID:</b> <code>${chatId}</code>\n\n💡 <b>Connect karne ke aasaan tareeqe:</b>\n1️⃣ Web Dashboard par apna 6-digit code dekhein aur dobara bhejein:\n   <code>/link 838107</code>\n2️⃣ Ya apna registered Email address bhej kar link karein:\n   <code>/link ${users[0]?.email || 'aapka_email@example.com'}</code>\n3️⃣ Ya Web Dashboard par <b>"Direct Chat ID Link"</b> me apni Chat ID <code>${chatId}</code> paste karein!`
       );
       return;
     }
@@ -3764,13 +3832,14 @@ app.post('/api/auth/link-telegram', (req, res) => {
         linkedAt: new Date().toISOString(),
       });
     }
+    setActiveAccountForChat(sChatId, user.id);
   }
 
   if (telegramUsername) {
     user.telegramUsername = String(telegramUsername).replace('@', '').trim();
   }
 
-  saveJson(USERS_FILE, users);
+  saveUsers(users);
   res.json({ success: true, user: toSafeUser(user), members: user.linkedMembers });
 });
 
