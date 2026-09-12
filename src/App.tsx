@@ -543,7 +543,9 @@ export default function App() {
 
         {activeTab === 'gullak' && (
           <GullakView
-            authToken={localStorage.getItem('teleexpense_auth_token')}
+            authToken={localStorage.getItem('teleexpense_auth_token') || localStorage.getItem('auth_token')}
+            currentUser={currentUser}
+            onUserUpdate={(updatedUser) => setCurrentUser(updatedUser)}
           />
         )}
 

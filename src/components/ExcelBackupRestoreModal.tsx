@@ -253,9 +253,60 @@ export const ExcelBackupRestoreModal: React.FC<ExcelBackupRestoreModalProps> = (
     }
   };
 
-  // Download export helper
-  const handleDownloadBackup = (format: 'xlsx' | 'csv') => {
-    window.open(`/api/transactions/export-backup?format=${format}`, '_blank');
+  // Download export helper with authenticated user context
+  const handleDownloadBackup = async (format: 'xlsx' | 'csv') => {
+    try {
+      setIsProcessing(true);
+      setError(null);
+      setSuccessMessage(null);
+
+      const userIdParam = currentUser?.id ? `&userId=${encodeURIComponent(currentUser.id)}` : '';
+      const url = `/api/transactions/export-backup?format=${format}${userIdParam}`;
+      
+      const headers: Record<string, string> = {};
+      const token = localStorage.getItem('auth_token');
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+      if (currentUser?.id) {
+        headers['x-user-id'] = currentUser.id;
+      }
+
+      const res = await fetch(url, { headers });
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => ({}));
+        throw new Error(errJson.error || 'Backup download fail ho gaya.');
+      }
+
+      const blob = await res.blob();
+      const blobUrl = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = blobUrl;
+
+      const contentDisposition = res.headers.get('Content-Disposition');
+      const sanitizedName = (currentUser?.name || 'Ledger').replace(/[^a-zA-Z0-9_]/g, '_');
+      let fileName = `TeleExpense_Full_Backup_${sanitizedName}_${new Date().toISOString().split('T')[0]}.${format}`;
+
+      if (contentDisposition && contentDisposition.includes('filename=')) {
+        const match = contentDisposition.match(/filename="?([^"]+)"?/);
+        if (match && match[1]) {
+          fileName = match[1];
+        }
+      }
+
+      link.download = fileName;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(blobUrl);
+
+      setSuccessMessage(`${format.toUpperCase()} Backup successfully download ho gaya (${currentUser?.name || 'Log-in User'})!`);
+    } catch (err: any) {
+      console.error('Download backup error:', err);
+      setError(err?.message || 'Download me samasya aayi.');
+    } finally {
+      setIsProcessing(false);
+    }
   };
 
   return (

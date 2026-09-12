@@ -12,32 +12,53 @@ import {
   Coins,
   ShieldCheck,
   Zap,
-  Layers
+  Layers,
+  Clock,
+  Check,
+  ChevronDown
 } from 'lucide-react';
-import { GullakSummary } from '../types';
+import { GullakSummary, UserProfile } from '../types';
 
 interface GullakViewProps {
   authToken: string | null;
+  currentUser?: UserProfile | null;
+  onUserUpdate?: (user: UserProfile) => void;
 }
 
-export const GullakView: React.FC<GullakViewProps> = ({ authToken }) => {
+export const GullakView: React.FC<GullakViewProps> = ({ authToken, currentUser, onUserUpdate }) => {
   const [data, setData] = useState<GullakSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [selectedMonth, setSelectedMonth] = useState<string>('');
+  const [isChangingStartMonth, setIsChangingStartMonth] = useState(false);
+  const [customStartMonth, setCustomStartMonth] = useState<string>('2026-09');
+  const [isSavingMonth, setIsSavingMonth] = useState(false);
+  const [statusMsg, setStatusMsg] = useState<string | null>(null);
 
   const fetchGullakData = async () => {
     try {
       setLoading(true);
       const headers: Record<string, string> = {};
-      if (authToken) {
-        headers['Authorization'] = `Bearer ${authToken}`;
+      const token = authToken || localStorage.getItem('auth_token') || localStorage.getItem('teleexpense_auth_token');
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
       }
-      const res = await fetch('/api/gullak', { headers });
+      if (currentUser?.id) {
+        headers['x-user-id'] = currentUser.id;
+      }
+
+      const url = currentUser?.id ? `/api/gullak?userId=${encodeURIComponent(currentUser.id)}` : '/api/gullak';
+      const res = await fetch(url, { headers });
       if (res.ok) {
         const json: GullakSummary = await res.json();
         setData(json);
-        if (json.monthlyHistory && json.monthlyHistory.length > 0 && !selectedMonth) {
-          setSelectedMonth(json.monthlyHistory[0].month);
+        if (json.trackingStartMonth) {
+          setCustomStartMonth(json.trackingStartMonth);
+        }
+        if (json.monthlyHistory && json.monthlyHistory.length > 0) {
+          // If current selectedMonth is not in the list, default to first available
+          if (!selectedMonth || !json.monthlyHistory.some(m => m.month === selectedMonth)) {
+            setSelectedMonth(json.monthlyHistory[0].month);
+          }
         }
       }
     } catch (err) {
@@ -49,7 +70,52 @@ export const GullakView: React.FC<GullakViewProps> = ({ authToken }) => {
 
   useEffect(() => {
     fetchGullakData();
-  }, [authToken]);
+  }, [authToken, currentUser?.id]);
+
+  const handleUpdateStartMonth = async (newMonth: string) => {
+    if (!newMonth || !/^\d{4}-\d{2}$/.test(newMonth)) return;
+    try {
+      setIsSavingMonth(true);
+      setStatusMsg(null);
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+      };
+      const token = authToken || localStorage.getItem('auth_token') || localStorage.getItem('teleexpense_auth_token');
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+      if (currentUser?.id) {
+        headers['x-user-id'] = currentUser.id;
+      }
+
+      const res = await fetch('/api/gullak/start-month', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ startMonth: newMonth }),
+      });
+
+      if (res.ok) {
+        const json = await res.json();
+        if (json.gullak) {
+          setData(json.gullak);
+          if (json.gullak.monthlyHistory && json.gullak.monthlyHistory.length > 0) {
+            setSelectedMonth(json.gullak.monthlyHistory[0].month);
+          }
+        }
+        if (json.user && onUserUpdate) {
+          onUserUpdate(json.user);
+        }
+        setCustomStartMonth(newMonth);
+        setIsChangingStartMonth(false);
+        setStatusMsg(`Gullak start month set to ${newMonth}!`);
+        setTimeout(() => setStatusMsg(null), 3000);
+      }
+    } catch (err) {
+      console.error('Error updating start month:', err);
+    } finally {
+      setIsSavingMonth(false);
+    }
+  };
 
   if (loading && !data) {
     return (
@@ -75,13 +141,19 @@ export const GullakView: React.FC<GullakViewProps> = ({ authToken }) => {
               <PiggyBank className="w-9 h-9" />
             </div>
             <div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
                 <h2 className="text-xl sm:text-2xl font-bold text-white tracking-tight">
                   Gullak (Bacha Hua Budget)
                 </h2>
                 <span className="px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-amber-500/20 text-amber-300 border border-amber-500/30">
                   Auto Piggy Bank
                 </span>
+                {data?.trackingStartMonth && (
+                  <span className="px-2.5 py-0.5 rounded-full text-[11px] font-mono font-medium bg-cyan-950 text-cyan-300 border border-cyan-500/40 flex items-center gap-1">
+                    <Clock className="w-3 h-3 text-cyan-400" />
+                    Hisaab Shuru: {data.trackingStartMonth}
+                  </span>
+                )}
               </div>
               <p className="text-slate-400 text-xs sm:text-sm mt-1 max-w-xl">
                 Monthly category budget se jitna paisa bach jata hai (jaise Room Rent 12,000 me se sirf 11,000 laga), wo bacha hua ₹1,000 automatically is Gullak me jama hota hai.
@@ -89,7 +161,44 @@ export const GullakView: React.FC<GullakViewProps> = ({ authToken }) => {
             </div>
           </div>
 
-          <div className="flex items-center gap-3 self-stretch md:self-auto justify-end">
+          <div className="flex items-center gap-3 self-stretch md:self-auto justify-end flex-wrap">
+            {/* Tracking Start Month Adjuster */}
+            <div className="relative">
+              {isChangingStartMonth ? (
+                <div className="flex items-center gap-1.5 p-1 rounded-xl bg-slate-950 border border-amber-500/50">
+                  <input
+                    type="month"
+                    value={customStartMonth}
+                    onChange={(e) => setCustomStartMonth(e.target.value)}
+                    className="bg-slate-900 text-white text-xs px-2 py-1 rounded-lg border border-slate-700 font-mono focus:outline-none focus:border-amber-500"
+                  />
+                  <button
+                    onClick={() => handleUpdateStartMonth(customStartMonth)}
+                    disabled={isSavingMonth}
+                    className="px-2.5 py-1 bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold rounded-lg cursor-pointer"
+                  >
+                    {isSavingMonth ? 'Saving...' : 'Set'}
+                  </button>
+                  <button
+                    onClick={() => setIsChangingStartMonth(false)}
+                    className="px-2 py-1 text-slate-400 hover:text-white text-xs cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              ) : (
+                <button
+                  onClick={() => setIsChangingStartMonth(true)}
+                  className="px-3.5 py-2.5 rounded-xl bg-slate-800/80 hover:bg-slate-700 text-slate-300 border border-slate-700 text-xs font-medium flex items-center gap-1.5 transition-all cursor-pointer"
+                  title="Hisaab Shuru Month Badlein"
+                >
+                  <Calendar className="w-3.5 h-3.5 text-amber-400" />
+                  <span>Start Month: <b>{data?.trackingStartMonth || '2026-09'}</b></span>
+                  <ChevronDown className="w-3 h-3 text-slate-400" />
+                </button>
+              )}
+            </div>
+
             <button
               onClick={fetchGullakData}
               className="px-4 py-2.5 rounded-xl bg-slate-800/80 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-medium flex items-center gap-2 transition-all cursor-pointer"
@@ -99,6 +208,13 @@ export const GullakView: React.FC<GullakViewProps> = ({ authToken }) => {
             </button>
           </div>
         </div>
+
+        {statusMsg && (
+          <div className="mt-4 p-2.5 rounded-xl bg-emerald-950/80 border border-emerald-500/40 text-emerald-300 text-xs flex items-center gap-2">
+            <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+            <span>{statusMsg}</span>
+          </div>
+        )}
 
         {/* 3 Metric Cards */}
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-8 pt-6 border-t border-slate-800/80">
@@ -111,7 +227,7 @@ export const GullakView: React.FC<GullakViewProps> = ({ authToken }) => {
               ₹{(data?.totalGullakSavings || 0).toLocaleString('en-IN')}
             </div>
             <p className="text-[11px] text-slate-400 mt-1">
-              Sabhi mahino ka kul bacha hua surplus budget
+              Start month ({data?.trackingStartMonth || '2026-09'}) se ab tak ka bacha hua surplus
             </p>
           </div>
 
@@ -137,7 +253,7 @@ export const GullakView: React.FC<GullakViewProps> = ({ authToken }) => {
               ₹{(data?.pastMonthsSaved || 0).toLocaleString('en-IN')}
             </div>
             <p className="text-[11px] text-slate-400 mt-1">
-              Past months se bacha hua cumulative fund
+              Start month ke baad pichle settled mahino ka fund
             </p>
           </div>
         </div>

@@ -32,6 +32,7 @@ export interface UserProfile {
   pendingRequests?: PendingMemberRequest[]; // New member link requests awaiting owner approval
   linkCode: string; // 6-digit linking code e.g. "729104"
   createdAt: string;
+  trackingStartMonth?: string; // Format: "YYYY-MM" (e.g. "2026-09")
 }
 
 export interface Transaction {
@@ -162,6 +163,7 @@ export interface GullakSummary {
   currentMonthSaved: number; // Current month's active unspent budget
   pastMonthsSaved: number; // Settled past months saved
   activeMonthsCount: number;
+  trackingStartMonth?: string; // e.g. "2026-09"
   categoryBreakdown: Array<{
     category: string;
     totalSaved: number;

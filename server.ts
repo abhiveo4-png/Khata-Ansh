@@ -84,6 +84,7 @@ export interface UserProfile {
   pendingRequests?: PendingMemberRequest[]; // New member link requests awaiting owner approval
   linkCode: string; // 6-digit linking code
   createdAt: string;
+  trackingStartMonth?: string; // Format: "YYYY-MM" (e.g. "2026-09")
 }
 
 export type TransactionType = 'income' | 'expense';
@@ -738,6 +739,7 @@ function toSafeUser(u: UserProfile | null) {
     pendingRequests: u.pendingRequests || [],
     linkCode: u.linkCode,
     createdAt: u.createdAt,
+    trackingStartMonth: u.trackingStartMonth || (u.createdAt ? u.createdAt.substring(0, 7) : undefined),
   };
 }
 
@@ -1542,16 +1544,41 @@ export function calculateGullakSummary(userId: string) {
   const nowInfo = getAppDateTime();
   const currentMonth = nowInfo.date.substring(0, 7); // e.g. "2026-09"
 
-  // Gather all unique months from transactions plus current month
-  const monthsSet = new Set<string>();
-  monthsSet.add(currentMonth);
-  for (const t of store.transactions) {
-    if (t.date && t.date.length >= 7) {
-      monthsSet.add(t.date.substring(0, 7));
+  const user = users.find(u => u.id === userId);
+  // Default start month to user's configured trackingStartMonth, or user's createdAt month, or current month
+  let userStartMonth = user?.trackingStartMonth;
+  if (!userStartMonth) {
+    if (user?.createdAt && user.createdAt.length >= 7) {
+      userStartMonth = user.createdAt.substring(0, 7);
+    } else {
+      userStartMonth = currentMonth;
     }
   }
 
-  const sortedMonths = Array.from(monthsSet).sort().reverse(); // newest first
+  // Gather all unique months from transactions plus current month, STRICTLY >= userStartMonth and <= currentMonth
+  const monthsSet = new Set<string>();
+  if (currentMonth >= userStartMonth) {
+    monthsSet.add(currentMonth);
+  }
+
+  for (const t of store.transactions) {
+    if (t.date && t.date.length >= 7) {
+      const ym = t.date.substring(0, 7);
+      if (ym >= userStartMonth && ym <= currentMonth) {
+        monthsSet.add(ym);
+      }
+    }
+  }
+
+  // If no months match, fallback to currentMonth
+  if (monthsSet.size === 0) {
+    monthsSet.add(currentMonth);
+  }
+
+  const sortedMonths = Array.from(monthsSet)
+    .filter(m => m >= userStartMonth && m <= currentMonth)
+    .sort()
+    .reverse(); // newest first
   const monthlyHistory: any[] = [];
   const categoryTotalsMap: Record<string, { totalSaved: number; currentMonthSaved: number }> = {};
 
@@ -1646,6 +1673,7 @@ export function calculateGullakSummary(userId: string) {
     currentMonthSaved,
     pastMonthsSaved,
     activeMonthsCount: sortedMonths.length,
+    trackingStartMonth: userStartMonth,
     categoryBreakdown,
     monthlyHistory,
   };
@@ -4876,8 +4904,12 @@ app.get('/api/transactions/item-spending', (req, res) => {
 // EXPORT COMPREHENSIVE BACKUP FILE (EXCEL / CSV)
 app.get('/api/transactions/export-backup', (req, res) => {
   try {
-    const user = getRequestUser(req);
-    const userId = user ? user.id : 'default';
+    const targetUserId = (req.query.userId as string) || (req.headers['x-user-id'] as string);
+    let user = targetUserId ? users.find(u => u.id === targetUserId || u.email.toLowerCase() === targetUserId.toLowerCase()) : null;
+    if (!user) {
+      user = getRequestUser(req);
+    }
+    const userId = user ? user.id : (users[0]?.id || 'default');
     const store = getUserData(userId);
     const summary = calculateUserSummary(userId);
     const format = req.query.format === 'csv' ? 'csv' : 'xlsx';
@@ -4995,6 +5027,53 @@ app.get('/api/transactions/export-backup', (req, res) => {
   } catch (err: any) {
     console.error('Error exporting backup:', err);
     return res.status(500).json({ error: 'Failed to export backup' });
+  }
+});
+
+// GULLAK PIGGY BANK API ENDPOINTS
+app.get('/api/gullak', (req, res) => {
+  try {
+    const user = getRequestUser(req);
+    if (!user) {
+      return res.status(401).json({ error: 'User session not found' });
+    }
+    const gullak = calculateGullakSummary(user.id);
+    return res.json({
+      ...gullak,
+      trackingStartMonth: user.trackingStartMonth || (user.createdAt ? user.createdAt.substring(0, 7) : undefined),
+    });
+  } catch (err: any) {
+    console.error('Error in /api/gullak:', err);
+    return res.status(500).json({ error: err?.message || 'Failed to fetch Gullak data' });
+  }
+});
+
+app.post(['/api/gullak/start-month', '/api/users/tracking-start-month'], (req, res) => {
+  try {
+    const user = getRequestUser(req);
+    if (!user) {
+      return res.status(401).json({ error: 'User session not found' });
+    }
+    const { startMonth } = req.body;
+    if (!startMonth || !/^\d{4}-\d{2}$/.test(startMonth)) {
+      return res.status(400).json({ error: 'Valid start month in format YYYY-MM is required (e.g. 2026-09)' });
+    }
+
+    user.trackingStartMonth = startMonth;
+    saveJson(USERS_FILE, users);
+    persistToPg('users', users).catch(() => {});
+
+    const gullak = calculateGullakSummary(user.id);
+    return res.json({
+      success: true,
+      message: `Gullak tracking start month set to ${startMonth}`,
+      trackingStartMonth: startMonth,
+      gullak,
+      user: toSafeUser(user),
+    });
+  } catch (err: any) {
+    console.error('Error updating Gullak start month:', err);
+    return res.status(500).json({ error: err?.message || 'Failed to update start month' });
   }
 });
 
