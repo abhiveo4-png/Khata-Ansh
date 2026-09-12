@@ -130,3 +130,30 @@ export interface AiFinancialInsights {
   };
 }
 
+export interface UdharDebt {
+  id: string;
+  userId?: string;
+  personName: string;
+  type: 'you_lent' | 'you_borrowed'; // you_lent = aapne diya (lena hai), you_borrowed = aapne liya (dena hai)
+  amount: number;
+  description: string;
+  date: string;
+  dueDate?: string;
+  isSettled: boolean;
+  settledAt?: string;
+  createdAt: string;
+}
+
+export interface SavingsGoal {
+  id: string;
+  userId?: string;
+  title: string;
+  targetAmount: number;
+  currentAmount: number;
+  deadline?: string;
+  category?: string;
+  icon?: string;
+  color?: string;
+  createdAt: string;
+}
+

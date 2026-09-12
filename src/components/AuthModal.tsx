@@ -913,7 +913,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                       type="email"
                       required
                       autoComplete="off"
-                      placeholder="e.g. abhiveo4@gmail.com"
+                      placeholder="e.g. rajesh@example.com"
                       value={loginEmail}
                       onChange={(e) => setLoginEmail(e.target.value)}
                       className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-700 rounded-xl text-xs text-cyan-300 focus:border-cyan-400 outline-hidden"
@@ -1021,7 +1021,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                   <input
                     type="email"
                     required
-                    placeholder="e.g. abhiveo4@gmail.com"
+                    placeholder="e.g. rajesh@example.com"
                     value={registerEmail}
                     onChange={(e) => setRegisterEmail(e.target.value)}
                     className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-700 rounded-xl text-xs text-cyan-300 focus:border-cyan-400 outline-hidden"

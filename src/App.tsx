@@ -8,7 +8,8 @@ import {
   RefreshCw,
   Lock,
   Coins,
-  PiggyBank
+  PiggyBank,
+  HandCoins
 } from 'lucide-react';
 import { Transaction, FinancialSummary, BotConfig, CategoryBudget, UserProfile, CategoryDef } from './types';
 import { safeFetchJson, setActiveUserId, setAuthSession, getActiveUserId } from './utils/api';
@@ -26,6 +27,8 @@ import { CategoryManager } from './components/CategoryManager';
 import { AuthModal } from './components/AuthModal';
 import { AiInsightsModal } from './components/AiInsightsModal';
 import { ExcelBackupRestoreModal } from './components/ExcelBackupRestoreModal';
+import { UdharManager } from './components/UdharManager';
+import { SavingsGoalsManager } from './components/SavingsGoalsManager';
 
 export default function App() {
   // Multi-user Profile State
@@ -53,7 +56,7 @@ export default function App() {
   const [botConfig, setBotConfig] = useState<BotConfig | null>(null);
   const [webhookUrl, setWebhookUrl] = useState('');
   const [appUrl, setAppUrl] = useState('');
-  const [activeTab, setActiveTab] = useState<'transactions' | 'investments' | 'categories' | 'analytics' | 'budgets'>('transactions');
+  const [activeTab, setActiveTab] = useState<'transactions' | 'investments' | 'categories' | 'analytics' | 'budgets' | 'debts' | 'goals'>('transactions');
 
   // Modals state
   const [isBotSetupOpen, setIsBotSetupOpen] = useState(false);
@@ -458,6 +461,30 @@ export default function App() {
               <Target className="w-4 h-4" />
               <span>Monthly Budgets</span>
             </button>
+
+            <button
+              onClick={() => setActiveTab('debts')}
+              className={`pb-3 text-xs sm:text-sm font-semibold border-b-2 flex items-center space-x-2 transition-all shrink-0 cursor-pointer ${
+                activeTab === 'debts'
+                  ? 'border-amber-500 text-amber-400'
+                  : 'border-transparent text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <HandCoins className="w-4 h-4 text-amber-400" />
+              <span>Udhar-Khata</span>
+            </button>
+
+            <button
+              onClick={() => setActiveTab('goals')}
+              className={`pb-3 text-xs sm:text-sm font-semibold border-b-2 flex items-center space-x-2 transition-all shrink-0 cursor-pointer ${
+                activeTab === 'goals'
+                  ? 'border-purple-500 text-purple-400'
+                  : 'border-transparent text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <PiggyBank className="w-4 h-4 text-purple-400" />
+              <span>Gullak & Goals</span>
+            </button>
           </div>
 
           <div className="pb-3 hidden sm:flex items-center space-x-2">
@@ -528,6 +555,14 @@ export default function App() {
               fetchTransactions();
             }}
           />
+        )}
+
+        {activeTab === 'debts' && (
+          <UdharManager onRefreshSummary={fetchTransactions} />
+        )}
+
+        {activeTab === 'goals' && (
+          <SavingsGoalsManager onRefreshSummary={fetchTransactions} />
         )}
 
       </main>

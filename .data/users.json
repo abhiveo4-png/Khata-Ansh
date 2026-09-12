@@ -9,8 +9,8 @@
   },
   {
     "id": "user_1786897121297_2j4l",
-    "name": "priya",
-    "email": "priyababali29@gmail.com",
+    "name": "Priya Sharma",
+    "email": "priya.sharma@example.com",
     "linkCode": "194315",
     "createdAt": "2026-08-16T16:18:41.297Z",
     "linkedMembers": []
@@ -18,8 +18,8 @@
   {
     "id": "user_1786898134161_9byn",
     "name": "Ansh",
-    "email": "abhiveo4@gmail.com",
-    "linkCode": "513919",
+    "email": "ansh.kumar@example.com",
+    "linkCode": "682491",
     "createdAt": "2026-08-16T16:35:34.161Z",
     "linkedMembers": [
       {

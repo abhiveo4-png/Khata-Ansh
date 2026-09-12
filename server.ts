@@ -117,6 +117,33 @@ export interface CategoryBudget {
   period: 'monthly';
 }
 
+export interface UdharDebt {
+  id: string;
+  userId: string;
+  personName: string;
+  type: 'you_lent' | 'you_borrowed'; // you_lent = aapne diya (lena hai), you_borrowed = aapne liya (dena hai)
+  amount: number;
+  description: string;
+  date: string;
+  dueDate?: string;
+  isSettled: boolean;
+  settledAt?: string;
+  createdAt: string;
+}
+
+export interface SavingsGoal {
+  id: string;
+  userId: string;
+  title: string;
+  targetAmount: number;
+  currentAmount: number;
+  deadline?: string;
+  category?: string;
+  icon?: string;
+  color?: string;
+  createdAt: string;
+}
+
 export interface TelegramLog {
   id: string;
   userId?: string;
@@ -438,6 +465,8 @@ interface UserDataStore {
   transactions: Transaction[];
   budgets: CategoryBudget[];
   categories: CategoryDef[];
+  debts?: UdharDebt[];
+  goals?: SavingsGoal[];
 }
 
 let users: UserProfile[] = loadJson<UserProfile[]>(USERS_FILE, []);
@@ -665,6 +694,9 @@ function getUserData(userId: string): UserDataStore {
     saveJson(filePath, store);
     persistToPg(`user_data:${userId}`, store).catch(() => {});
   }
+
+  if (!store.debts) store.debts = [];
+  if (!store.goals) store.goals = [];
 
   userDataCache.set(userId, store);
   return store;
@@ -1607,13 +1639,18 @@ ${txListText}
 export const TELEGRAM_BOT_COMMANDS = [
   { command: 'balance', description: '💰 Net balance aur kul bachat dekhein' },
   { command: 'summary', description: '📊 Mahine ki income, kharcha & bachat report' },
+  { command: 'report', description: '📑 1-Click Excel Financial Statement File' },
   { command: 'budget', description: '🎯 Category-wise kharcha aur bacha budget' },
+  { command: 'predict', description: '🧠 AI Cashflow & Month-End Burn Rate' },
+  { command: 'udhar', description: '👥 Udhar-Khata & Lending Ledger' },
+  { command: 'goals', description: '🎯 Savings Goals & Virtual Gullak' },
+  { command: 'accounts', description: '👥 Linked Accounts & Unlink Option' },
   { command: 'date', description: '📅 Kisi bhi tareeq ka kharcha & income dekhein' },
   { command: 'tips', description: '🤖 AI Faltu Kharcha & Bachat Tips' },
   { command: 'recent', description: '🕒 Haal hi ke aakhri 5 transactions' },
-  { command: 'buttons', description: '📱 Handy Quick Action Buttons on screen' },
   { command: 'categories', description: '🏷️ Active categories aur keywords dekhein' },
   { command: 'undo', description: '↩️ Aakhri transaction undo / delete karein' },
+  { command: 'unlink', description: '❌ Unlink this Telegram from shared ledger' },
   { command: 'clearall', description: '🗑️ Saare transactions clear karein' },
   { command: 'link', description: '🔗 Web account se Telegram link karein' },
   { command: 'help', description: '❓ Kaise use karein & full command list' },
@@ -1621,11 +1658,11 @@ export const TELEGRAM_BOT_COMMANDS = [
 
 export const TELEGRAM_HANDY_KEYBOARD = {
   keyboard: [
-    [{ text: '💰 Balance' }, { text: '📊 Summary' }],
-    [{ text: '🎯 Category Budget' }, { text: '📅 Aaj Ka Hisab' }],
-    [{ text: '🤖 AI Tips & Bachat' }, { text: '🕒 Recent 5 Tx' }],
-    [{ text: '🏷️ Categories' }, { text: '↩️ Undo Last' }],
-    [{ text: '❓ Help & Guide' }, { text: '📱 Handy Buttons' }],
+    [{ text: '💰 Balance' }, { text: '📊 Summary' }, { text: '📑 Excel Report' }],
+    [{ text: '🎯 Category Budget' }, { text: '🧠 Burn Rate' }, { text: '👥 Udhar-Khata' }],
+    [{ text: '🎯 Gullak Goals' }, { text: '👥 Linked Accounts' }, { text: '📅 Aaj Ka Hisab' }],
+    [{ text: '🤖 AI Tips & Bachat' }, { text: '🕒 Recent 5 Tx' }, { text: '↩️ Undo Last' }],
+    [{ text: '🏷️ Categories' }, { text: '❓ Help & Guide' }],
   ],
   resize_keyboard: true,
   is_persistent: true,
@@ -1636,17 +1673,21 @@ export const INLINE_KB_MAIN_COMMANDS = {
     [
       { text: '💰 Balance', callback_data: 'cmd_balance' },
       { text: '📊 Summary', callback_data: 'cmd_summary' },
+      { text: '📑 Excel Report', callback_data: 'cmd_report' },
     ],
     [
       { text: '🎯 Category Budget', callback_data: 'cmd_budget' },
+      { text: '🧠 Burn Rate', callback_data: 'cmd_predict' },
+      { text: '👥 Udhar-Khata', callback_data: 'cmd_udhar' },
+    ],
+    [
+      { text: '🎯 Gullak Goals', callback_data: 'cmd_goals' },
+      { text: '👥 Linked Accounts', callback_data: 'cmd_accounts' },
       { text: '📅 Aaj Ka Hisab', callback_data: 'cmd_date_today' },
     ],
     [
       { text: '🤖 AI Faltu Kharcha', callback_data: 'cmd_tips' },
       { text: '🕒 Recent 5 Tx', callback_data: 'cmd_recent' },
-    ],
-    [
-      { text: '🏷️ Categories', callback_data: 'cmd_categories' },
       { text: '↩️ Undo Last', callback_data: 'cmd_undo' },
     ],
   ],
@@ -1736,6 +1777,420 @@ async function sendTelegramReply(
   }
 }
 
+async function sendTelegramDocument(
+  botToken: string,
+  chatId: string | number,
+  fileBuffer: Buffer,
+  fileName: string,
+  caption?: string
+): Promise<boolean> {
+  if (!botToken || !chatId) return false;
+  try {
+    const formData = new FormData();
+    formData.append('chat_id', String(chatId));
+    const blob = new Blob([fileBuffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    formData.append('document', blob, fileName);
+    if (caption) {
+      formData.append('caption', caption);
+      formData.append('parse_mode', 'HTML');
+    }
+
+    const res = await fetch(`https://api.telegram.org/bot${botToken}/sendDocument`, {
+      method: 'POST',
+      body: formData,
+    });
+    return res.ok;
+  } catch (err) {
+    console.error('Failed to send Telegram document:', err);
+    return false;
+  }
+}
+
+// Generate complete formatted Excel report buffer
+function generateExcelReportBuffer(userId: string, userName: string): Buffer {
+  const store = getUserData(userId);
+  const summary = calculateUserSummary(userId);
+  const now = getAppDateTime();
+
+  const workbook = XLSX.utils.book_new();
+
+  // 1. Transactions Sheet
+  const txRows = store.transactions.map((t, idx) => ({
+    'Sr No': idx + 1,
+    'Date': t.date,
+    'Time (IST)': t.time || '',
+    'Type': t.type === 'income' ? 'Income (Kamai)' : 'Expense (Kharcha)',
+    'Amount (₹)': t.amount,
+    'Category': t.category,
+    'Description': t.description,
+    'Payment Method': t.paymentMethod || 'UPI',
+    'Source': t.source,
+    'Logged By': t.telegramUser || userName,
+  }));
+  const txSheet = XLSX.utils.json_to_sheet(txRows.length > 0 ? txRows : [{ 'Info': 'No transactions logged yet' }]);
+  XLSX.utils.book_append_sheet(workbook, txSheet, 'Transactions');
+
+  // 2. Category Budgets Sheet
+  const budgetRows = store.budgets.map((b, idx) => ({
+    'Sr No': idx + 1,
+    'Category': b.category,
+    'Monthly Limit (₹)': b.limit,
+    'Spent (₹)': b.spent || 0,
+    'Remaining (₹)': Math.max(0, b.limit - (b.spent || 0)),
+    'Status': (b.spent || 0) > b.limit ? 'OVERBUDGET' : 'WITHIN BUDGET',
+  }));
+  const budgetSheet = XLSX.utils.json_to_sheet(budgetRows.length > 0 ? budgetRows : [{ 'Info': 'No budgets set' }]);
+  XLSX.utils.book_append_sheet(workbook, budgetSheet, 'Monthly Budgets');
+
+  // 3. Udhar-Khata Sheet
+  const debtRows = (store.debts || []).map((d, idx) => ({
+    'Sr No': idx + 1,
+    'Person': d.personName,
+    'Type': d.type === 'you_lent' ? 'Aapne Diye (Lena Hai)' : 'Aapne Liye (Dena Hai)',
+    'Amount (₹)': d.amount,
+    'Details': d.description,
+    'Date': d.date,
+    'Status': d.isSettled ? 'SETTLED' : 'PENDING',
+  }));
+  const debtSheet = XLSX.utils.json_to_sheet(debtRows.length > 0 ? debtRows : [{ 'Info': 'No debts / loans' }]);
+  XLSX.utils.book_append_sheet(workbook, debtSheet, 'Udhar-Khata');
+
+  // 4. Financial Summary Sheet
+  const summaryRows = [
+    { 'Metric': 'Account Holder', 'Value': userName },
+    { 'Metric': 'Report Generated On', 'Value': `${now.date} ${now.time12}` },
+    { 'Metric': 'Total Income (Kamai)', 'Value': `₹${summary.totalIncome.toLocaleString('en-IN')}` },
+    { 'Metric': 'Total Expense (Kharcha)', 'Value': `₹${summary.totalExpense.toLocaleString('en-IN')}` },
+    { 'Metric': 'Net Savings / Surplus', 'Value': `₹${summary.netSavings.toLocaleString('en-IN')}` },
+    { 'Metric': 'Savings Rate', 'Value': `${summary.savingsRate}%` },
+    { 'Metric': 'Total Transactions', 'Value': summary.transactionCount },
+  ];
+  const summarySheet = XLSX.utils.json_to_sheet(summaryRows);
+  XLSX.utils.book_append_sheet(workbook, summarySheet, 'Financial Summary');
+
+  return XLSX.write(workbook, { bookType: 'xlsx', type: 'buffer' });
+}
+
+// Item / Merchant Specific Spending Query Detector
+// e.g. "signature pe kitna kharch huwa", "petrol me kitna gaya", "zomato ka hisaab", "/spent signature"
+function detectItemSpendingQuery(text: string): string | null {
+  const trimmed = text.trim();
+  const lower = trimmed.toLowerCase();
+
+  // Direct slash commands: /spent signature, /item petrol, /search zomato, /query chai
+  const slashMatch = trimmed.match(/^\/(?:spent|item|search|query|hisaab|hisab)\s+(.+)$/i);
+  if (slashMatch) return slashMatch[1].trim();
+
+  // Pattern: "signature pe kitna kharch huwa", "signature par kitna kharcha hua", "petrol me kitna gaya"
+  const p1 = lower.match(/^(.+?)\s+(?:pe|par|me|mein|ke\s+liye)\s+(?:kitna|kya)\s+(?:kharcha|kharch|paisa|rupaye|gaya|laga|hua|huwa|batao|gaye|spent)/i);
+  if (p1 && p1[1].length > 1) {
+    return p1[1].replace(/^(bhai|bot|kripya|please)\s+/i, '').trim();
+  }
+
+  // Pattern: "<item> pe kitna kharcha", "<item> me kitna kharch"
+  const p2 = lower.match(/^(.+?)\s+(?:pe|par|me|mein)\s+kitna\s+(?:kharch|kharcha|paisa|gaya)/i);
+  if (p2 && p2[1].length > 1) {
+    return p2[1].replace(/^(bhai|bot|kripya|please)\s+/i, '').trim();
+  }
+
+  // Pattern: "<item> ka hisaab", "<item> ka total kharcha", "<item> ka kitna hua"
+  const p3 = lower.match(/^(.+?)\s+ka\s+(?:hisaab|hisab|kharcha|kharch|total|record|batao|kitna\s+hua|kitna\s+huwa)/i);
+  if (p3 && p3[1].length > 1) {
+    const candidate = p3[1].replace(/^(bhai|bot|kripya|please)\s+/i, '').trim();
+    if (!['mahine', 'aaj', 'kal', 'iss mahine', 'is mahine', 'is bar', 'iss bar'].includes(candidate)) {
+      return candidate;
+    }
+  }
+
+  // Pattern: "kitna kharcha hua signature pe", "kitna gaya petrol me"
+  const p4 = lower.match(/^(?:kitna\s+(?:kharch|kharcha|paisa|gaya)\s+(?:hua|huwa)?)\s+(.+?)(?:\s+(?:pe|par|me|mein|par))?$/i);
+  if (p4 && p4[1].length > 1) {
+    return p4[1].replace(/^(pe|par|me|mein)\s+/i, '').trim();
+  }
+
+  return null;
+}
+
+// Search and calculate item-specific spending metrics
+function searchItemSpending(userId: string, searchTerm: string) {
+  const store = getUserData(userId);
+  const term = searchTerm.trim().toLowerCase();
+
+  const matches = store.transactions.filter(t => {
+    const desc = (t.description || '').toLowerCase();
+    const cat = (t.category || '').toLowerCase();
+    const raw = (t.rawMessage || '').toLowerCase();
+    const tags = (t.tags || []).map(tg => tg.toLowerCase()).join(' ');
+    return desc.includes(term) || cat.includes(term) || raw.includes(term) || tags.includes(term);
+  });
+
+  const expenseMatches = matches.filter(t => t.type === 'expense');
+  const incomeMatches = matches.filter(t => t.type === 'income');
+  const totalSpent = expenseMatches.reduce((acc, t) => acc + t.amount, 0);
+  const totalIncome = incomeMatches.reduce((acc, t) => acc + t.amount, 0);
+  const count = expenseMatches.length;
+  const avg = count > 0 ? Math.round(totalSpent / count) : 0;
+
+  // Sort newest first
+  matches.sort((a, b) => new Date(b.createdAt || b.date).getTime() - new Date(a.createdAt || a.date).getTime());
+
+  return {
+    term: searchTerm,
+    totalSpent,
+    totalIncome,
+    count,
+    avg,
+    matches: matches.slice(0, 10),
+  };
+}
+
+// Receipt & Invoice OCR with Gemini
+async function parseReceiptImageWithGemini(
+  imageBuffer: Buffer,
+  mimeType: string = 'image/jpeg'
+): Promise<{
+  amount?: number;
+  description?: string;
+  category?: string;
+  paymentMethod?: PaymentMethod;
+  date?: string;
+  type?: 'expense' | 'income';
+} | null> {
+  const ai = getGeminiClient();
+  if (!ai) return null;
+  const base64Data = imageBuffer.toString('base64');
+  const candidateModels = ['gemini-3.8-flash', 'gemini-3.1-flash-lite'];
+
+  const prompt = `You are an expert bill, receipt, invoice, and UPI/banking transaction screenshot parser for Indian users.
+Analyze this receipt/screenshot image and extract:
+1. amount: number (total amount paid or received, positive number)
+2. description: string (clean merchant/store name or key items, e.g. "Signature Cafe", "Domino's Pizza", "IndianOil Petrol", "Apollo Pharmacy", "Zomato", "D-Mart")
+3. category: string (choose best fit from: "Food & Dining", "Groceries & Sabzi", "Transportation & Fuel", "Healthcare & Fitness", "Bills & Utilities", "Shopping & Apparel", "Entertainment & Fun", "Other Expense")
+4. paymentMethod: "UPI" | "Cash" | "Card" | "Bank Transfer" | "Other"
+5. date: string (YYYY-MM-DD format if visible, otherwise current date)
+6. type: "expense" | "income" (usually "expense" for bills/receipts)
+
+Return STRICT JSON only matching this schema:
+{
+  "amount": number,
+  "description": string,
+  "category": string,
+  "paymentMethod": string,
+  "date": string,
+  "type": "expense" | "income"
+}`;
+
+  for (const model of candidateModels) {
+    try {
+      const response = await ai.models.generateContent({
+        model,
+        contents: [
+          {
+            role: 'user',
+            parts: [
+              { text: prompt },
+              {
+                inlineData: {
+                  mimeType,
+                  data: base64Data,
+                },
+              },
+            ],
+          },
+        ],
+        config: {
+          responseMimeType: 'application/json',
+        },
+      });
+
+      if (response && response.text) {
+        const parsed = JSON.parse(response.text.trim());
+        if (parsed && typeof parsed.amount === 'number' && parsed.amount > 0) {
+          return parsed;
+        }
+      }
+    } catch {
+      // Try fallback model
+    }
+  }
+  return null;
+}
+
+// Voice Note / Audio Speech-to-Expense with Gemini
+async function parseVoiceAudioWithGemini(
+  audioBuffer: Buffer,
+  mimeType: string = 'audio/ogg'
+): Promise<{
+  transcription?: string;
+  amount?: number;
+  description?: string;
+  category?: string;
+  paymentMethod?: PaymentMethod;
+  date?: string;
+  type?: 'expense' | 'income';
+} | null> {
+  const ai = getGeminiClient();
+  if (!ai) return null;
+  const base64Data = audioBuffer.toString('base64');
+  const candidateModels = ['gemini-3.8-flash', 'gemini-3.1-flash-lite'];
+
+  const prompt = `You are a voice expense parser. The audio is a user speaking in Hindi, Hinglish, or English about an expense or income (e.g. "300 rupaye petrol me diye cash", "500 sabzi blinkit se", "2000 salary aayi").
+1. Accurately transcribe what was spoken in Hindi/Hinglish.
+2. Extract the financial transaction details.
+
+Return STRICT JSON matching this schema:
+{
+  "transcription": string (the exact spoken sentence in Hindi/Hinglish),
+  "amount": number (positive amount),
+  "description": string (short clean name of expense, e.g. "Petrol", "Sabzi", "Dinner"),
+  "category": string (e.g. "Food & Dining", "Groceries & Sabzi", "Transportation & Fuel", "Healthcare & Fitness", "Bills & Utilities", "Shopping & Apparel", "Other Expense"),
+  "paymentMethod": "UPI" | "Cash" | "Card" | "Bank Transfer" | "Other",
+  "type": "expense" | "income"
+}`;
+
+  for (const model of candidateModels) {
+    try {
+      const response = await ai.models.generateContent({
+        model,
+        contents: [
+          {
+            role: 'user',
+            parts: [
+              { text: prompt },
+              {
+                inlineData: {
+                  mimeType,
+                  data: base64Data,
+                },
+              },
+            ],
+          },
+        ],
+        config: {
+          responseMimeType: 'application/json',
+        },
+      });
+
+      if (response && response.text) {
+        const parsed = JSON.parse(response.text.trim());
+        if (parsed && typeof parsed.amount === 'number' && parsed.amount > 0) {
+          return parsed;
+        }
+      }
+    } catch {
+      // Try fallback
+    }
+  }
+  return null;
+}
+
+// Natural Language Udhar / Lending Parser
+// e.g. "500 rohit ko udhar diye", "1000 rahul ne wapas diye", "800 sharma ji se udhar liye"
+function detectUdharLending(text: string): {
+  isUdhar: boolean;
+  type?: 'you_lent' | 'you_borrowed' | 'settlement';
+  personName?: string;
+  amount?: number;
+  description?: string;
+} {
+  const lower = text.toLowerCase().trim();
+
+  // Settle pattern: "1000 rahul ne wapas diye" or "rohit ka udhar chukta"
+  const settleMatch = lower.match(/(?:(?:(\d+(?:\.\d+)?)\s*(?:rs|rupaye|rupees|₹)?\s+)?([a-zA-Z\u0900-\u097F]+(?:\s+[a-zA-Z\u0900-\u097F]+)?)\s+ne\s+(?:wapas\s+diye|lautaye|chukaye|diye))|(?:([a-zA-Z\u0900-\u097F]+)\s+ka\s+udhar\s+(?:chukta|clear|settle))/i);
+  if (settleMatch) {
+    const amount = settleMatch[1] ? parseFloat(settleMatch[1]) : undefined;
+    const personName = (settleMatch[2] || settleMatch[3] || '').trim();
+    if (personName && !['maine', 'mene', 'apne', 'sab'].includes(personName.toLowerCase())) {
+      return {
+        isUdhar: true,
+        type: 'settlement',
+        personName,
+        amount,
+        description: text,
+      };
+    }
+  }
+
+  // Lent pattern: "500 rohit ko udhar diye" or "rohit ko 500 udhar diye"
+  const lentMatch = lower.match(/(?:(\d+(?:\.\d+)?)\s*(?:rs|rupaye|rupees|₹)?\s+([a-zA-Z\u0900-\u097F]+(?:\s+[a-zA-Z\u0900-\u097F]+)?)\s+ko\s+udhar\s+(?:diye|dia|diya))|(?:([a-zA-Z\u0900-\u097F]+)\s+ko\s+(\d+(?:\.\d+)?)\s*(?:rs|rupaye|rupees|₹)?\s+udhar\s+(?:diye|dia|diya))/i);
+  if (lentMatch) {
+    const amount = parseFloat(lentMatch[1] || lentMatch[4] || '0');
+    const personName = (lentMatch[2] || lentMatch[3] || '').trim();
+    if (amount > 0 && personName) {
+      return {
+        isUdhar: true,
+        type: 'you_lent',
+        personName,
+        amount,
+        description: text,
+      };
+    }
+  }
+
+  // Borrowed pattern: "800 sharma ji se udhar liye" or "sharma ji se 800 udhar liye"
+  const borrowMatch = lower.match(/(?:(\d+(?:\.\d+)?)\s*(?:rs|rupaye|rupees|₹)?\s+([a-zA-Z\u0900-\u097F]+(?:\s+[a-zA-Z\u0900-\u097F]+)?)\s+se\s+udhar\s+(?:liye|lia|liya))|(?:([a-zA-Z\u0900-\u097F]+)\s+se\s+(\d+(?:\.\d+)?)\s*(?:rs|rupaye|rupees|₹)?\s+udhar\s+(?:liye|lia|liya))/i);
+  if (borrowMatch) {
+    const amount = parseFloat(borrowMatch[1] || borrowMatch[4] || '0');
+    const personName = (borrowMatch[2] || borrowMatch[3] || '').trim();
+    if (amount > 0 && personName) {
+      return {
+        isUdhar: true,
+        type: 'you_borrowed',
+        personName,
+        amount,
+        description: text,
+      };
+    }
+  }
+
+  return { isUdhar: false };
+}
+
+// AI Cashflow & Month-End Predictor Calculator
+function calculateCashflowPrediction(userId: string) {
+  const summary = calculateUserSummary(userId);
+  const store = getUserData(userId);
+
+  const now = new Date();
+  const currentDay = now.getDate();
+  const year = now.getFullYear();
+  const month = now.getMonth();
+  const totalDaysInMonth = new Date(year, month + 1, 0).getDate();
+  const daysPassed = Math.max(1, currentDay);
+  const daysRemaining = Math.max(1, totalDaysInMonth - currentDay);
+
+  const totalExpense = summary.totalExpense;
+  const totalIncome = summary.totalIncome;
+  const netSavings = summary.netSavings;
+
+  const dailyBurnRate = Math.round(totalExpense / daysPassed);
+  const projectedTotalExpense = Math.round(dailyBurnRate * totalDaysInMonth);
+  const projectedSurplus = totalIncome - projectedTotalExpense;
+
+  // Safe daily spending for remaining days to break even
+  const safeDailySpend = netSavings > 0 ? Math.round(netSavings / daysRemaining) : 0;
+
+  // Days until budget exhaustion
+  let daysToExhaustion: number | null = null;
+  if (netSavings > 0 && dailyBurnRate > 0) {
+    daysToExhaustion = Math.floor(netSavings / dailyBurnRate);
+  }
+
+  return {
+    daysPassed,
+    daysRemaining,
+    totalDaysInMonth,
+    dailyBurnRate,
+    projectedTotalExpense,
+    projectedSurplus,
+    safeDailySpend,
+    daysToExhaustion,
+    netSavings,
+    totalIncome,
+    totalExpense,
+  };
+}
+
 async function handleTelegramCallbackQuery(callbackQuery: any) {
   const token = botConfig.botToken || process.env.TELEGRAM_BOT_TOKEN;
   if (!token) return;
@@ -1750,7 +2205,13 @@ async function handleTelegramCallbackQuery(callbackQuery: any) {
   let simulatedText = '';
   if (data === 'cmd_balance') simulatedText = '/balance';
   else if (data === 'cmd_summary') simulatedText = '/summary';
+  else if (data === 'cmd_report' || data === 'cmd_excel') simulatedText = '/report';
   else if (data === 'cmd_budget' || data === 'cmd_catbudget') simulatedText = '/budget';
+  else if (data === 'cmd_predict' || data === 'cmd_burnrate') simulatedText = '/predict';
+  else if (data === 'cmd_udhar' || data === 'cmd_debts') simulatedText = '/udhar';
+  else if (data === 'cmd_goals' || data === 'cmd_gullak') simulatedText = '/goals';
+  else if (data === 'cmd_accounts' || data === 'cmd_members') simulatedText = '/accounts';
+  else if (data === 'cmd_unlink_self') simulatedText = '/unlink';
   else if (data === 'cmd_date_today') simulatedText = '/date today';
   else if (data === 'cmd_date_yesterday') simulatedText = '/date yesterday';
   else if (data === 'cmd_tips') simulatedText = '/tips';
@@ -1887,7 +2348,7 @@ async function handleTelegramMessage(messageObj: any) {
       await sendTelegramReply(
         botToken,
         chatId,
-        `👋 <b>TeleExpense AI Khate me Aapka Swagat Hai!</b>\n\nAapka Telegram account abhi kisi khate se link nahi hai.\n\n🔑 <b>Aapka Telegram Chat ID:</b> <code>${chatId}</code>\n\n<b>Connect kaise karein:</b>\n1. Apna TeleExpense Web Dashboard kholein aur 6-digit ka <b>Link Code</b> dekhein\n2. Yahan reply karein:\n<code>/link &lt;AAPKA_CODE&gt;</code>\n\n<i>Udaharan:</i> <code>/link 513919</code>\n\n💡 <i>Ek hi khate se multiple family members connect ho sakte hain!</i>`
+        `👋 <b>TeleExpense AI Khate me Aapka Swagat Hai!</b>\n\nAapka Telegram account abhi kisi khate se link nahi hai.\n\n🔑 <b>Aapka Telegram Chat ID:</b> <code>${chatId}</code>\n\n<b>Connect kaise karein:</b>\n1. Apna TeleExpense Web Dashboard kholein aur 6-digit ka <b>Link Code</b> dekhein\n2. Yahan reply karein:\n<code>/link &lt;AAPKA_CODE&gt;</code>\n\n<i>Udaharan:</i> <code>/link 123456</code>\n\n💡 <i>Ek hi khate se multiple family members connect ho sakte hain!</i>`
       );
       return;
     }
@@ -1901,6 +2362,152 @@ async function handleTelegramMessage(messageObj: any) {
   // Resolve sender member identity
   const senderMember = targetUser.linkedMembers?.find(m => m.telegramChatId === chatId);
   const senderDisplayName = senderMember?.customAlias || senderMember?.name || userName || 'Telegram User';
+
+  // Check for Photo / Receipt / Invoice attachment in Telegram message
+  if (messageObj.photo && Array.isArray(messageObj.photo) && messageObj.photo.length > 0 && botToken) {
+    try {
+      const bestPhoto = messageObj.photo[messageObj.photo.length - 1];
+      const fileRes = await fetch(`https://api.telegram.org/bot${botToken}/getFile?file_id=${bestPhoto.file_id}`);
+      const fileData = await fileRes.json();
+      if (fileData.ok && fileData.result?.file_path) {
+        const downloadUrl = `https://api.telegram.org/file/bot${botToken}/${fileData.result.file_path}`;
+        const downloadRes = await fetch(downloadUrl);
+        const arrayBuffer = await downloadRes.arrayBuffer();
+        const buffer = Buffer.from(arrayBuffer);
+
+        await sendTelegramReply(botToken, chatId, '🔍 <i>Bill / Receipt scan ho rahi hai via Gemini Vision AI... Kripya 2 second rukein...</i>');
+
+        const parsed = await parseReceiptImageWithGemini(buffer, 'image/jpeg');
+        if (parsed && typeof parsed.amount === 'number' && parsed.amount > 0) {
+          const now = getAppDateTime();
+          const targetDate = parsed.date || now.date;
+          const assignedCategory = parsed.category || 'Other Expense';
+          const matchedCategory = matchCategory(assignedCategory, userCategories);
+
+          const newTx: Transaction = {
+            id: `tx_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
+            userId,
+            type: parsed.type || 'expense',
+            amount: parsed.amount,
+            category: matchedCategory.name,
+            description: parsed.description || rawText || 'Bill Receipt Scan',
+            date: targetDate,
+            time: now.time,
+            paymentMethod: parsed.paymentMethod || 'UPI',
+            source: 'telegram',
+            telegramChatId: chatId,
+            telegramMessageId: messageObj.message_id,
+            telegramUser: senderDisplayName,
+            rawMessage: rawText ? `[Photo] ${rawText}` : '[Photo Receipt]',
+            createdAt: now.iso,
+            tags: ['receipt_ocr', 'photo'],
+          };
+
+          userTransactions.unshift(newTx);
+          syncBudgetsWithCategories(userStore);
+          saveUserData(userId, userStore);
+
+          const summary = calculateUserSummary(userId);
+          const replyText = `🧾 <b>Bill / Receipt AI Scan Successful!</b> 🚀\n\n🔴 <b>Kharcha:</b> ₹${newTx.amount.toLocaleString('en-IN')}\n🏷️ <b>Category:</b> ${newTx.category}\n📝 <b>Details:</b> ${newTx.description}\n💳 <b>Method:</b> ${newTx.paymentMethod}\n📅 <b>Tareeq:</b> ${newTx.date} (${newTx.time})\n👤 <b>Logged By:</b> ${senderDisplayName}\n\n💰 <b>Net Bacha Hua Balance:</b> ₹${summary.netSavings.toLocaleString('en-IN')}`;
+
+          await sendTelegramReply(botToken, chatId, replyText, {
+            inline_keyboard: [
+              [
+                { text: '💰 Balance', callback_data: 'cmd_balance' },
+                { text: '🎯 Budget', callback_data: 'cmd_budget' },
+              ],
+              [
+                { text: '↩️ Undo', callback_data: `delete_${newTx.id}` },
+                { text: '🕒 Recent', callback_data: 'cmd_recent' },
+              ],
+            ],
+          });
+          return;
+        } else {
+          await sendTelegramReply(botToken, chatId, '⚠️ Receipt me amount spasht nahi dikh paya. Kripya manual text bhejein, jaise:\n<code>500 petrol upi</code>');
+          return;
+        }
+      }
+    } catch (photoErr: any) {
+      console.error('Error parsing photo receipt:', photoErr);
+      await sendTelegramReply(botToken, chatId, `❌ Photo parse karne me error aayi: ${photoErr.message}`);
+      return;
+    }
+  }
+
+  // Check for Voice Note / Audio Message in Telegram
+  if ((messageObj.voice || messageObj.audio) && botToken) {
+    try {
+      const audioObj = messageObj.voice || messageObj.audio;
+      const fileRes = await fetch(`https://api.telegram.org/bot${botToken}/getFile?file_id=${audioObj.file_id}`);
+      const fileData = await fileRes.json();
+      if (fileData.ok && fileData.result?.file_path) {
+        const downloadUrl = `https://api.telegram.org/file/bot${botToken}/${fileData.result.file_path}`;
+        const downloadRes = await fetch(downloadUrl);
+        const arrayBuffer = await downloadRes.arrayBuffer();
+        const buffer = Buffer.from(arrayBuffer);
+
+        await sendTelegramReply(botToken, chatId, '🎙️ <i>Voice note suni ja rahi hai via Gemini Speech AI...</i>');
+
+        const parsed = await parseVoiceAudioWithGemini(buffer, audioObj.mime_type || 'audio/ogg');
+        if (parsed && typeof parsed.amount === 'number' && parsed.amount > 0) {
+          const now = getAppDateTime();
+          const targetDate = parsed.date || now.date;
+          const assignedCategory = parsed.category || 'Other Expense';
+          const matchedCategory = matchCategory(assignedCategory, userCategories);
+
+          const newTx: Transaction = {
+            id: `tx_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
+            userId,
+            type: parsed.type || 'expense',
+            amount: parsed.amount,
+            category: matchedCategory.name,
+            description: parsed.description || parsed.transcription || 'Voice Note',
+            date: targetDate,
+            time: now.time,
+            paymentMethod: parsed.paymentMethod || 'Cash',
+            source: 'telegram',
+            telegramChatId: chatId,
+            telegramMessageId: messageObj.message_id,
+            telegramUser: senderDisplayName,
+            rawMessage: parsed.transcription ? `[Voice] ${parsed.transcription}` : '[Voice Note]',
+            createdAt: now.iso,
+            tags: ['voice_note'],
+          };
+
+          userTransactions.unshift(newTx);
+          syncBudgetsWithCategories(userStore);
+          saveUserData(userId, userStore);
+
+          const summary = calculateUserSummary(userId);
+          const icon = newTx.type === 'income' ? '🟢' : '🔴';
+          const typeLabel = newTx.type === 'income' ? 'Kamai (Income)' : 'Kharcha (Expense)';
+          const replyText = `🎙️ <b>Voice Transaction Logged!</b> ⚡\n\n🗣️ <i>"${parsed.transcription || 'Voice message'}"</i>\n\n${icon} <b>${typeLabel}:</b> ₹${newTx.amount.toLocaleString('en-IN')}\n🏷️ <b>Category:</b> ${newTx.category}\n📝 <b>Details:</b> ${newTx.description}\n💳 <b>Method:</b> ${newTx.paymentMethod}\n📅 <b>Tareeq:</b> ${newTx.date} (${newTx.time})\n👤 <b>Logged By:</b> ${senderDisplayName}\n\n💰 <b>Net Balance:</b> ₹${summary.netSavings.toLocaleString('en-IN')}`;
+
+          await sendTelegramReply(botToken, chatId, replyText, {
+            inline_keyboard: [
+              [
+                { text: '💰 Balance', callback_data: 'cmd_balance' },
+                { text: '🎯 Budget', callback_data: 'cmd_budget' },
+              ],
+              [
+                { text: '↩️ Undo', callback_data: `delete_${newTx.id}` },
+                { text: '🕒 Recent', callback_data: 'cmd_recent' },
+              ],
+            ],
+          });
+          return;
+        } else {
+          await sendTelegramReply(botToken, chatId, `⚠️ Voice audio me amount spasht samajh nahi aaya. Spoken: "${parsed?.transcription || 'Audio'}"\n\nKripya text me bhejein, jaise:\n<code>300 dahi cash</code>`);
+          return;
+        }
+      }
+    } catch (voiceErr: any) {
+      console.error('Error parsing voice note:', voiceErr);
+      await sendTelegramReply(botToken, chatId, `❌ Voice parse karne me error: ${voiceErr.message}`);
+      return;
+    }
+  }
 
   // Check for Excel / CSV Document Attachment in Telegram message
   if (messageObj.document && botToken) {
@@ -1935,6 +2542,407 @@ async function handleTelegramMessage(messageObj: any) {
         await sendTelegramReply(botToken, chatId, `❌ <b>Excel parse karne me error:</b> ${docErr.message}`);
         return;
       }
+    }
+  }
+
+  // 2.5. Linked Accounts & Unlink Commands
+  if (
+    command === '/accounts' ||
+    command === '/linked' ||
+    command === '/members' ||
+    command === '/users' ||
+    lowerText === 'linked accounts' ||
+    lowerText === 'accounts' ||
+    lowerText === 'members' ||
+    lowerText.includes('kitne account link') ||
+    lowerText.includes('linked members') ||
+    lowerText.includes('connected accounts')
+  ) {
+    const members = targetUser.linkedMembers || [];
+    const memberCount = members.length;
+    
+    let membersText = '';
+    if (memberCount === 0) {
+      membersText = `• <b>${targetUser.name}</b> (Primary Owner) - <code>${chatId}</code>`;
+    } else {
+      membersText = members.map((m, idx) => {
+        const isCurrent = String(m.telegramChatId) === String(chatId);
+        const roleLabel = m.role ? m.role.toUpperCase() : 'MEMBER';
+        return `${idx + 1}. <b>${m.customAlias || m.name}</b> [${roleLabel}] ${isCurrent ? '👈 <i>(Aapka Account)</i>' : ''}\n   👤 User: @${m.telegramUsername || 'N/A'} | Chat ID: <code>${m.telegramChatId}</code>\n   📅 Linked: ${m.linkedAt ? m.linkedAt.substring(0, 10) : 'Active'}`;
+      }).join('\n\n');
+    }
+
+    const accountsMsg = `👥 <b>Linked Accounts & Family Ledger Members:</b>\n\n🏠 <b>Khata Owner:</b> ${targetUser.name} (<code>${targetUser.email}</code>)\n🔗 <b>Link Code:</b> <code>${targetUser.linkCode}</code>\n👥 <b>Total Connected Members:</b> ${memberCount || 1}\n\n━━━━━━━━━━━━━━━━━━━━\n${membersText}\n━━━━━━━━━━━━━━━━━━━━\n\n💡 <i>Naye member ko add karne ke liye unhe ye link code bhejein:</i>\n<code>/link ${targetUser.linkCode}</code>`;
+
+    await sendTelegramReply(botToken, chatId, accountsMsg, {
+      inline_keyboard: [
+        [
+          { text: '❌ Unlink Mera Account', callback_data: 'cmd_unlink_self' },
+          { text: '💰 Net Balance', callback_data: 'cmd_balance' },
+        ],
+        [
+          { text: '📊 Summary', callback_data: 'cmd_summary' },
+          { text: '📑 Excel Report', callback_data: 'cmd_report' },
+        ],
+      ],
+    });
+    return;
+  }
+
+  // Unlink Command (/unlink or 'unlink')
+  if (
+    command === '/unlink' ||
+    lowerText === 'unlink' ||
+    lowerText === 'unlink account' ||
+    lowerText === 'mera account unlink karo' ||
+    lowerText === 'disconnect'
+  ) {
+    const prevCount = targetUser.linkedMembers ? targetUser.linkedMembers.length : 0;
+    
+    // Remove from linkedMembers
+    if (targetUser.linkedMembers) {
+      targetUser.linkedMembers = targetUser.linkedMembers.filter(m => String(m.telegramChatId) !== String(chatId));
+    }
+    
+    // If was primary telegramChatId, remove it
+    if (String(targetUser.telegramChatId) === String(chatId)) {
+      delete targetUser.telegramChatId;
+      delete targetUser.telegramUsername;
+    }
+
+    saveJson(USERS_FILE, users);
+
+    await sendTelegramReply(
+      botToken,
+      chatId,
+      `✅ <b>Aapka Telegram account successfully UNLINK ho gaya hai!</b>\n\nAap ab <b>${targetUser.name}</b> ke khate se jude huye nahi hain.\n\n🔗 <b>Dobara connect karne ke liye:</b>\n<code>/link &lt;6_DIGIT_CODE&gt;</code> bhejein.`,
+      {
+        remove_keyboard: true,
+      }
+    );
+    return;
+  }
+
+  // 2.6. 1-Click Excel Financial Statement Report Command
+  if (
+    command === '/report' ||
+    command === '/excel' ||
+    command === '/export' ||
+    command === '/statement' ||
+    command === '/download' ||
+    lowerText === 'excel report' ||
+    lowerText.includes('excel report') ||
+    lowerText.includes('statement bhejo') ||
+    lowerText.includes('download excel') ||
+    lowerText.includes('excel bhejo')
+  ) {
+    try {
+      await sendTelegramReply(botToken, chatId, '📑 <i>Excel Financial Statement taiyaar ho rahi hai... Kripya 1 second rukein...</i>');
+      const excelBuffer = generateExcelReportBuffer(userId, targetUser.name);
+      const now = getAppDateTime();
+      const fileName = `TeleExpense_Statement_${now.date}.xlsx`;
+      const summary = calculateUserSummary(userId);
+      const caption = `📊 <b>TeleExpense Financial Statement (.xlsx)</b>\n\n👤 <b>Khata:</b> ${targetUser.name}\n📅 <b>Tareeq:</b> ${now.date} (${now.time12})\n🟢 <b>Income:</b> ₹${summary.totalIncome.toLocaleString('en-IN')}\n🔴 <b>Kharcha:</b> ₹${summary.totalExpense.toLocaleString('en-IN')}\n💰 <b>Net Balance:</b> ₹${summary.netSavings.toLocaleString('en-IN')}\n📝 <b>Transactions:</b> ${summary.transactionCount}\n\n<i>Sheet 1: Transactions | Sheet 2: Category Budgets | Sheet 3: Udhar-Khata | Sheet 4: Summary</i>`;
+
+      await sendTelegramDocument(botToken, chatId, excelBuffer, fileName, caption);
+      return;
+    } catch (docErr: any) {
+      console.error('Error generating Excel statement:', docErr);
+      await sendTelegramReply(botToken, chatId, `❌ Excel statement banane me error: ${docErr.message}`);
+      return;
+    }
+  }
+
+  // 2.7. AI Cashflow & Month-End Predictor Command
+  if (
+    command === '/predict' ||
+    command === '/burnrate' ||
+    command === '/speed' ||
+    command === '/projection' ||
+    lowerText === 'burn rate' ||
+    lowerText === 'predict' ||
+    lowerText.includes('burn rate') ||
+    lowerText.includes('kya budget chalega') ||
+    lowerText.includes('mahine ke aakhri tak') ||
+    lowerText.includes('spending speed')
+  ) {
+    const pred = calculateCashflowPrediction(userId);
+    const speedIcon = pred.dailyBurnRate > pred.safeDailySpend ? '🔥' : '🌱';
+    const statusMsg = pred.projectedSurplus >= 0
+      ? `🟢 <b>Surplus Predictor:</b> Isi speed par mahine ke ant me lagbhag <b>+₹${pred.projectedSurplus.toLocaleString('en-IN')}</b> ki bachat hogi!`
+      : `⚠️ <b>Deficit Warning:</b> Isi speed par mahine ke ant me lagbhag <b>-₹${Math.abs(pred.projectedSurplus).toLocaleString('en-IN')}</b> ka ghata (deficit) ho sakta hai!`;
+
+    const predictMsg = `🧠 <b>AI Cashflow & Month-End Predictor:</b>\n\n📅 <b>Mahine ke Din:</b> ${pred.daysPassed} beete / ${pred.daysRemaining} baaki\n\n${speedIcon} <b>Daily Burn Rate (Kharchne Ki Speed):</b>\n₹${pred.dailyBurnRate.toLocaleString('en-IN')} / din\n\n🛡️ <b>Surplus Safe Daily Limit:</b>\n₹${pred.safeDailySpend.toLocaleString('en-IN')} / din\n\n📊 <b>Month-End Projection:</b>\n• Kul Anumanit Kharcha: ₹${pred.projectedTotalExpense.toLocaleString('en-IN')}\n• Kul Income: ₹${pred.totalIncome.toLocaleString('en-IN')}\n\n${statusMsg}\n\n💡 <i>Har din ₹${pred.safeDailySpend.toLocaleString('en-IN')} se kam kharch karein taaki mahine ke ant me achi bachat ho sake!</i>`;
+
+    await sendTelegramReply(botToken, chatId, predictMsg, {
+      inline_keyboard: [
+        [
+          { text: '💰 Net Balance', callback_data: 'cmd_balance' },
+          { text: '🎯 Category Budget', callback_data: 'cmd_budget' },
+        ],
+        [
+          { text: '🤖 AI Bachat Tips', callback_data: 'cmd_tips' },
+          { text: '📑 Excel Report', callback_data: 'cmd_report' },
+        ],
+      ],
+    });
+    return;
+  }
+
+  // 2.8. Udhar-Khata Ledger Command
+  if (
+    command === '/udhar' ||
+    command === '/debts' ||
+    command === '/khata' ||
+    command === '/lending' ||
+    lowerText === 'udhar' ||
+    lowerText === 'udhar-khata' ||
+    lowerText === 'udhar khata' ||
+    lowerText.includes('👥 udhar-khata') ||
+    lowerText.includes('udhar hisaab') ||
+    lowerText.includes('lena dena')
+  ) {
+    const debts = userStore.debts || [];
+    const pendingDebts = debts.filter(d => !d.isSettled);
+    const lenaHai = pendingDebts.filter(d => d.type === 'you_lent').reduce((acc, d) => acc + d.amount, 0);
+    const denaHai = pendingDebts.filter(d => d.type === 'you_borrowed').reduce((acc, d) => acc + d.amount, 0);
+    const netUdhar = lenaHai - denaHai;
+
+    let itemsText = '';
+    if (pendingDebts.length === 0) {
+      itemsText = '🎉 <i>Koi pending udhar nahi hai! Saara hisaab clear hai.</i>';
+    } else {
+      itemsText = pendingDebts.slice(0, 8).map((d, idx) => {
+        const icon = d.type === 'you_lent' ? '🟢 LENA HAI' : '🔴 DENA HAI';
+        return `${idx + 1}. <b>${d.personName}</b> - ₹${d.amount.toLocaleString('en-IN')} (${icon})\n   <i>${d.description || 'Udhar'}</i> [${d.date}]`;
+      }).join('\n\n');
+    }
+
+    const udharMsg = `👥 <b>Udhar-Khata & Lending Ledger:</b>\n\n🟢 <b>Aapko Lena Hai:</b> ₹${lenaHai.toLocaleString('en-IN')}\n🔴 <b>Aapko Dena Hai:</b> ₹${denaHai.toLocaleString('en-IN')}\n⚖️ <b>Net Udhar Balance:</b> ${netUdhar >= 0 ? '+' : ''}₹${netUdhar.toLocaleString('en-IN')}\n\n━━━━━━━━━━━━━━━━━━━━\n📋 <b>PENDING UDHAR LIST:</b>\n\n${itemsText}\n━━━━━━━━━━━━━━━━━━━━\n\n💡 <b>Udhar add karne ke examples:</b>\n• <code>500 rohit ko udhar diye</code>\n• <code>800 sharma ji se udhar liye</code>\n• <code>500 rohit ne wapas diye</code>`;
+
+    await sendTelegramReply(botToken, chatId, udharMsg, {
+      inline_keyboard: [
+        [
+          { text: '💰 Net Balance', callback_data: 'cmd_balance' },
+          { text: '🎯 Category Budget', callback_data: 'cmd_budget' },
+        ],
+        [
+          { text: '📑 Excel Report', callback_data: 'cmd_report' },
+          { text: '📊 Summary', callback_data: 'cmd_summary' },
+        ],
+      ],
+    });
+    return;
+  }
+
+  // 2.9. Savings Goals & Virtual Gullak Command
+  if (
+    command === '/goals' ||
+    command === '/gullak' ||
+    command === '/savings' ||
+    lowerText === 'goals' ||
+    lowerText === 'gullak' ||
+    lowerText.includes('🎯 gullak goals') ||
+    lowerText.includes('savings goals') ||
+    lowerText.includes('meri gullak')
+  ) {
+    const goals = userStore.goals || [];
+    let goalsText = '';
+
+    if (goals.length === 0) {
+      goalsText = '<i>Koi active savings goal nahi hai.\nNaya goal banane ke liye Web Dashboard dekhein ya type karein:\n<code>/addgoal Goa Trip 15000</code></i>';
+    } else {
+      goalsText = goals.map((g, idx) => {
+        const pct = Math.min(100, Math.round((g.currentAmount / Math.max(1, g.targetAmount)) * 100));
+        const filledBars = Math.round((pct / 100) * 10);
+        const emptyBars = 10 - filledBars;
+        const barStr = '█'.repeat(filledBars) + '░'.repeat(emptyBars);
+        return `${idx + 1}. <b>${g.title}</b> (${pct}%)\n   ${barStr}\n   💰 ₹${g.currentAmount.toLocaleString('en-IN')} / ₹${g.targetAmount.toLocaleString('en-IN')} bache`;
+      }).join('\n\n');
+    }
+
+    const totalSaved = (userStore.goals || []).reduce((acc, g) => acc + g.currentAmount, 0);
+    const goalsMsg = `🎯 <b>Savings Goals & Virtual Gullak:</b>\n\n🏺 <b>Kul Gullak Me Jama:</b> ₹${totalSaved.toLocaleString('en-IN')}\n\n━━━━━━━━━━━━━━━━━━━━\n${goalsText}\n━━━━━━━━━━━━━━━━━━━━\n\n💡 <b>Gullak me paise daalne ke liye:</b>\n• <code>/save 500 Goa Trip</code>\n• <code>500 gullak me dale</code>`;
+
+    await sendTelegramReply(botToken, chatId, goalsMsg, {
+      inline_keyboard: [
+        [
+          { text: '💰 Net Balance', callback_data: 'cmd_balance' },
+          { text: '👥 Udhar-Khata', callback_data: 'cmd_udhar' },
+        ],
+        [
+          { text: '📑 Excel Report', callback_data: 'cmd_report' },
+          { text: '📊 Summary', callback_data: 'cmd_summary' },
+        ],
+      ],
+    });
+    return;
+  }
+
+  // Add goal command: /addgoal <title> <targetAmount>
+  if (command === '/addgoal' && commandArg) {
+    const parts = commandArg.split(' ');
+    const lastPart = parts[parts.length - 1];
+    const amountCandidate = parseFloat(lastPart.replace(/[^0-9.]/g, ''));
+    if (!isNaN(amountCandidate) && amountCandidate > 0 && parts.length > 1) {
+      const title = parts.slice(0, parts.length - 1).join(' ').trim();
+      const newGoal: SavingsGoal = {
+        id: `goal_${Date.now()}`,
+        userId,
+        title,
+        targetAmount: amountCandidate,
+        currentAmount: 0,
+        createdAt: new Date().toISOString(),
+      };
+      if (!userStore.goals) userStore.goals = [];
+      userStore.goals.push(newGoal);
+      saveUserData(userId, userStore);
+
+      await sendTelegramReply(botToken, chatId, `🎯 <b>Naya Savings Goal Ban Gaya!</b>\n\n📌 <b>Goal:</b> ${title}\n🎯 <b>Target:</b> ₹${amountCandidate.toLocaleString('en-IN')}\n🏺 <b>Jama:</b> ₹0 (0%)\n\n💡 <i>Paise jama karne ke liye: <code>/save 500 ${title}</code></i>`);
+      return;
+    }
+  }
+
+  // Save / contribute to goal command: /save <amount> <goal name> or "500 gullak me dale"
+  if (command === '/save' && commandArg) {
+    const parts = commandArg.split(' ');
+    const amount = parseFloat(parts[0].replace(/[^0-9.]/g, ''));
+    const targetTitle = parts.slice(1).join(' ').trim().toLowerCase();
+
+    if (!isNaN(amount) && amount > 0) {
+      if (!userStore.goals) userStore.goals = [];
+      let goal = targetTitle
+        ? userStore.goals.find(g => g.title.toLowerCase().includes(targetTitle))
+        : userStore.goals[0];
+
+      if (!goal) {
+        goal = {
+          id: `goal_${Date.now()}`,
+          userId,
+          title: targetTitle || 'Gullak Savings',
+          targetAmount: 10000,
+          currentAmount: 0,
+          createdAt: new Date().toISOString(),
+        };
+        userStore.goals.push(goal);
+      }
+
+      goal.currentAmount = (goal.currentAmount || 0) + amount;
+      saveUserData(userId, userStore);
+
+      const pct = Math.min(100, Math.round((goal.currentAmount / Math.max(1, goal.targetAmount)) * 100));
+      await sendTelegramReply(botToken, chatId, `🏺 <b>Gullak Me ₹${amount.toLocaleString('en-IN')} Jama Ho Gaye!</b> 🎉\n\n🎯 <b>Goal:</b> ${goal.title}\n💰 <b>Kul Jama:</b> ₹${goal.currentAmount.toLocaleString('en-IN')} / ₹${goal.targetAmount.toLocaleString('en-IN')} (${pct}%)\n\n<i>Web Dashboard par live update ho gaya!</i>`);
+      return;
+    }
+  }
+
+  // 2.10. Natural Language Item-Specific Query Handling
+  // e.g. "signature pe kitna kharch huwa", "petrol me kitna gaya", "zomato ka hisaab", "/spent signature"
+  const itemQueryTerm = detectItemSpendingQuery(rawText);
+  if (itemQueryTerm) {
+    const itemData = searchItemSpending(userId, itemQueryTerm);
+    if (itemData.count === 0 && itemData.totalIncome === 0) {
+      await sendTelegramReply(
+        botToken,
+        chatId,
+        `🔍 <b>"${itemQueryTerm}" ka koi transaction nahi mila.</b>\n\nAapne abhi tak is item/merchant ka koi kharcha ya kamai log nahi kiya hai.\n\n💡 <i>Log karne ke liye likhein:</i>\n<code>500 ${itemQueryTerm} upi</code>`,
+        {
+          inline_keyboard: [
+            [
+              { text: '💰 Net Balance', callback_data: 'cmd_balance' },
+              { text: '🎯 Category Budget', callback_data: 'cmd_budget' },
+            ],
+            [
+              { text: '📊 Summary', callback_data: 'cmd_summary' },
+              { text: '🕒 Recent 5 Tx', callback_data: 'cmd_recent' },
+            ],
+          ],
+        }
+      );
+      return;
+    }
+
+    let txBreakdown = itemData.matches.slice(0, 5).map((t, idx) => {
+      const icon = t.type === 'income' ? '🟢' : '🔴';
+      return `${idx + 1}. ${icon} <b>₹${t.amount.toLocaleString('en-IN')}</b> - ${t.description || t.category}\n   📅 ${t.date} | 💳 ${t.paymentMethod || 'UPI'}`;
+    }).join('\n');
+
+    const itemReportMsg = `🔍 <b>"${itemQueryTerm.toUpperCase()}" KA KUL HISAAB-KITAAB</b> 📊\n━━━━━━━━━━━━━━━━━━━━\n🔴 <b>Kul Kharcha (Total Spent):</b> ₹${itemData.totalSpent.toLocaleString('en-IN')}\n🔢 <b>Kitni Baar Liya (Purchases):</b> ${itemData.count} baar\n📊 <b>Average Per Purchase:</b> ₹${itemData.avg.toLocaleString('en-IN')}\n${itemData.totalIncome > 0 ? `🟢 <b>Kul Kamai:</b> ₹${itemData.totalIncome.toLocaleString('en-IN')}\n` : ''}━━━━━━━━━━━━━━━━━━━━\n📋 <b>RECENT TRANSACTIONS:</b>\n\n${txBreakdown}\n━━━━━━━━━━━━━━━━━━━━\n\n💡 <i>Naya transaction jodne ke liye likhein:</i>\n<code>300 ${itemQueryTerm} upi</code>`;
+
+    await sendTelegramReply(botToken, chatId, itemReportMsg, {
+      inline_keyboard: [
+        [
+          { text: '💰 Net Balance', callback_data: 'cmd_balance' },
+          { text: '🎯 Category Budget', callback_data: 'cmd_budget' },
+        ],
+        [
+          { text: '📑 Excel Report', callback_data: 'cmd_report' },
+          { text: '📊 Summary', callback_data: 'cmd_summary' },
+        ],
+      ],
+    });
+    return;
+  }
+
+  // 2.11. Natural Language Udhar / Lending Parser
+  // e.g. "500 rohit ko udhar diye", "1000 rahul ne wapas diye", "800 sharma ji se udhar liye"
+  const udharCheck = detectUdharLending(rawText);
+  if (udharCheck.isUdhar) {
+    if (!userStore.debts) userStore.debts = [];
+    const now = getAppDateTime();
+
+    if (udharCheck.type === 'settlement' && udharCheck.personName) {
+      const matchDebt = userStore.debts.find(
+        d => !d.isSettled && d.personName.toLowerCase().includes(udharCheck.personName!.toLowerCase())
+      );
+      if (matchDebt) {
+        matchDebt.isSettled = true;
+        matchDebt.settledAt = now.iso;
+        saveUserData(userId, userStore);
+
+        await sendTelegramReply(
+          botToken,
+          chatId,
+          `🤝 <b>Udhar Chukta Ho Gaya!</b>\n\n👤 <b>Person:</b> ${matchDebt.personName}\n💰 <b>Amount:</b> ₹${matchDebt.amount.toLocaleString('en-IN')}\n✅ <b>Status:</b> SETTLED (Clear)\n\n<i>Udhar-Khata updated!</i>`,
+          {
+            inline_keyboard: [
+              [{ text: '👥 Udhar-Khata Dekhein', callback_data: 'cmd_udhar' }],
+            ],
+          }
+        );
+        return;
+      }
+    }
+
+    if ((udharCheck.type === 'you_lent' || udharCheck.type === 'you_borrowed') && udharCheck.amount && udharCheck.personName) {
+      const newDebt: UdharDebt = {
+        id: `debt_${Date.now()}`,
+        userId,
+        personName: udharCheck.personName,
+        type: udharCheck.type,
+        amount: udharCheck.amount,
+        description: udharCheck.description || 'Udhar',
+        date: now.date,
+        isSettled: false,
+        createdAt: now.iso,
+      };
+
+      userStore.debts.unshift(newDebt);
+      saveUserData(userId, userStore);
+
+      const isLent = udharCheck.type === 'you_lent';
+      const label = isLent ? '🟢 AAPKO LENA HAI' : '🔴 AAPKO DENA HAI';
+      const msg = `👥 <b>Udhar-Khate Me Entry Ho Gayi!</b> 📝\n\n👤 <b>Person:</b> ${newDebt.personName}\n💰 <b>Amount:</b> ₹${newDebt.amount.toLocaleString('en-IN')}\n🏷️ <b>Status:</b> ${label}\n📅 <b>Tareeq:</b> ${newDebt.date}\n👤 <b>Logged By:</b> ${senderDisplayName}\n\n💡 <i>Wapas milne par likhein: <code>${newDebt.amount} ${newDebt.personName} ne wapas diye</code></i>`;
+
+      await sendTelegramReply(botToken, chatId, msg, {
+        inline_keyboard: [
+          [
+            { text: '👥 Udhar-Khata Dekhein', callback_data: 'cmd_udhar' },
+            { text: '💰 Net Balance', callback_data: 'cmd_balance' },
+          ],
+        ],
+      });
+      return;
     }
   }
 
@@ -3725,6 +4733,161 @@ app.get('/api/transactions/export-backup', (req, res) => {
   } catch (err: any) {
     console.error('Error exporting backup:', err);
     return res.status(500).json({ error: 'Failed to export backup' });
+  }
+});
+
+// ==========================================
+// UDHAR-KHATA / DEBT REST ENDPOINTS
+// ==========================================
+app.get('/api/debts', (req, res) => {
+  const user = getRequestUser(req);
+  const store = getUserData(user ? user.id : 'default');
+  if (!store.debts) store.debts = [];
+  res.json({ debts: store.debts });
+});
+
+app.post('/api/debts', (req, res) => {
+  const user = getRequestUser(req);
+  const userId = user ? user.id : 'default';
+  const store = getUserData(userId);
+  if (!store.debts) store.debts = [];
+
+  const { personName, type, amount, description, date, dueDate } = req.body;
+  if (!personName || !amount) {
+    return res.status(400).json({ error: 'Person name and amount are required' });
+  }
+
+  const now = getAppDateTime();
+  const newDebt: UdharDebt = {
+    id: `debt_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
+    userId,
+    personName: String(personName).trim(),
+    type: type === 'you_borrowed' ? 'you_borrowed' : 'you_lent',
+    amount: Math.abs(Number(amount)),
+    description: description ? String(description).trim() : 'Udhar',
+    date: date || now.date,
+    dueDate: dueDate || undefined,
+    isSettled: false,
+    createdAt: now.iso,
+  };
+
+  store.debts.unshift(newDebt);
+  saveUserData(userId, store);
+  res.json({ success: true, debt: newDebt, debts: store.debts });
+});
+
+app.put('/api/debts/:id/settle', (req, res) => {
+  const user = getRequestUser(req);
+  const userId = user ? user.id : 'default';
+  const store = getUserData(userId);
+  if (!store.debts) store.debts = [];
+
+  const debt = store.debts.find(d => d.id === req.params.id);
+  if (!debt) {
+    return res.status(404).json({ error: 'Debt record not found' });
+  }
+
+  debt.isSettled = !debt.isSettled;
+  debt.settledAt = debt.isSettled ? new Date().toISOString() : undefined;
+  saveUserData(userId, store);
+  res.json({ success: true, debt, debts: store.debts });
+});
+
+app.delete('/api/debts/:id', (req, res) => {
+  const user = getRequestUser(req);
+  const userId = user ? user.id : 'default';
+  const store = getUserData(userId);
+  if (!store.debts) store.debts = [];
+
+  store.debts = store.debts.filter(d => d.id !== req.params.id);
+  saveUserData(userId, store);
+  res.json({ success: true, debts: store.debts });
+});
+
+// ==========================================
+// SAVINGS GOALS & GULLAK REST ENDPOINTS
+// ==========================================
+app.get('/api/goals', (req, res) => {
+  const user = getRequestUser(req);
+  const store = getUserData(user ? user.id : 'default');
+  if (!store.goals) store.goals = [];
+  res.json({ goals: store.goals });
+});
+
+app.post('/api/goals', (req, res) => {
+  const user = getRequestUser(req);
+  const userId = user ? user.id : 'default';
+  const store = getUserData(userId);
+  if (!store.goals) store.goals = [];
+
+  const { title, targetAmount, currentAmount, targetDate, category } = req.body;
+  if (!title || !targetAmount) {
+    return res.status(400).json({ error: 'Title and target amount are required' });
+  }
+
+  const newGoal: SavingsGoal = {
+    id: `goal_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
+    userId,
+    title: String(title).trim(),
+    targetAmount: Math.abs(Number(targetAmount)),
+    currentAmount: Math.max(0, Number(currentAmount) || 0),
+    targetDate: targetDate || undefined,
+    category: category || undefined,
+    createdAt: new Date().toISOString(),
+  };
+
+  store.goals.push(newGoal);
+  saveUserData(userId, store);
+  res.json({ success: true, goal: newGoal, goals: store.goals });
+});
+
+app.post('/api/goals/:id/contribute', (req, res) => {
+  const user = getRequestUser(req);
+  const userId = user ? user.id : 'default';
+  const store = getUserData(userId);
+  if (!store.goals) store.goals = [];
+
+  const goal = store.goals.find(g => g.id === req.params.id);
+  if (!goal) {
+    return res.status(404).json({ error: 'Goal not found' });
+  }
+
+  const { amount } = req.body;
+  const num = Number(amount) || 0;
+  goal.currentAmount = Math.max(0, (goal.currentAmount || 0) + num);
+
+  saveUserData(userId, store);
+  res.json({ success: true, goal, goals: store.goals });
+});
+
+app.delete('/api/goals/:id', (req, res) => {
+  const user = getRequestUser(req);
+  const userId = user ? user.id : 'default';
+  const store = getUserData(userId);
+  if (!store.goals) store.goals = [];
+
+  store.goals = store.goals.filter(g => g.id !== req.params.id);
+  saveUserData(userId, store);
+  res.json({ success: true, goals: store.goals });
+});
+
+// ==========================================
+// EXCEL STATEMENT DOWNLOAD ENDPOINT
+// ==========================================
+app.get('/api/reports/excel-statement', (req, res) => {
+  try {
+    const user = getRequestUser(req);
+    const userId = user ? user.id : 'default';
+    const userName = user ? user.name : 'TeleExpense Ledger';
+    const buffer = generateExcelReportBuffer(userId, userName);
+    const now = getAppDateTime();
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="TeleExpense_Report_${now.date}.xlsx"`);
+    return res.send(buffer);
+  } catch (err: any) {
+    console.error('Error generating Excel statement endpoint:', err);
+    return res.status(500).json({ error: 'Failed to generate Excel report' });
   }
 });
 
