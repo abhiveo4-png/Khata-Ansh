@@ -1946,39 +1946,48 @@ export function extractItemSpendingQuery(rawText: string): string | null {
   return null;
 }
 
+export function isTransactionItemMatch(t: Transaction, cleanQuery: string): boolean {
+  if (!t || !cleanQuery) return false;
+  const cleanQ = cleanQuery.toLowerCase().trim();
+  if (!cleanQ) return false;
+
+  const desc = (t.description || '').toLowerCase().trim();
+  const tags = (t.tags || []).map(tg => tg.toLowerCase().trim());
+  const cat = (t.category || '').toLowerCase().trim();
+
+  // 1. Direct or word-based match in description (e.g. "signature" matches "signature", "signature cigarettes")
+  if (desc === cleanQ || desc.includes(cleanQ)) return true;
+  const descWords = desc.split(/[\s,._\-/]+/);
+  if (descWords.some(w => w === cleanQ || (w.length >= 3 && cleanQ.length >= 3 && (w.startsWith(cleanQ) || cleanQ.startsWith(w))))) {
+    return true;
+  }
+
+  // 2. Direct match in tags
+  if (tags.some(tg => tg === cleanQ || tg.includes(cleanQ) || cleanQ.includes(tg))) {
+    return true;
+  }
+
+  // 3. Category match ONLY if the search query is targeting the actual category name
+  if (cat === cleanQ || (cleanQ.length >= 4 && cat.includes(cleanQ))) {
+    return true;
+  }
+
+  return false;
+}
+
 export function buildItemSpendingReportTelegramMessage(userId: string, itemQuery: string, userName: string): string {
   const store = getUserData(userId);
   const cleanQ = itemQuery.toLowerCase().trim();
 
-  // Search matching transactions in description, category, tags, and rawMessage
+  // Search matching transactions ONLY in item description & tags (never entire batch rawMessage)
   const matchingExpenses = store.transactions.filter(t => {
     if (t.type !== 'expense') return false;
-    const desc = (t.description || '').toLowerCase();
-    const cat = (t.category || '').toLowerCase();
-    const raw = (t.rawMessage || '').toLowerCase();
-    const tags = (t.tags || []).map(tg => tg.toLowerCase());
-
-    return (
-      desc.includes(cleanQ) ||
-      cat.includes(cleanQ) ||
-      raw.includes(cleanQ) ||
-      tags.some(tg => tg.includes(cleanQ))
-    );
+    return isTransactionItemMatch(t, cleanQ);
   });
 
   const matchingIncomes = store.transactions.filter(t => {
     if (t.type !== 'income') return false;
-    const desc = (t.description || '').toLowerCase();
-    const cat = (t.category || '').toLowerCase();
-    const raw = (t.rawMessage || '').toLowerCase();
-    const tags = (t.tags || []).map(tg => tg.toLowerCase());
-
-    return (
-      desc.includes(cleanQ) ||
-      cat.includes(cleanQ) ||
-      raw.includes(cleanQ) ||
-      tags.some(tg => tg.includes(cleanQ))
-    );
+    return isTransactionItemMatch(t, cleanQ);
   });
 
   const displayKeyword = itemQuery.charAt(0).toUpperCase() + itemQuery.slice(1);
@@ -3397,6 +3406,7 @@ ${tipsText}
     for (const parsed of parsedList) {
       const finalTime = (parsed.time && /^\d{2}:\d{2}$/.test(parsed.time)) ? parsed.time : msgTimeInfo.time;
       const finalDate = (parsed.date && /^\d{4}-\d{2}-\d{2}$/.test(parsed.date)) ? parsed.date : msgTimeInfo.date;
+      const itemRaw = parsedList.length > 1 ? `${parsed.amount} ${parsed.description}` : rawText;
 
       const newTx: Transaction = {
         id: `tx_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
@@ -3412,7 +3422,7 @@ ${tipsText}
         telegramChatId: chatId,
         telegramMessageId: messageObj.message_id,
         telegramUser: senderDisplayName,
-        rawMessage: rawText,
+        rawMessage: itemRaw,
         createdAt: msgTimeInfo.iso,
         tags: parsed.tags || [],
       };
@@ -5072,11 +5082,7 @@ app.get('/api/transactions/item-spending', (req, res) => {
 
     const matchingExpenses = store.transactions.filter(t => {
       if (t.type !== 'expense') return false;
-      const desc = (t.description || '').toLowerCase();
-      const cat = (t.category || '').toLowerCase();
-      const raw = (t.rawMessage || '').toLowerCase();
-      const tags = (t.tags || []).map(tg => tg.toLowerCase());
-      return desc.includes(cleanQ) || cat.includes(cleanQ) || raw.includes(cleanQ) || tags.some(tg => tg.includes(cleanQ));
+      return isTransactionItemMatch(t, cleanQ);
     });
 
     const totalSpent = matchingExpenses.reduce((sum, t) => sum + (Number(t.amount) || 0), 0);
