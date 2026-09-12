@@ -627,27 +627,41 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                   </button>
                 </div>
 
-                <div className="flex items-center space-x-2">
+                <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
                   <div className="flex-1 bg-slate-950 border border-slate-700 px-4 py-2.5 rounded-xl flex items-center justify-between font-mono text-lg font-black text-cyan-300 tracking-widest">
-                    <span>{currentUser.linkCode || '838107'}</span>
+                    <span>{currentUser.linkCode || '------'}</span>
                     <span className="text-xs text-slate-500 font-normal tracking-normal">
-                      /link {currentUser.linkCode || '838107'}
+                      /link {currentUser.linkCode || ''}
                     </span>
                   </div>
-                  <button
-                    onClick={handleCopyLinkCode}
-                    className="px-3.5 py-2.5 bg-cyan-500 hover:bg-cyan-400 text-slate-950 rounded-xl text-xs font-bold flex items-center space-x-1 transition-all shrink-0 cursor-pointer"
-                  >
-                    {copiedCode ? <Check className="w-4 h-4 stroke-[3]" /> : <Copy className="w-4 h-4" />}
-                    <span>{copiedCode ? 'COPIED' : 'COPY'}</span>
-                  </button>
-                  <button
-                    onClick={handleCopyInviteMessage}
-                    className="px-3.5 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold flex items-center space-x-1 transition-all shrink-0 cursor-pointer"
-                  >
-                    {copiedInvite ? <Check className="w-4 h-4 stroke-[3]" /> : <Share2 className="w-4 h-4" />}
-                    <span>{copiedInvite ? 'DONE!' : 'SHARE'}</span>
-                  </button>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <a
+                      href={`https://t.me/${botUsername}?start=link${currentUser.linkCode}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="flex-1 sm:flex-none px-3.5 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold flex items-center justify-center space-x-1.5 transition-all shadow-md shadow-indigo-950/50 cursor-pointer"
+                      title="Telegram bot kholein aur automatic link karein"
+                    >
+                      <Bot className="w-4 h-4" />
+                      <span>1-CLICK LINK</span>
+                    </a>
+                    <button
+                      onClick={handleCopyLinkCode}
+                      className="px-3.5 py-2.5 bg-cyan-500 hover:bg-cyan-400 text-slate-950 rounded-xl text-xs font-bold flex items-center space-x-1 transition-all shrink-0 cursor-pointer"
+                      title="Command copy karein"
+                    >
+                      {copiedCode ? <Check className="w-4 h-4 stroke-[3]" /> : <Copy className="w-4 h-4" />}
+                      <span>{copiedCode ? 'COPIED' : 'COPY'}</span>
+                    </button>
+                    <button
+                      onClick={handleCopyInviteMessage}
+                      className="px-3.5 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold flex items-center space-x-1 transition-all shrink-0 cursor-pointer"
+                      title="Family invite message copy karein"
+                    >
+                      {copiedInvite ? <Check className="w-4 h-4 stroke-[3]" /> : <Share2 className="w-4 h-4" />}
+                      <span>{copiedInvite ? 'DONE!' : 'SHARE'}</span>
+                    </button>
+                  </div>
                 </div>
 
                 {/* Cyber Onboarding Guide */}

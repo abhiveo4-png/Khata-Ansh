@@ -2245,18 +2245,83 @@ async function handleTelegramMessage(messageObj: any) {
 
   // Always reload users from disk on every message so new registrations and links are immediately active
   users = loadJson<UserProfile[]>(USERS_FILE, users);
+  let usersModified = false;
+  for (const u of users) {
+    if (!u.linkCode || String(u.linkCode).trim().length !== 6) {
+      u.linkCode = generateLinkCode();
+      usersModified = true;
+    }
+    if (!u.linkedMembers) {
+      u.linkedMembers = [];
+      usersModified = true;
+    }
+  }
+  if (usersModified) {
+    saveUsers(users);
+  }
 
-  const lowerText = rawText.toLowerCase().trim();
-  const command = rawText.split(' ')[0].toLowerCase();
-  const commandArg = rawText.split(' ').slice(1).join(' ').trim();
+  const trimmedText = rawText.trim();
+  const lowerText = trimmedText.toLowerCase();
 
-  // 1. Check for Linking Command (/link <code> or /start <code>)
-  if (command === '/link' || (command === '/start' && commandArg && /^\d{6}$/.test(commandArg))) {
-    const linkCode = commandArg.replace(/[^0-9]/g, '');
-    const userToLink = users.find(u => u.linkCode === linkCode);
+  // 1. Check for Account Linking Command or Linking Intent
+  // Supports: /link 123456, /link123456, /start link123456, /start 123456, link 123456, 123456, /link email@example.com
+  const isExplicitLinkCmd = 
+    lowerText.startsWith('/link') || 
+    lowerText.startsWith('/connect') || 
+    lowerText.startsWith('link ') || 
+    lowerText.startsWith('connect ') || 
+    lowerText.startsWith('/start') ||
+    lowerText === 'link' ||
+    lowerText === 'connect' ||
+    /^\s*\d{5,8}\s*$/.test(trimmedText);
 
+  if (isExplicitLinkCmd) {
+    // Extract 6-digit code if present
+    const digitsMatch = trimmedText.match(/\b\d{6}\b/);
+    const extractedDigits = digitsMatch ? digitsMatch[0] : '';
+
+    // Extract email if present
+    const emailMatch = trimmedText.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
+    const extractedEmail = emailMatch ? emailMatch[0].toLowerCase() : '';
+
+    // Extract raw arguments after /link or /connect or /start
+    let cleanArg = trimmedText
+      .replace(/^\/(link|connect|start)[_ ]?/i, '')
+      .replace(/^(link|connect)[_ ]?/i, '')
+      .replace(/^link[_ ]?/i, '')
+      .replace(/^code[: ]*/i, '')
+      .trim();
+
+    // Remove prefix 'link' if it was /start link682491
+    if (cleanArg.toLowerCase().startsWith('link')) {
+      cleanArg = cleanArg.substring(4).trim();
+    }
+
+    let userToLink: UserProfile | undefined;
+
+    if (extractedDigits) {
+      userToLink = users.find(u => String(u.linkCode).trim() === extractedDigits);
+    }
+    if (!userToLink && extractedEmail) {
+      userToLink = users.find(u => u.email.toLowerCase() === extractedEmail);
+    }
+    if (!userToLink && cleanArg) {
+      const cleanDigits = cleanArg.replace(/[^0-9]/g, '');
+      if (cleanDigits.length === 6) {
+        userToLink = users.find(u => String(u.linkCode).trim() === cleanDigits);
+      }
+      if (!userToLink) {
+        userToLink = users.find(u => 
+          u.email.toLowerCase() === cleanArg.toLowerCase() ||
+          u.name.toLowerCase() === cleanArg.toLowerCase() ||
+          u.id.toLowerCase() === cleanArg.toLowerCase()
+        );
+      }
+    }
+
+    // If matching user account is found, perform the link!
     if (userToLink) {
-      // Clean up this chatId from all other users so there's no conflict
+      // Clean up this chatId from all other user accounts so there is zero conflict
       for (const u of users) {
         if (u.id !== userToLink.id) {
           if (String(u.telegramChatId) === String(chatId)) {
@@ -2297,20 +2362,42 @@ async function handleTelegramMessage(messageObj: any) {
         userToLink.telegramUsername = messageObj.from?.username || userName;
       }
 
-      saveJson(USERS_FILE, users);
+      saveUsers(users);
 
       const totalMembers = userToLink.linkedMembers.length;
       await sendTelegramReply(
         botToken,
         chatId,
-        `🎉 <b>${userToLink.name} ke Shared Khate se Connect ho gaye!</b>\n\nNamaste <b>${memberName}</b>! Aap successfully <b>${userToLink.name}</b> ke ledger (<b>${userToLink.email}</b>) se jud gaye hain.\n👥 <b>Total Connected Members:</b> ${totalMembers}\n\n💡 <b>Ab aap kharcha ya kamai sidhe log kar sakte hain:</b>\n• <code>500 sabzi cash</code>\n• <code>300 petrol upi</code>\n• <code>1200 groceries card</code>\n\nAapke saare transactions shared web dashboard par live dikhenge!`
+        `🎉 <b>Khate se Successfully Connect Ho Gaye!</b>\n\nNamaste <b>${memberName}</b>! Aapka Telegram account <b>${userToLink.name}</b> ke ledger se jud gaya hai.\n\n👤 <b>Account Name:</b> ${userToLink.name}\n📧 <b>Email:</b> <code>${userToLink.email}</code>\n🔑 <b>Link Code:</b> <code>${userToLink.linkCode}</code>\n👥 <b>Total Connected Members:</b> ${totalMembers}\n\n💡 <b>Ab aap kharcha ya income sidhe message karke log kar sakte hain:</b>\n• <code>500 sabzi cash</code>\n• <code>300 petrol upi</code>\n• <code>1200 groceries card</code>\n• <code>45000 salary credited</code>\n\n⚡ <i>Aapke sabhi transactions live web dashboard par sync honge!</i>`,
+        {
+          inline_keyboard: [
+            [
+              { text: '💰 Mera Balance', callback_data: 'cmd_balance' },
+              { text: '📊 Summary', callback_data: 'cmd_summary' },
+            ],
+            [
+              { text: '👥 Linked Accounts', callback_data: 'cmd_accounts' },
+              { text: '📑 Excel Report', callback_data: 'cmd_report' },
+            ],
+          ],
+        }
       );
       return;
     } else {
+      // If code was not provided or not matched:
+      const accountsListText = users.map((u, i) => 
+        `${i + 1}. <b>${u.name}</b> (${u.email})\n   👉 Code: <code>/link ${u.linkCode}</code>`
+      ).join('\n\n');
+
+      const isHelpOrStart = lowerText === '/start' || lowerText === '/link' || lowerText === 'link' || lowerText === '/connect';
+      const heading = isHelpOrStart
+        ? `👋 <b>TeleExpense AI Khate me Aapka Swagat Hai!</b>`
+        : `❌ <b>Link Code Match Nahi Hua.</b>`;
+
       await sendTelegramReply(
         botToken,
         chatId,
-        `❌ <b>Galat Link Code.</b>\n\nKripya TeleExpense Dashboard par apna 6-digit link code check karein aur dobara try karein:\n<code>/link 123456</code>`
+        `${heading}\n\n🔑 <b>Aapka Telegram Chat ID:</b> <code>${chatId}</code>\n\n<b>Connect kaise karein:</b>\n1. Web dashboard par apna 6-digit Link Code dekhein\n2. Niche diye gaye command ki tarah reply karein:\n<code>/link &lt;AAPKA_6_DIGIT_CODE&gt;</code>\n\n📋 <b>Active Accounts on this Server:</b>\n${accountsListText}\n\n💡 <i>Aap apna registered email bhejkar bhi connect ho sakte hain:</i>\n<code>/link demo@teleexpense.ai</code>`
       );
       return;
     }
@@ -2324,34 +2411,18 @@ async function handleTelegramMessage(messageObj: any) {
     targetUser = users.find(u => String(u.telegramChatId) === String(chatId));
   }
 
-  // If unlinked user
+  // If unlinked user and not a link command
   if (!targetUser) {
-    // If only one user exists in system, offer quick auto-link
-    if (users.length === 1 && (!users[0].telegramChatId || String(users[0].telegramChatId) === String(chatId))) {
-      targetUser = users[0];
-      if (!targetUser.linkedMembers) targetUser.linkedMembers = [];
-      targetUser.telegramChatId = chatId;
-      targetUser.telegramUsername = messageObj.from?.username || userName;
-      if (!targetUser.linkedMembers.some(m => String(m.telegramChatId) === String(chatId))) {
-        targetUser.linkedMembers.push({
-          id: `mem_${chatId}`,
-          name: userName || targetUser.name,
-          customAlias: `${targetUser.name} (Owner)`,
-          role: 'owner',
-          telegramChatId: chatId,
-          telegramUsername: messageObj.from?.username || userName,
-          linkedAt: new Date().toISOString(),
-        });
-      }
-      saveJson(USERS_FILE, users);
-    } else {
-      await sendTelegramReply(
-        botToken,
-        chatId,
-        `👋 <b>TeleExpense AI Khate me Aapka Swagat Hai!</b>\n\nAapka Telegram account abhi kisi khate se link nahi hai.\n\n🔑 <b>Aapka Telegram Chat ID:</b> <code>${chatId}</code>\n\n<b>Connect kaise karein:</b>\n1. Apna TeleExpense Web Dashboard kholein aur 6-digit ka <b>Link Code</b> dekhein\n2. Yahan reply karein:\n<code>/link &lt;AAPKA_CODE&gt;</code>\n\n<i>Udaharan:</i> <code>/link 123456</code>\n\n💡 <i>Ek hi khate se multiple family members connect ho sakte hain!</i>`
-      );
-      return;
-    }
+    const accountsListText = users.map((u, i) => 
+      `${i + 1}. <b>${u.name}</b> (${u.email}) ➔ <code>/link ${u.linkCode}</code>`
+    ).join('\n');
+
+    await sendTelegramReply(
+      botToken,
+      chatId,
+      `👋 <b>Namaste! Aapka Telegram account abhi kisi khate se link nahi hai.</b>\n\n🔑 <b>Aapka Chat ID:</b> <code>${chatId}</code>\n\n<b>Connect karne ke liye apna 6-digit code bhejein:</b>\n<code>/link &lt;6_DIGIT_CODE&gt;</code>\n\n📋 <b>Available Accounts:</b>\n${accountsListText}\n\n💡 <i>Upar diye gaye kisi bhi code par tap karke copy karein aur send karein!</i>`
+    );
+    return;
   }
 
   const userId = targetUser.id;
