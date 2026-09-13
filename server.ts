@@ -2424,17 +2424,34 @@ Aap neeche diye gaye accounts me added hain:
   return { text, replyMarkup: { inline_keyboard: inlineKeyboard } };
 }
 
+async function safeTelegramFetch(url: string, options: RequestInit = {}, timeoutMs = 8000): Promise<Response | null> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, {
+      ...options,
+      signal: controller.signal,
+    });
+    return res;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function syncTelegramBotCommandsAndMenu(botToken: string): Promise<boolean> {
   if (!botToken) return false;
   try {
-    const cmdRes = await fetch(`https://api.telegram.org/bot${botToken}/setMyCommands`, {
+    const cmdRes = await safeTelegramFetch(`https://api.telegram.org/bot${botToken}/setMyCommands`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ commands: TELEGRAM_BOT_COMMANDS }),
     });
-    const cmdData = await cmdRes.json();
+    if (!cmdRes) return false;
+    const cmdData = await cmdRes.json().catch(() => null);
 
-    await fetch(`https://api.telegram.org/bot${botToken}/setChatMenuButton`, {
+    await safeTelegramFetch(`https://api.telegram.org/bot${botToken}/setChatMenuButton`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -2442,17 +2459,15 @@ async function syncTelegramBotCommandsAndMenu(botToken: string): Promise<boolean
       }),
     });
 
-    console.log('🤖 Telegram setMyCommands synced:', cmdData.ok);
-    return Boolean(cmdData.ok);
-  } catch (err: any) {
-    console.error('Failed to sync Telegram bot commands and menu:', err);
+    return Boolean(cmdData?.ok);
+  } catch {
     return false;
   }
 }
 
 async function answerTelegramCallbackQuery(botToken: string, callbackQueryId: string, text?: string) {
   try {
-    await fetch(`https://api.telegram.org/bot${botToken}/answerCallbackQuery`, {
+    await safeTelegramFetch(`https://api.telegram.org/bot${botToken}/answerCallbackQuery`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -2461,9 +2476,7 @@ async function answerTelegramCallbackQuery(botToken: string, callbackQueryId: st
         show_alert: false,
       }),
     });
-  } catch (err) {
-    console.error('Failed to answer Telegram callback query:', err);
-  }
+  } catch {}
 }
 
 async function sendTelegramReply(
@@ -2484,26 +2497,25 @@ async function sendTelegramReply(
       payload.reply_markup = markup;
     }
 
-    const res = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+    const res = await safeTelegramFetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
 
-    if (!res.ok) {
-      // Retry in plain text without HTML tags in case of unescaped chars
+    if (!res || !res.ok) {
+      // Retry in plain text without HTML tags in case of unescaped chars or initial fail
       const plainText = text.replace(/<[^>]*>/g, '');
       payload.text = plainText;
       delete payload.parse_mode;
-      await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+      await safeTelegramFetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
     }
     return true;
-  } catch (err) {
-    console.error('Failed to send Telegram reply:', err);
+  } catch {
     return false;
   }
 }
@@ -4024,12 +4036,16 @@ async function startTelegramPollingWorker() {
 
     try {
       const pollUrl = `https://api.telegram.org/bot${token}/getUpdates?offset=${lastUpdateId + 1}&timeout=20&allowed_updates=["message","edited_message","callback_query"]`;
-      const response = await fetch(pollUrl);
+      const response = await safeTelegramFetch(pollUrl, {}, 25000);
+
+      if (!response) {
+        await new Promise(r => setTimeout(r, 2000));
+        continue;
+      }
 
       if (response.status === 409) {
-        // Clear conflicting webhook
-        await fetch(`https://api.telegram.org/bot${token}/deleteWebhook?drop_pending_updates=false`);
-        await new Promise(r => setTimeout(r, 1000));
+        // Webhook is active and receiving updates directly - sleep and let Webhook handle traffic to save 100% bandwidth!
+        await new Promise(r => setTimeout(r, 30000));
         continue;
       }
 
@@ -4038,8 +4054,8 @@ async function startTelegramPollingWorker() {
         continue;
       }
 
-      const data = await response.json();
-      if (data.ok && Array.isArray(data.result)) {
+      const data = await response.json().catch(() => null);
+      if (data && data.ok && Array.isArray(data.result)) {
         for (const update of data.result) {
           if (update.update_id > lastUpdateId) {
             lastUpdateId = update.update_id;
@@ -4051,7 +4067,7 @@ async function startTelegramPollingWorker() {
           }
         }
       }
-    } catch (err) {
+    } catch {
       await new Promise(r => setTimeout(r, 1000));
     }
   }
@@ -5804,25 +5820,25 @@ app.get('/api/telegram/config', async (req, res) => {
 
   if (currentToken) {
     try {
-      const meRes = await fetch(`https://api.telegram.org/bot${currentToken}/getMe`);
-      if (meRes.ok) {
-        const meData = await meRes.json();
-        if (meData.ok) {
+      const meRes = await safeTelegramFetch(`https://api.telegram.org/bot${currentToken}/getMe`);
+      if (meRes && meRes.ok) {
+        const meData = await meRes.json().catch(() => null);
+        if (meData && meData.ok) {
           botInfo = meData.result;
           botConfig.botUsername = botInfo.username;
           botConfig.botName = botInfo.first_name;
         }
       }
 
-      const hookRes = await fetch(`https://api.telegram.org/bot${currentToken}/getWebhookInfo`);
-      if (hookRes.ok) {
-        const hookData = await hookRes.json();
-        if (hookData.ok) {
+      const hookRes = await safeTelegramFetch(`https://api.telegram.org/bot${currentToken}/getWebhookInfo`);
+      if (hookRes && hookRes.ok) {
+        const hookData = await hookRes.json().catch(() => null);
+        if (hookData && hookData.ok) {
           webhookInfo = hookData.result;
         }
       }
-    } catch (err: any) {
-      console.error('Error checking Telegram Bot status:', err);
+    } catch {
+      // Safe fallback on transient network drop
     }
   }
 
@@ -5845,13 +5861,15 @@ app.post('/api/telegram/config', async (req, res) => {
 
   if (botConfig.botToken) {
     try {
-      const meRes = await fetch(`https://api.telegram.org/bot${botConfig.botToken}/getMe`);
-      const meData = await meRes.json();
-      if (meData.ok) {
-        botConfig.botUsername = meData.result.username;
-        botConfig.botName = meData.result.first_name;
-        botConfig.isConnected = true;
-        botConfig.isWebhookSet = true;
+      const meRes = await safeTelegramFetch(`https://api.telegram.org/bot${botConfig.botToken}/getMe`);
+      if (meRes && meRes.ok) {
+        const meData = await meRes.json().catch(() => null);
+        if (meData && meData.ok) {
+          botConfig.botUsername = meData.result.username;
+          botConfig.botName = meData.result.first_name;
+          botConfig.isConnected = true;
+          botConfig.isWebhookSet = true;
+        }
       }
       // Auto sync handy commands and menu button
       await syncTelegramBotCommandsAndMenu(botConfig.botToken);
