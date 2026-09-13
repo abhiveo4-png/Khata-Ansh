@@ -821,13 +821,19 @@ export default function App() {
         transactions={transactions}
         categories={categories}
         currentUser={currentUser}
+        udhaars={udhaars}
+        fuelLogs={fuelLogs}
         onRestoreSuccess={(data) => {
           if (data.transactions) setTransactions(data.transactions);
           if (data.categories) setCategories(data.categories);
           if (data.budgets) setBudgets(data.budgets);
           if (data.summary) setSummary(data.summary);
+          if (data.udhaars) setUdhaars(data.udhaars);
+          if (data.fuelLogs) setFuelLogs(data.fuelLogs);
           fetchBudgets();
           fetchTransactions();
+          fetchUdhaars();
+          fetchFuelLogs();
         }}
       />
 

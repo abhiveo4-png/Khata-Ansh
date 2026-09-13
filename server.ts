@@ -5203,18 +5203,26 @@ export function restoreTransactionsBackup(
   rawRows: any[],
   replaceExisting: boolean = false,
   rawCategoriesRows: any[] = [],
-  rawBudgetsRows: any[] = []
+  rawBudgetsRows: any[] = [],
+  rawUdhaarRows: any[] = [],
+  rawFuelRows: any[] = []
 ): {
   restoredCount: number;
   categoriesCreated: number;
+  udhaarsCount: number;
+  fuelLogsCount: number;
   transactions: Transaction[];
   categories: CategoryDef[];
   budgets: CategoryBudget[];
+  udhaars: UdhaarRecord[];
+  fuelLogs: FuelLog[];
   summary: any;
 } {
   const store = getUserData(userId);
   let restoredCount = 0;
   let categoriesCreated = 0;
+  let udhaarsCount = 0;
+  let fuelLogsCount = 0;
 
   // 1. Restore/Merge Categories if provided
   if (Array.isArray(rawCategoriesRows) && rawCategoriesRows.length > 0) {
@@ -5434,6 +5442,132 @@ export function restoreTransactionsBackup(
     return timeB - timeA;
   });
 
+  // 4. Restore Udhaar Records (Lent & Borrowed)
+  if (!store.udhaars) store.udhaars = [];
+  if (replaceExisting && Array.isArray(rawUdhaarRows) && rawUdhaarRows.length > 0) {
+    store.udhaars = [];
+  }
+  const existingUdhaarIds = new Set((store.udhaars || []).map(u => u.id));
+  if (Array.isArray(rawUdhaarRows) && rawUdhaarRows.length > 0) {
+    for (const uRow of rawUdhaarRows) {
+      if (!uRow || typeof uRow !== 'object') continue;
+      const uObj: Record<string, any> = {};
+      for (const k of Object.keys(uRow)) {
+        uObj[k.trim().toLowerCase().replace(/[\s_\-\(\)]+/g, '')] = uRow[k];
+      }
+
+      const personName = String(uObj['personname'] ?? uObj['person'] ?? uObj['name'] ?? '').trim();
+      let rawAmt = uObj['amountinr'] ?? uObj['amount'] ?? uObj['rupaye'] ?? 0;
+      if (typeof rawAmt === 'string') rawAmt = rawAmt.replace(/[₹$,\s]/g, '');
+      const amount = Math.abs(parseFloat(String(rawAmt)) || 0);
+      if (!personName || amount <= 0) continue;
+
+      const rawType = String(uObj['type'] ?? '').toLowerCase();
+      const type: 'lent' | 'borrowed' = (rawType.includes('diya') || rawType.includes('lent') || rawType.includes('lena')) ? 'lent' : 'borrowed';
+      const status: 'pending' | 'settled' = String(uObj['status'] ?? '').toLowerCase().includes('settle') ? 'settled' : 'pending';
+      const description = String(uObj['description'] ?? uObj['notes'] ?? uObj['note'] ?? '').trim();
+
+      let dateStr = String(uObj['date'] ?? uObj['tareeq'] ?? '').trim();
+      if (!isNaN(Number(dateStr)) && Number(dateStr) > 20000 && Number(dateStr) < 70000) {
+        const excelEpoch = new Date(Date.UTC(1899, 11, 30));
+        const parsedDate = new Date(excelEpoch.getTime() + Number(dateStr) * 86400000);
+        dateStr = parsedDate.toISOString().split('T')[0];
+      } else if (!dateStr || dateStr.length < 8) {
+        dateStr = getAppDateTime().date;
+      }
+      const timeStr = String(uObj['time'] ?? '12:00').trim();
+      const settledAt = uObj['settleddate'] || uObj['settledat'] ? String(uObj['settleddate'] || uObj['settledat']).trim() : undefined;
+      const uId = (uObj['recordid'] || uObj['id']) && !existingUdhaarIds.has(String(uObj['recordid'] || uObj['id']))
+        ? String(uObj['recordid'] || uObj['id'])
+        : `udh_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+
+      const newUdhaar: UdhaarRecord = {
+        id: uId,
+        userId,
+        type,
+        personName,
+        amount,
+        description: description || undefined,
+        date: dateStr,
+        time: timeStr,
+        status,
+        settledAt: status === 'settled' ? (settledAt || `${dateStr}T${timeStr}:00.000Z`) : undefined,
+        createdAt: `${dateStr}T${timeStr}:00.000Z`,
+      };
+
+      store.udhaars.push(newUdhaar);
+      existingUdhaarIds.add(uId);
+      udhaarsCount++;
+    }
+  }
+
+  // 5. Restore Fuel & Mileage Logs
+  if (!store.fuelLogs) store.fuelLogs = [];
+  if (replaceExisting && Array.isArray(rawFuelRows) && rawFuelRows.length > 0) {
+    store.fuelLogs = [];
+  }
+  const existingFuelIds = new Set((store.fuelLogs || []).map(f => f.id));
+  if (Array.isArray(rawFuelRows) && rawFuelRows.length > 0) {
+    for (const fRow of rawFuelRows) {
+      if (!fRow || typeof fRow !== 'object') continue;
+      const fObj: Record<string, any> = {};
+      for (const k of Object.keys(fRow)) {
+        fObj[k.trim().toLowerCase().replace(/[\s_\-\(\)]+/g, '')] = fRow[k];
+      }
+
+      let rawFuelAmt = fObj['fuelamountinr'] ?? fObj['fuelamount'] ?? fObj['amountinr'] ?? fObj['amount'] ?? 0;
+      if (typeof rawFuelAmt === 'string') rawFuelAmt = rawFuelAmt.replace(/[₹$,\s]/g, '');
+      const fuelAmount = Math.abs(parseFloat(String(rawFuelAmt)) || 0);
+
+      const rawOdo = fObj['odometerreadingkm'] ?? fObj['odometer'] ?? fObj['reading'] ?? 0;
+      const odometer = Math.abs(parseFloat(String(rawOdo)) || 0);
+      if (fuelAmount <= 0 && odometer <= 0) continue;
+
+      const vehicleName = String(fObj['vehiclename'] ?? fObj['vehicle'] ?? 'Vehicle').trim() || 'Vehicle';
+      const fuelLiters = fObj['fuelliters'] !== undefined && fObj['fuelliters'] !== '' ? parseFloat(String(fObj['fuelliters'])) : undefined;
+      const previousOdometer = fObj['previousodometerkm'] !== undefined && fObj['previousodometerkm'] !== '' ? parseFloat(String(fObj['previousodometerkm'])) : undefined;
+      const distanceCovered = fObj['distancecoveredkm'] !== undefined && fObj['distancecoveredkm'] !== '' ? parseFloat(String(fObj['distancecoveredkm'])) : undefined;
+      const calculatedMileage = fObj['calculatedmileagekml'] !== undefined && fObj['calculatedmileagekml'] !== '' ? parseFloat(String(fObj['calculatedmileagekml'])) : undefined;
+      const costPerKm = fObj['costperkminr'] !== undefined && fObj['costperkminr'] !== '' ? parseFloat(String(fObj['costperkminr'])) : undefined;
+      const notes = String(fObj['notes'] ?? fObj['note'] ?? '').trim();
+
+      let dateStr = String(fObj['date'] ?? fObj['tareeq'] ?? '').trim();
+      if (!isNaN(Number(dateStr)) && Number(dateStr) > 20000 && Number(dateStr) < 70000) {
+        const excelEpoch = new Date(Date.UTC(1899, 11, 30));
+        const parsedDate = new Date(excelEpoch.getTime() + Number(dateStr) * 86400000);
+        dateStr = parsedDate.toISOString().split('T')[0];
+      } else if (!dateStr || dateStr.length < 8) {
+        dateStr = getAppDateTime().date;
+      }
+      const timeStr = String(fObj['time'] ?? '12:00').trim();
+
+      const fId = (fObj['logid'] || fObj['id']) && !existingFuelIds.has(String(fObj['logid'] || fObj['id']))
+        ? String(fObj['logid'] || fObj['id'])
+        : `fuel_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+
+      const newFuelLog: FuelLog = {
+        id: fId,
+        userId,
+        date: dateStr,
+        time: timeStr,
+        vehicleName,
+        fuelAmount,
+        fuelLiters,
+        odometer,
+        previousOdometer,
+        distanceCovered,
+        calculatedMileage,
+        costPerKm,
+        notes: notes || undefined,
+        createdAt: `${dateStr}T${timeStr}:00.000Z`,
+      };
+
+      store.fuelLogs.push(newFuelLog);
+      existingFuelIds.add(fId);
+      fuelLogsCount++;
+    }
+  }
+
   syncBudgetsWithCategories(store);
   saveUserData(userId, store);
 
@@ -5442,9 +5576,13 @@ export function restoreTransactionsBackup(
   return {
     restoredCount,
     categoriesCreated,
+    udhaarsCount,
+    fuelLogsCount,
     transactions: store.transactions,
     categories: store.categories,
     budgets: store.budgets,
+    udhaars: store.udhaars,
+    fuelLogs: store.fuelLogs,
     summary,
   };
 }
@@ -5457,10 +5595,12 @@ app.post('/api/transactions/restore-backup', (req, res) => {
       return res.status(401).json({ error: 'User session not found. Please log in.' });
     }
 
-    const { rows, fileBase64, categoriesRows, budgetsRows, replaceExisting = false } = req.body;
+    const { rows, fileBase64, categoriesRows, budgetsRows, udhaarRows, fuelRows, replaceExisting = false } = req.body;
     let parsedTxRows: any[] = [];
     let parsedCatRows: any[] = Array.isArray(categoriesRows) ? categoriesRows : [];
     let parsedBudRows: any[] = Array.isArray(budgetsRows) ? budgetsRows : [];
+    let parsedUdhaarRows: any[] = Array.isArray(udhaarRows) ? udhaarRows : [];
+    let parsedFuelRows: any[] = Array.isArray(fuelRows) ? fuelRows : [];
 
     if (fileBase64) {
       try {
@@ -5480,6 +5620,8 @@ app.post('/api/transactions/restore-backup', (req, res) => {
                 const store = getUserData(user.id);
                 let restoredCount = 0;
                 let categoriesCreated = 0;
+                let udhaarsCount = 0;
+                let fuelLogsCount = 0;
 
                 // Restore categories
                 if (Array.isArray(fullData.categories)) {
@@ -5529,17 +5671,62 @@ app.post('/api/transactions/restore-backup', (req, res) => {
                   return timeB - timeA;
                 });
 
+                // Restore udhaars
+                if (!store.udhaars) store.udhaars = [];
+                if (replaceExisting) {
+                  store.udhaars = [];
+                }
+                const existingUdhaarIds = new Set(store.udhaars.map(u => u.id));
+                if (Array.isArray(fullData.udhaars)) {
+                  for (const u of fullData.udhaars) {
+                    if (u && (!u.id || !existingUdhaarIds.has(u.id))) {
+                      const uId = u.id || `udh_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+                      store.udhaars.push({ ...u, id: uId, userId: user.id });
+                      existingUdhaarIds.add(uId);
+                      udhaarsCount++;
+                    }
+                  }
+                }
+
+                // Restore fuelLogs
+                if (!store.fuelLogs) store.fuelLogs = [];
+                if (replaceExisting) {
+                  store.fuelLogs = [];
+                }
+                const existingFuelIds = new Set(store.fuelLogs.map(f => f.id));
+                if (Array.isArray(fullData.fuelLogs)) {
+                  for (const f of fullData.fuelLogs) {
+                    if (f && (!f.id || !existingFuelIds.has(f.id))) {
+                      const fId = f.id || `fuel_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+                      store.fuelLogs.push({ ...f, id: fId, userId: user.id });
+                      existingFuelIds.add(fId);
+                      fuelLogsCount++;
+                    }
+                  }
+                }
+
+                // Restore User Profile attributes (trackingStartMonth, etc.)
+                if (fullData.user?.trackingStartMonth) {
+                  user.trackingStartMonth = fullData.user.trackingStartMonth;
+                  saveJson(USERS_FILE, users);
+                  persistToPg('users', users).catch(() => {});
+                }
+
                 syncBudgetsWithCategories(store);
                 saveUserData(user.id, store);
 
                 return res.json({
                   success: true,
-                  message: `Pure account ka backup successfully restore ho gaya! (${restoredCount} transactions, ${categoriesCreated} nayi categories)`,
+                  message: `Pure account ka backup successfully restore ho gaya! (${restoredCount} transactions, ${categoriesCreated} nayi categories, ${udhaarsCount} udhaar records, ${fuelLogsCount} fuel logs)`,
                   restoredCount,
                   categoriesCreated,
+                  udhaarsCount,
+                  fuelLogsCount,
                   transactions: store.transactions,
                   categories: store.categories,
                   budgets: store.budgets,
+                  udhaars: store.udhaars,
+                  fuelLogs: store.fuelLogs,
                   summary: calculateUserSummary(user.id),
                 });
               } catch (jsonErr) {
@@ -5558,6 +5745,10 @@ app.post('/api/transactions/restore-backup', (req, res) => {
             parsedTxRows = sRows;
           } else if (lowerName.includes('categor') || lowerName.includes('budget')) {
             parsedCatRows = sRows;
+          } else if (lowerName.includes('udhaar') || lowerName.includes('khata') || lowerName.includes('debt') || lowerName.includes('borrow') || lowerName.includes('lent')) {
+            parsedUdhaarRows = sRows;
+          } else if (lowerName.includes('fuel') || lowerName.includes('mileage') || lowerName.includes('vehicle') || lowerName.includes('petrol')) {
+            parsedFuelRows = sRows;
           }
         }
 
@@ -5570,18 +5761,26 @@ app.post('/api/transactions/restore-backup', (req, res) => {
       }
     } else if (Array.isArray(rows) && rows.length > 0) {
       parsedTxRows = rows;
-    } else {
+    } else if (parsedUdhaarRows.length === 0 && parsedFuelRows.length === 0 && parsedCatRows.length === 0) {
       return res.status(400).json({ error: 'No transaction rows or fileBase64 provided' });
     }
 
-    if (parsedTxRows.length === 0 && parsedCatRows.length === 0) {
-      return res.status(400).json({ error: 'Backup file me koi valid transaction ya category data nahi mila' });
+    if (parsedTxRows.length === 0 && parsedCatRows.length === 0 && parsedUdhaarRows.length === 0 && parsedFuelRows.length === 0) {
+      return res.status(400).json({ error: 'Backup file me koi valid transaction, category, udhaar ya fuel data nahi mila' });
     }
 
-    const result = restoreTransactionsBackup(user.id, parsedTxRows, replaceExisting, parsedCatRows, parsedBudRows);
+    const result = restoreTransactionsBackup(
+      user.id,
+      parsedTxRows,
+      replaceExisting,
+      parsedCatRows,
+      parsedBudRows,
+      parsedUdhaarRows,
+      parsedFuelRows
+    );
     return res.json({
       success: true,
-      message: `${result.restoredCount} transactions aur ${result.categories.length} categories successfully restore ho gaye hain!`,
+      message: `${result.restoredCount} transactions, ${result.categories.length} categories, ${result.udhaarsCount} udhaar records aur ${result.fuelLogsCount} fuel logs restore ho gaye hain!`,
       ...result,
     });
   } catch (err: any) {
@@ -5640,6 +5839,7 @@ app.get('/api/transactions/export-backup', (req, res) => {
     const userId = user ? user.id : (users[0]?.id || 'default');
     const store = getUserData(userId);
     const summary = calculateUserSummary(userId) || { totalIncome: 0, totalExpense: 0, netSavings: 0, savingsRate: 0 };
+    const gullakSummary = calculateGullakSummary(userId);
     const format = req.query.format === 'csv' ? 'csv' : 'xlsx';
 
     // 1. Transactions Sheet Data
@@ -5675,23 +5875,75 @@ app.get('/api/transactions/export-backup', (req, res) => {
       };
     });
 
-    // 3. Account Details Sheet Data
+    // 3. Udhaar Khata (Lent & Borrow) Sheet Data
+    const udhaarsList = Array.isArray(store.udhaars) ? store.udhaars : [];
+    const udhaarsData = udhaarsList.map((u) => ({
+      'Date': u.date || '',
+      'Time': u.time || '12:00',
+      'Type': u.type === 'lent' ? 'LENT (Diya - Lena Hai)' : 'BORROWED (Liya - Dena Hai)',
+      'Person Name': u.personName || '',
+      'Amount (INR)': Number(u.amount) || 0,
+      'Status': (u.status || 'pending').toUpperCase(),
+      'Description': u.description || '',
+      'Settled Date': u.settledAt || '',
+      'Record ID': u.id || '',
+    }));
+
+    // 4. Fuel & Mileage Tracker Sheet Data
+    const fuelLogsList = Array.isArray(store.fuelLogs) ? store.fuelLogs : [];
+    const fuelLogsData = fuelLogsList.map((f) => ({
+      'Date': f.date || '',
+      'Time': f.time || '12:00',
+      'Vehicle Name': f.vehicleName || 'Vehicle',
+      'Fuel Amount (INR)': Number(f.fuelAmount) || 0,
+      'Fuel Liters': f.fuelLiters !== undefined ? Number(f.fuelLiters) : '',
+      'Odometer Reading (km)': Number(f.odometer) || 0,
+      'Previous Odometer (km)': f.previousOdometer !== undefined ? Number(f.previousOdometer) : '',
+      'Distance Covered (km)': f.distanceCovered !== undefined ? Number(f.distanceCovered) : '',
+      'Calculated Mileage (km/L)': f.calculatedMileage !== undefined ? Number(f.calculatedMileage) : '',
+      'Cost Per Km (INR)': f.costPerKm !== undefined ? Number(f.costPerKm) : '',
+      'Notes': f.notes || '',
+      'Log ID': f.id || '',
+    }));
+
+    // 5. Gullak & Savings Summary Sheet Data
+    const gullakData = [
+      { 'Metric / Field': 'Gullak Total Lifetime Savings (INR)', 'Value': gullakSummary.totalGullakSavings || 0 },
+      { 'Metric / Field': 'Current Month Savings (INR)', 'Value': gullakSummary.currentMonthSaved || 0 },
+      { 'Metric / Field': 'Previous Months Piggy Bank (INR)', 'Value': gullakSummary.pastMonthsSaved || 0 },
+      { 'Metric / Field': 'Tracking Start Month', 'Value': user?.trackingStartMonth || gullakSummary.trackingStartMonth || 'Beginning of time' },
+      { 'Metric / Field': 'Active History Months Count', 'Value': (gullakSummary.monthlyHistory || []).length },
+    ];
+    if (Array.isArray(gullakSummary.monthlyHistory)) {
+      for (const m of gullakSummary.monthlyHistory) {
+        gullakData.push({
+          'Metric / Field': `Month ${m.month} Savings`,
+          'Value': `${(m.savings || 0) >= 0 ? '+' : '-'}₹${Math.abs(m.savings || 0)} (Budget: ₹${m.budgetTotal || 0}, Spent: ₹${m.spentTotal || 0})`,
+        });
+      }
+    }
+
+    // 6. Account & Linked Members Sheet Data
     const accountData = [
       { 'Setting / Property': 'Account Name', 'Value': user?.name || 'Main Ledger' },
+      { 'Setting / Property': 'Account Email', 'Value': user?.email || 'N/A' },
       { 'Setting / Property': 'Account ID', 'Value': userId },
       { 'Setting / Property': 'Telegram Chat ID', 'Value': user?.telegramChatId || 'Not Linked' },
       { 'Setting / Property': 'Telegram Username', 'Value': user?.telegramUsername ? `@${user.telegramUsername}` : 'Not Set' },
       { 'Setting / Property': 'Link Code', 'Value': user?.linkCode ? `/link ${user.linkCode}` : 'N/A' },
+      { 'Setting / Property': 'Gullak Tracking Start Month', 'Value': user?.trackingStartMonth || 'Not set' },
       { 'Setting / Property': 'Backup Created At', 'Value': new Date().toLocaleString('en-IN') },
       { 'Setting / Property': 'Total Transactions Count', 'Value': txList.length },
       { 'Setting / Property': 'Total Categories Count', 'Value': categoriesList.length },
+      { 'Setting / Property': 'Total Udhaar Records Count', 'Value': udhaarsList.length },
+      { 'Setting / Property': 'Total Fuel Logs Count', 'Value': fuelLogsList.length },
       { 'Setting / Property': 'Total Income (INR)', 'Value': summary.totalIncome || 0 },
       { 'Setting / Property': 'Total Expense (INR)', 'Value': summary.totalExpense || 0 },
       { 'Setting / Property': 'Net Balance (INR)', 'Value': summary.netSavings || 0 },
       { 'Setting / Property': 'Savings Rate', 'Value': `${summary.savingsRate || 0}%` },
     ];
 
-    // 4. Linked Family Members Sheet Data
+    // Linked Family Members Sheet Data
     const linkedMembersData = (user?.linkedMembers && Array.isArray(user.linkedMembers) && user.linkedMembers.length > 0)
       ? user.linkedMembers.map(m => ({
           'Member Name': m.name || 'Member',
@@ -5702,14 +5954,25 @@ app.get('/api/transactions/export-backup', (req, res) => {
         }))
       : [{ 'Member Name': user?.name || 'Owner', 'Telegram Chat ID': user?.telegramChatId || '', 'Telegram Username': user?.telegramUsername || '', 'Role': 'owner', 'Linked At': '' }];
 
-    // 5. Raw Full State JSON chunked safely (Never exceed Excel 32,767 cell limit)
+    // 7. Raw Full State JSON chunked safely (Never exceed Excel 32,767 cell limit)
     const fullJsonString = JSON.stringify({
-      version: '2.0',
+      version: '3.0',
       exportedAt: new Date().toISOString(),
-      user: user ? { id: user.id, name: user.name, telegramChatId: user.telegramChatId, telegramUsername: user.telegramUsername, linkCode: user.linkCode, linkedMembers: user.linkedMembers } : null,
+      user: user ? {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        telegramChatId: user.telegramChatId,
+        telegramUsername: user.telegramUsername,
+        linkCode: user.linkCode,
+        trackingStartMonth: user.trackingStartMonth,
+        linkedMembers: user.linkedMembers,
+      } : null,
       categories: categoriesList,
       budgets: budgetsList,
       transactions: txList,
+      udhaars: udhaarsList,
+      fuelLogs: fuelLogsList,
     });
 
     const CHUNK_SIZE = 15000;
@@ -5719,7 +5982,7 @@ app.get('/api/transactions/export-backup', (req, res) => {
     for (let i = 0; i < totalChunks; i++) {
       const slice = fullJsonString.substring(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
       rawBackupPayload.push({
-        'BackupVersion': '2.0',
+        'BackupVersion': '3.0',
         'ChunkIndex': i + 1,
         'TotalChunks': totalChunks,
         'DataJSON': slice,
@@ -5736,15 +5999,26 @@ app.get('/api/transactions/export-backup', (req, res) => {
     const wsCats = XLSX.utils.json_to_sheet(categoriesData.length > 0 ? categoriesData : [{ 'Category Name': 'Default', 'Type': 'expense', 'Monthly Budget Limit (INR)': 0 }]);
     XLSX.utils.book_append_sheet(workbook, wsCats, 'Categories & Budgets');
 
-    // Add Sheet 3: Account & Summary
+    // Add Sheet 3: Udhaar Khata
+    const wsUdhaars = XLSX.utils.json_to_sheet(udhaarsData.length > 0 ? udhaarsData : [{ 'Date': '', 'Type': '', 'Person Name': '', 'Amount (INR)': 0, 'Status': '' }]);
+    XLSX.utils.book_append_sheet(workbook, wsUdhaars, 'Udhaar Khata');
+
+    // Add Sheet 4: Fuel & Mileage Tracker
+    const wsFuel = XLSX.utils.json_to_sheet(fuelLogsData.length > 0 ? fuelLogsData : [{ 'Date': '', 'Vehicle Name': '', 'Fuel Amount (INR)': 0, 'Odometer Reading (km)': 0 }]);
+    XLSX.utils.book_append_sheet(workbook, wsFuel, 'Fuel & Mileage Tracker');
+
+    // Add Sheet 5: Gullak & Savings Summary
+    const wsGullak = XLSX.utils.json_to_sheet(gullakData);
+    XLSX.utils.book_append_sheet(workbook, wsGullak, 'Gullak & Savings');
+
+    // Add Sheet 6: Account & Linked Members
     const wsAcc = XLSX.utils.json_to_sheet(accountData);
     XLSX.utils.book_append_sheet(workbook, wsAcc, 'Account Details');
 
-    // Add Sheet 4: Linked Members
     const wsMembers = XLSX.utils.json_to_sheet(linkedMembersData);
     XLSX.utils.book_append_sheet(workbook, wsMembers, 'Linked Members');
 
-    // Add Sheet 5: Internal Metadata
+    // Add Sheet 7: Internal High-Fidelity JSON Backup Data
     const wsMeta = XLSX.utils.json_to_sheet(rawBackupPayload);
     XLSX.utils.book_append_sheet(workbook, wsMeta, '_TeleExpense_Backup_Data_');
 

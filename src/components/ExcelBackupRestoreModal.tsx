@@ -23,10 +23,14 @@ import {
   ExternalLink,
   Tag,
   User,
-  Wallet
+  Wallet,
+  ArrowLeftRight,
+  Fuel,
+  PiggyBank,
+  Users
 } from 'lucide-react';
 import { safeFetchJson } from '../utils/api';
-import { Transaction, CategoryDef, CategoryBudget, FinancialSummary } from '../types';
+import { Transaction, CategoryDef, CategoryBudget, FinancialSummary, UdhaarRecord, FuelLog } from '../types';
 import * as XLSX from 'xlsx';
 
 interface StorageStatus {
@@ -46,7 +50,9 @@ interface ExcelBackupRestoreModalProps {
   onClose: () => void;
   transactions: Transaction[];
   categories: CategoryDef[];
-  currentUser: { name: string; id: string; telegramUsername?: string; telegramChatId?: string; linkCode?: string } | null;
+  currentUser: { name: string; id: string; telegramUsername?: string; telegramChatId?: string; linkCode?: string; linkedMembers?: any[] } | null;
+  udhaars?: UdhaarRecord[];
+  fuelLogs?: FuelLog[];
   onRestoreSuccess: (result: {
     transactions: Transaction[];
     categories: CategoryDef[];
@@ -54,6 +60,10 @@ interface ExcelBackupRestoreModalProps {
     summary: FinancialSummary;
     restoredCount: number;
     categoriesCreated: number;
+    udhaarsCount?: number;
+    fuelLogsCount?: number;
+    udhaars?: UdhaarRecord[];
+    fuelLogs?: FuelLog[];
   }) => void;
 }
 
@@ -63,6 +73,8 @@ export const ExcelBackupRestoreModal: React.FC<ExcelBackupRestoreModalProps> = (
   transactions,
   categories,
   currentUser,
+  udhaars = [],
+  fuelLogs = [],
   onRestoreSuccess,
 }) => {
   const [activeTab, setActiveTab] = useState<'export' | 'restore' | 'storage'>('export');
@@ -70,6 +82,10 @@ export const ExcelBackupRestoreModal: React.FC<ExcelBackupRestoreModalProps> = (
   const [fileBase64, setFileBase64] = useState<string | null>(null);
   const [parsedRows, setParsedRows] = useState<any[]>([]);
   const [parsedCatRows, setParsedCatRows] = useState<any[]>([]);
+  const [parsedUdhaarRows, setParsedUdhaarRows] = useState<any[]>([]);
+  const [parsedFuelRows, setParsedFuelRows] = useState<any[]>([]);
+  const [isSnapshotDetected, setIsSnapshotDetected] = useState<boolean>(false);
+  const [previewTab, setPreviewTab] = useState<'transactions' | 'udhaars' | 'fuel'>('transactions');
   const [detectedSheets, setDetectedSheets] = useState<string[]>([]);
   const [replaceExisting, setReplaceExisting] = useState<boolean>(false);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -135,6 +151,7 @@ export const ExcelBackupRestoreModal: React.FC<ExcelBackupRestoreModalProps> = (
     setError(null);
     setSuccessMessage(null);
     setFile(selectedFile);
+    setIsSnapshotDetected(false);
 
     try {
       const data = await selectedFile.arrayBuffer();
@@ -154,37 +171,75 @@ export const ExcelBackupRestoreModal: React.FC<ExcelBackupRestoreModalProps> = (
 
       let txRows: any[] = [];
       let catRows: any[] = [];
+      let udhaarRows: any[] = [];
+      let fuelRows: any[] = [];
+      let foundSnapshot = false;
 
-      for (const sName of workbook.SheetNames) {
-        const lowerName = sName.toLowerCase();
-        const sheet = workbook.Sheets[sName];
-        const rows = XLSX.utils.sheet_to_json<any>(sheet);
-        if (lowerName.includes('transaction') || lowerName.includes('ledger')) {
-          txRows = rows;
-        } else if (lowerName.includes('categor') || lowerName.includes('budget')) {
-          catRows = rows;
+      // 1. Check for High-Fidelity JSON snapshot sheet
+      const metaSheet = workbook.Sheets['_TeleExpense_Backup_Data_'];
+      if (metaSheet) {
+        const metaRows = XLSX.utils.sheet_to_json<any>(metaSheet);
+        if (metaRows.length > 0) {
+          const fullJsonStr = metaRows.map(r => r.DataJSON || r.ChunkText || '').join('');
+          if (fullJsonStr.trim().startsWith('{')) {
+            try {
+              const fullData = JSON.parse(fullJsonStr);
+              if (Array.isArray(fullData.transactions)) txRows = fullData.transactions;
+              if (Array.isArray(fullData.categories)) catRows = fullData.categories;
+              if (Array.isArray(fullData.udhaars)) udhaarRows = fullData.udhaars;
+              if (Array.isArray(fullData.fuelLogs)) fuelRows = fullData.fuelLogs;
+              foundSnapshot = true;
+              setIsSnapshotDetected(true);
+            } catch (err) {
+              console.warn('Client JSON snapshot parse error, falling back to sheet rows', err);
+            }
+          }
         }
       }
 
-      // If no explicit transaction sheet, use first sheet
-      if (txRows.length === 0 && workbook.SheetNames.length > 0) {
-        txRows = XLSX.utils.sheet_to_json<any>(workbook.Sheets[workbook.SheetNames[0]]);
+      // 2. If not from snapshot, inspect individual sheets
+      if (!foundSnapshot) {
+        for (const sName of workbook.SheetNames) {
+          const lowerName = sName.toLowerCase();
+          const sheet = workbook.Sheets[sName];
+          const rows = XLSX.utils.sheet_to_json<any>(sheet);
+          if (lowerName.includes('transaction') || lowerName.includes('ledger')) {
+            txRows = rows;
+          } else if (lowerName.includes('categor') || lowerName.includes('budget')) {
+            catRows = rows;
+          } else if (lowerName.includes('udhaar') || lowerName.includes('khata') || lowerName.includes('debt') || lowerName.includes('borrow') || lowerName.includes('lent')) {
+            udhaarRows = rows;
+          } else if (lowerName.includes('fuel') || lowerName.includes('mileage') || lowerName.includes('vehicle') || lowerName.includes('petrol')) {
+            fuelRows = rows;
+          }
+        }
+
+        // Fallback: If no explicit transaction sheet, use first sheet
+        if (txRows.length === 0 && workbook.SheetNames.length > 0) {
+          txRows = XLSX.utils.sheet_to_json<any>(workbook.Sheets[workbook.SheetNames[0]]);
+        }
       }
 
-      if (txRows.length === 0 && catRows.length === 0) {
+      if (txRows.length === 0 && catRows.length === 0 && udhaarRows.length === 0 && fuelRows.length === 0) {
         setError('Uploaded file khali hai ya koi valid records nahi mile.');
         setParsedRows([]);
         setParsedCatRows([]);
+        setParsedUdhaarRows([]);
+        setParsedFuelRows([]);
         return;
       }
 
       setParsedRows(txRows);
       setParsedCatRows(catRows);
+      setParsedUdhaarRows(udhaarRows);
+      setParsedFuelRows(fuelRows);
     } catch (err: any) {
       console.error('File parsing error', err);
       setError(`File padhne me error: ${err.message || 'Invalid Excel/CSV format'}`);
       setParsedRows([]);
       setParsedCatRows([]);
+      setParsedUdhaarRows([]);
+      setParsedFuelRows([]);
       setFileBase64(null);
     }
   };
@@ -205,7 +260,7 @@ export const ExcelBackupRestoreModal: React.FC<ExcelBackupRestoreModalProps> = (
 
   // Trigger restore API
   const handleRestore = async () => {
-    if (parsedRows.length === 0 && parsedCatRows.length === 0 && !fileBase64) {
+    if (parsedRows.length === 0 && parsedCatRows.length === 0 && parsedUdhaarRows.length === 0 && parsedFuelRows.length === 0 && !fileBase64) {
       setError('Pehle ek valid Excel (.xlsx) ya CSV backup file chuniye.');
       return;
     }
@@ -220,9 +275,13 @@ export const ExcelBackupRestoreModal: React.FC<ExcelBackupRestoreModalProps> = (
         message: string;
         restoredCount: number;
         categoriesCreated: number;
+        udhaarsCount?: number;
+        fuelLogsCount?: number;
         transactions: Transaction[];
         categories: CategoryDef[];
         budgets: CategoryBudget[];
+        udhaars?: UdhaarRecord[];
+        fuelLogs?: FuelLog[];
         summary: FinancialSummary;
       }>('/api/transactions/restore-backup', {
         method: 'POST',
@@ -230,6 +289,8 @@ export const ExcelBackupRestoreModal: React.FC<ExcelBackupRestoreModalProps> = (
         body: JSON.stringify({
           rows: parsedRows,
           categoriesRows: parsedCatRows,
+          udhaarRows: parsedUdhaarRows,
+          fuelRows: parsedFuelRows,
           fileBase64: fileBase64,
           replaceExisting,
         }),
@@ -408,13 +469,13 @@ export const ExcelBackupRestoreModal: React.FC<ExcelBackupRestoreModalProps> = (
                 <div className="flex items-start justify-between gap-3">
                   <div className="space-y-1">
                     <span className="text-[10px] font-bold text-cyan-400 uppercase tracking-wider bg-cyan-950/80 px-2 py-0.5 rounded-full border border-cyan-500/40">
-                      RECOMMENDED FOR FULL BACKUP
+                      RECOMMENDED • COMPLETE ACCOUNT ARCHIVE
                     </span>
                     <h3 className="text-sm sm:text-base font-bold text-white mt-1">
                       1-Click Complete Account Excel Backup (.xlsx)
                     </h3>
                     <p className="text-xs text-slate-300 leading-relaxed">
-                      Ek hi Excel file me aapke khate ke <b>Transactions</b>, <b>Custom Categories</b>, <b>Monthly Budgets</b>, aur <b>Telegram Account Info</b> sab download ho jayenge.
+                      Ek hi multi-sheet Excel file me aapke khate ka pura data download ho jayega: <b>Transactions</b>, <b>Custom Categories</b>, <b>Monthly Budgets</b>, <b>Udhaar Khata (Lent & Borrow)</b>, <b>Fuel & Mileage Tracker</b>, <b>Gullak Savings</b>, aur <b>Linked Telegram Family Members</b>.
                     </p>
                   </div>
                   <div className="w-12 h-12 rounded-2xl bg-emerald-950/80 border border-emerald-500/60 flex items-center justify-center text-emerald-400 shrink-0 shadow-lg">
@@ -422,19 +483,43 @@ export const ExcelBackupRestoreModal: React.FC<ExcelBackupRestoreModalProps> = (
                   </div>
                 </div>
 
-                {/* Account Summary Stats in Backup */}
-                <div className="grid grid-cols-3 gap-2 text-xs pt-1 border-t border-slate-800">
+                {/* Account Summary Stats in Backup (6 modules) */}
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-xs pt-1 border-t border-slate-800">
                   <div className="p-2.5 rounded-xl bg-slate-950/80 border border-slate-800/80">
-                    <span className="text-[10px] text-slate-400 block">TRANSACTIONS</span>
+                    <span className="text-[10px] text-slate-400 block flex items-center gap-1">
+                      <FileSpreadsheet className="w-3 h-3 text-cyan-400" /> TRANSACTIONS
+                    </span>
                     <span className="font-bold text-white mt-0.5 block text-sm">{transactions.length} Records</span>
                   </div>
                   <div className="p-2.5 rounded-xl bg-slate-950/80 border border-slate-800/80">
-                    <span className="text-[10px] text-slate-400 block">CATEGORIES</span>
+                    <span className="text-[10px] text-slate-400 block flex items-center gap-1">
+                      <Tag className="w-3 h-3 text-indigo-400" /> CATEGORIES
+                    </span>
                     <span className="font-bold text-cyan-300 mt-0.5 block text-sm">{categories.length} Categories</span>
                   </div>
                   <div className="p-2.5 rounded-xl bg-slate-950/80 border border-slate-800/80">
-                    <span className="text-[10px] text-slate-400 block">KHATA USER</span>
-                    <span className="font-bold text-emerald-400 mt-0.5 block truncate text-xs">{currentUser?.name || 'Main User'}</span>
+                    <span className="text-[10px] text-slate-400 block flex items-center gap-1">
+                      <ArrowLeftRight className="w-3 h-3 text-amber-400" /> UDHAAR KHATA
+                    </span>
+                    <span className="font-bold text-amber-300 mt-0.5 block text-sm">{udhaars.length} Records</span>
+                  </div>
+                  <div className="p-2.5 rounded-xl bg-slate-950/80 border border-slate-800/80">
+                    <span className="text-[10px] text-slate-400 block flex items-center gap-1">
+                      <Fuel className="w-3 h-3 text-emerald-400" /> FUEL & MILEAGE
+                    </span>
+                    <span className="font-bold text-emerald-300 mt-0.5 block text-sm">{fuelLogs.length} Logs</span>
+                  </div>
+                  <div className="p-2.5 rounded-xl bg-slate-950/80 border border-slate-800/80">
+                    <span className="text-[10px] text-slate-400 block flex items-center gap-1">
+                      <PiggyBank className="w-3 h-3 text-pink-400" /> GULLAK SAVINGS
+                    </span>
+                    <span className="font-bold text-pink-300 mt-0.5 block text-sm">Active Piggy Bank</span>
+                  </div>
+                  <div className="p-2.5 rounded-xl bg-slate-950/80 border border-slate-800/80">
+                    <span className="text-[10px] text-slate-400 block flex items-center gap-1">
+                      <Users className="w-3 h-3 text-purple-400" /> KHATA & MEMBERS
+                    </span>
+                    <span className="font-bold text-purple-300 mt-0.5 block truncate text-xs">{currentUser?.name || 'Main User'} ({currentUser?.linkedMembers?.length || 1})</span>
                   </div>
                 </div>
 
@@ -444,7 +529,7 @@ export const ExcelBackupRestoreModal: React.FC<ExcelBackupRestoreModalProps> = (
                   className="w-full py-3.5 px-4 rounded-xl bg-gradient-to-r from-emerald-500 via-teal-500 to-cyan-500 hover:from-emerald-400 hover:to-cyan-400 text-slate-950 font-bold text-xs sm:text-sm flex items-center justify-center space-x-2.5 transition-all cursor-pointer shadow-lg shadow-emerald-950/60 group"
                 >
                   <Download className="w-5 h-5 stroke-[2.5] group-hover:translate-y-0.5 transition-transform" />
-                  <span>DOWNLOAD FULL EXCEL BACKUP (.XLSX)</span>
+                  <span>DOWNLOAD FULL 7-SHEET EXCEL BACKUP (.XLSX)</span>
                 </button>
               </div>
 
@@ -455,7 +540,7 @@ export const ExcelBackupRestoreModal: React.FC<ExcelBackupRestoreModalProps> = (
                     <FileText className="w-4 h-4" />
                   </div>
                   <div>
-                    <h4 className="text-xs font-bold text-white">Standard CSV File (.CSV)</h4>
+                    <h4 className="text-xs font-bold text-white">Transactions CSV File (.CSV)</h4>
                     <p className="text-[10px] text-slate-400">Google Sheets ya plain table ke liye single-sheet CSV export</p>
                   </div>
                 </div>
@@ -480,7 +565,7 @@ export const ExcelBackupRestoreModal: React.FC<ExcelBackupRestoreModalProps> = (
               <div className="p-3.5 rounded-2xl bg-cyan-950/30 border border-cyan-500/30 flex items-start space-x-3 text-xs text-slate-300">
                 <Info className="w-4 h-4 text-cyan-400 shrink-0 mt-0.5" />
                 <p className="leading-relaxed">
-                  Aap TeleExpense se download kiye gaye Excel (.xlsx) ya CSV file ko yahan upload karein. Isme <b>Transactions</b>, <b>Raw Telegram Messages</b>, <b>Custom Categories</b> aur <b>Budgets</b> sab automatic restore ho jayenge.
+                  Aap TeleExpense se download kiye gaye Excel (.xlsx) ya CSV file ko yahan upload karein. Isme <b>Transactions</b>, <b>Udhaar Khata</b>, <b>Fuel & Mileage Logs</b>, <b>Categories</b> aur <b>Budgets</b> sab automatic detect ho kar restore ho jayenge.
                 </p>
               </div>
 
@@ -519,7 +604,7 @@ export const ExcelBackupRestoreModal: React.FC<ExcelBackupRestoreModalProps> = (
                       {file.name}
                     </span>
                     <span className="text-[11px] text-slate-400 mt-1 block">
-                      {parsedRows.length} transactions {parsedCatRows.length > 0 ? `• ${parsedCatRows.length} categories` : ''} mili hain • Click karke doosri file chuniye
+                      {parsedRows.length} transactions {parsedUdhaarRows.length > 0 ? `• ${parsedUdhaarRows.length} udhaar` : ''} {parsedFuelRows.length > 0 ? `• ${parsedFuelRows.length} fuel logs` : ''} mili hain • Click karke doosri file chuniye
                     </span>
                   </div>
                 ) : (
@@ -528,7 +613,7 @@ export const ExcelBackupRestoreModal: React.FC<ExcelBackupRestoreModalProps> = (
                       Excel (.xlsx) ya CSV Backup File Yahan Upload Karein
                     </span>
                     <span className="text-[11px] text-slate-400 mt-1 block">
-                      Supports TeleExpense exported full backups with all categories & raw messages
+                      Supports complete TeleExpense backups with Transactions, Udhaar, Fuel, Categories & Settings
                     </span>
                   </div>
                 )}
@@ -537,9 +622,16 @@ export const ExcelBackupRestoreModal: React.FC<ExcelBackupRestoreModalProps> = (
               {/* Detected Content Badges */}
               {file && (
                 <div className="p-3.5 rounded-2xl bg-slate-950/80 border border-slate-800 space-y-2">
-                  <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block">
-                    FILE ME PAYA GAYA DATA:
-                  </span>
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block">
+                      FILE ME PAYA GAYA DATA:
+                    </span>
+                    {isSnapshotDetected && (
+                      <span className="px-2 py-0.5 rounded-full text-[9px] font-bold bg-emerald-950 text-emerald-300 border border-emerald-500/50 flex items-center gap-1">
+                        <Sparkles className="w-3 h-3" /> All-in-One High-Fidelity Snapshot
+                      </span>
+                    )}
+                  </div>
                   <div className="flex flex-wrap gap-2 text-xs">
                     <span className="px-2.5 py-1 rounded-lg bg-indigo-950/80 border border-indigo-500/40 text-indigo-300 flex items-center gap-1.5">
                       <FileSpreadsheet className="w-3.5 h-3.5" />
@@ -548,13 +640,25 @@ export const ExcelBackupRestoreModal: React.FC<ExcelBackupRestoreModalProps> = (
                     {parsedCatRows.length > 0 && (
                       <span className="px-2.5 py-1 rounded-lg bg-cyan-950/80 border border-cyan-500/40 text-cyan-300 flex items-center gap-1.5">
                         <Tag className="w-3.5 h-3.5" />
-                        <b>{parsedCatRows.length}</b> Categories & Budgets
+                        <b>{parsedCatRows.length}</b> Categories
+                      </span>
+                    )}
+                    {parsedUdhaarRows.length > 0 && (
+                      <span className="px-2.5 py-1 rounded-lg bg-amber-950/80 border border-amber-500/40 text-amber-300 flex items-center gap-1.5">
+                        <ArrowLeftRight className="w-3.5 h-3.5" />
+                        <b>{parsedUdhaarRows.length}</b> Udhaar Records
+                      </span>
+                    )}
+                    {parsedFuelRows.length > 0 && (
+                      <span className="px-2.5 py-1 rounded-lg bg-emerald-950/80 border border-emerald-500/40 text-emerald-300 flex items-center gap-1.5">
+                        <Fuel className="w-3.5 h-3.5" />
+                        <b>{parsedFuelRows.length}</b> Fuel Logs
                       </span>
                     )}
                     {detectedSheets.length > 1 && (
-                      <span className="px-2.5 py-1 rounded-lg bg-emerald-950/80 border border-emerald-500/40 text-emerald-300 flex items-center gap-1.5">
-                        <CheckCircle2 className="w-3.5 h-3.5" />
-                        Multi-Sheet Complete Backup
+                      <span className="px-2.5 py-1 rounded-lg bg-purple-950/80 border border-purple-500/40 text-purple-300 flex items-center gap-1.5">
+                        <Layers className="w-3.5 h-3.5" />
+                        {detectedSheets.length} Sheets
                       </span>
                     )}
                   </div>
@@ -606,56 +710,168 @@ export const ExcelBackupRestoreModal: React.FC<ExcelBackupRestoreModalProps> = (
                 </div>
               </div>
 
-              {/* Parsed Preview Table */}
-              {parsedRows.length > 0 && (
+              {/* Parsed Preview Table with Tabs */}
+              {(parsedRows.length > 0 || parsedUdhaarRows.length > 0 || parsedFuelRows.length > 0) && (
                 <div className="space-y-2">
-                  <div className="flex items-center justify-between text-xs text-slate-400">
-                    <span className="font-bold text-slate-200">
-                      TRANSACTION PREVIEW ({parsedRows.length} RECORDS)
-                    </span>
+                  <div className="flex items-center justify-between text-xs text-slate-400 flex-wrap gap-2">
+                    <div className="flex items-center space-x-2">
+                      <button
+                        onClick={() => setPreviewTab('transactions')}
+                        className={`px-2.5 py-1 rounded-lg text-[10px] font-bold transition-all cursor-pointer ${
+                          previewTab === 'transactions' ? 'bg-cyan-950 text-cyan-300 border border-cyan-500/50' : 'text-slate-400 hover:text-white'
+                        }`}
+                      >
+                        Transactions ({parsedRows.length})
+                      </button>
+                      {parsedUdhaarRows.length > 0 && (
+                        <button
+                          onClick={() => setPreviewTab('udhaars')}
+                          className={`px-2.5 py-1 rounded-lg text-[10px] font-bold transition-all cursor-pointer ${
+                            previewTab === 'udhaars' ? 'bg-amber-950 text-amber-300 border border-amber-500/50' : 'text-slate-400 hover:text-white'
+                          }`}
+                        >
+                          Udhaar ({parsedUdhaarRows.length})
+                        </button>
+                      )}
+                      {parsedFuelRows.length > 0 && (
+                        <button
+                          onClick={() => setPreviewTab('fuel')}
+                          className={`px-2.5 py-1 rounded-lg text-[10px] font-bold transition-all cursor-pointer ${
+                            previewTab === 'fuel' ? 'bg-emerald-950 text-emerald-300 border border-emerald-500/50' : 'text-slate-400 hover:text-white'
+                          }`}
+                        >
+                          Fuel Logs ({parsedFuelRows.length})
+                        </button>
+                      )}
+                    </div>
                     <span className="text-[10px] text-cyan-400">
                       Showing first 4 rows
                     </span>
                   </div>
 
-                  <div className="max-h-44 overflow-y-auto rounded-xl border border-slate-800 bg-slate-950/90 text-[11px]">
-                    <table className="w-full text-left">
-                      <thead className="bg-slate-900/90 text-slate-400 sticky top-0 border-b border-slate-800 text-[10px]">
-                        <tr>
-                          <th className="p-2">Tareeq</th>
-                          <th className="p-2">Type</th>
-                          <th className="p-2">Amount</th>
-                          <th className="p-2">Category</th>
-                          <th className="p-2">Raw Message / Description</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-900 text-slate-300">
-                        {parsedRows.slice(0, 4).map((row, idx) => {
-                          const date = row.Date || row.date || row.Tareeq || '—';
-                          const type = String(row.Type || row.type || 'expense').toLowerCase();
-                          const amount = row['Amount (INR)'] || row.Amount || row.amount || row.rupaye || '0';
-                          const category = row['Category Name'] || row.Category || row.category || 'Uncategorized';
-                          const msg = row['Raw Message'] || row.rawMessage || row.Description || row.description || '—';
+                  {previewTab === 'transactions' && parsedRows.length > 0 && (
+                    <div className="max-h-44 overflow-y-auto rounded-xl border border-slate-800 bg-slate-950/90 text-[11px]">
+                      <table className="w-full text-left">
+                        <thead className="bg-slate-900/90 text-slate-400 sticky top-0 border-b border-slate-800 text-[10px]">
+                          <tr>
+                            <th className="p-2">Tareeq</th>
+                            <th className="p-2">Type</th>
+                            <th className="p-2">Amount</th>
+                            <th className="p-2">Category</th>
+                            <th className="p-2">Raw Message / Description</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-900 text-slate-300">
+                          {parsedRows.slice(0, 4).map((row, idx) => {
+                            const date = row.Date || row.date || row.Tareeq || '—';
+                            const type = String(row.Type || row.type || 'expense').toLowerCase();
+                            const amount = row['Amount (INR)'] || row.Amount || row.amount || row.rupaye || '0';
+                            const category = row['Category Name'] || row.Category || row.category || 'Uncategorized';
+                            const msg = row['Raw Message'] || row.rawMessage || row.Description || row.description || '—';
 
-                          return (
-                            <tr key={idx} className="hover:bg-slate-900/50">
-                              <td className="p-2 whitespace-nowrap text-slate-400">{String(date)}</td>
-                              <td className="p-2 whitespace-nowrap">
-                                <span className={`px-1.5 py-0.2 rounded text-[9px] font-bold ${
-                                  type.includes('income') ? 'bg-emerald-950 text-emerald-300' : 'bg-rose-950 text-rose-300'
-                                }`}>
-                                  {type.toUpperCase()}
-                                </span>
-                              </td>
-                              <td className="p-2 font-bold text-white whitespace-nowrap">₹{amount}</td>
-                              <td className="p-2 text-cyan-300 whitespace-nowrap">{category}</td>
-                              <td className="p-2 text-slate-400 truncate max-w-xs">{String(msg)}</td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
+                            return (
+                              <tr key={idx} className="hover:bg-slate-900/50">
+                                <td className="p-2 whitespace-nowrap text-slate-400">{String(date)}</td>
+                                <td className="p-2 whitespace-nowrap">
+                                  <span className={`px-1.5 py-0.2 rounded text-[9px] font-bold ${
+                                    type.includes('income') ? 'bg-emerald-950 text-emerald-300' : 'bg-rose-950 text-rose-300'
+                                  }`}>
+                                    {type.toUpperCase()}
+                                  </span>
+                                </td>
+                                <td className="p-2 font-bold text-white whitespace-nowrap">₹{amount}</td>
+                                <td className="p-2 text-cyan-300 whitespace-nowrap">{category}</td>
+                                <td className="p-2 text-slate-400 truncate max-w-xs">{String(msg)}</td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+
+                  {previewTab === 'udhaars' && parsedUdhaarRows.length > 0 && (
+                    <div className="max-h-44 overflow-y-auto rounded-xl border border-slate-800 bg-slate-950/90 text-[11px]">
+                      <table className="w-full text-left">
+                        <thead className="bg-slate-900/90 text-slate-400 sticky top-0 border-b border-slate-800 text-[10px]">
+                          <tr>
+                            <th className="p-2">Tareeq</th>
+                            <th className="p-2">Type</th>
+                            <th className="p-2">Person</th>
+                            <th className="p-2">Amount</th>
+                            <th className="p-2">Status</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-900 text-slate-300">
+                          {parsedUdhaarRows.slice(0, 4).map((row, idx) => {
+                            const date = row.Date || row.date || '—';
+                            const rawType = String(row.Type || row.type || 'lent').toLowerCase();
+                            const isLent = rawType.includes('lent') || rawType.includes('diya');
+                            const person = row['Person Name'] || row.personName || row.person || '—';
+                            const amount = row['Amount (INR)'] || row.Amount || row.amount || '0';
+                            const status = String(row.Status || row.status || 'pending').toUpperCase();
+
+                            return (
+                              <tr key={idx} className="hover:bg-slate-900/50">
+                                <td className="p-2 whitespace-nowrap text-slate-400">{String(date)}</td>
+                                <td className="p-2 whitespace-nowrap">
+                                  <span className={`px-1.5 py-0.2 rounded text-[9px] font-bold ${
+                                    isLent ? 'bg-amber-950 text-amber-300' : 'bg-cyan-950 text-cyan-300'
+                                  }`}>
+                                    {isLent ? 'LENT (Diya)' : 'BORROWED (Liya)'}
+                                  </span>
+                                </td>
+                                <td className="p-2 font-bold text-white whitespace-nowrap">{String(person)}</td>
+                                <td className="p-2 font-bold text-amber-400 whitespace-nowrap">₹{amount}</td>
+                                <td className="p-2 whitespace-nowrap">
+                                  <span className={`px-1.5 py-0.2 rounded text-[9px] font-bold ${
+                                    status.includes('SETTLE') ? 'bg-emerald-950 text-emerald-300' : 'bg-rose-950 text-rose-300'
+                                  }`}>
+                                    {status}
+                                  </span>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+
+                  {previewTab === 'fuel' && parsedFuelRows.length > 0 && (
+                    <div className="max-h-44 overflow-y-auto rounded-xl border border-slate-800 bg-slate-950/90 text-[11px]">
+                      <table className="w-full text-left">
+                        <thead className="bg-slate-900/90 text-slate-400 sticky top-0 border-b border-slate-800 text-[10px]">
+                          <tr>
+                            <th className="p-2">Tareeq</th>
+                            <th className="p-2">Vehicle</th>
+                            <th className="p-2">Amount</th>
+                            <th className="p-2">Odometer</th>
+                            <th className="p-2">Mileage</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-900 text-slate-300">
+                          {parsedFuelRows.slice(0, 4).map((row, idx) => {
+                            const date = row.Date || row.date || '—';
+                            const vehicle = row['Vehicle Name'] || row.vehicleName || 'Vehicle';
+                            const amount = row['Fuel Amount (INR)'] || row.fuelAmount || row.Amount || '0';
+                            const odo = row['Odometer Reading (km)'] || row.odometer || '—';
+                            const mileage = row['Calculated Mileage (km/L)'] || row.calculatedMileage || '—';
+
+                            return (
+                              <tr key={idx} className="hover:bg-slate-900/50">
+                                <td className="p-2 whitespace-nowrap text-slate-400">{String(date)}</td>
+                                <td className="p-2 font-bold text-white whitespace-nowrap">{String(vehicle)}</td>
+                                <td className="p-2 font-bold text-emerald-400 whitespace-nowrap">₹{amount}</td>
+                                <td className="p-2 text-slate-300 whitespace-nowrap">{String(odo)} km</td>
+                                <td className="p-2 text-cyan-300 whitespace-nowrap">{mileage ? `${mileage} km/L` : '—'}</td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -835,9 +1051,9 @@ export const ExcelBackupRestoreModal: React.FC<ExcelBackupRestoreModalProps> = (
           {activeTab === 'restore' && (
             <button
               onClick={handleRestore}
-              disabled={isProcessing || (parsedRows.length === 0 && parsedCatRows.length === 0 && !fileBase64)}
+              disabled={isProcessing || (parsedRows.length === 0 && parsedCatRows.length === 0 && parsedUdhaarRows.length === 0 && parsedFuelRows.length === 0 && !fileBase64)}
               className={`px-5 py-2.5 rounded-xl text-xs font-mono font-bold flex items-center space-x-2 shadow-lg transition-all cursor-pointer ${
-                (parsedRows.length > 0 || parsedCatRows.length > 0 || fileBase64) && !isProcessing
+                (parsedRows.length > 0 || parsedCatRows.length > 0 || parsedUdhaarRows.length > 0 || parsedFuelRows.length > 0 || fileBase64) && !isProcessing
                   ? 'bg-cyan-500 hover:bg-cyan-400 text-slate-950 shadow-cyan-950/50'
                   : 'bg-slate-800 text-slate-500 cursor-not-allowed'
               }`}
@@ -850,7 +1066,13 @@ export const ExcelBackupRestoreModal: React.FC<ExcelBackupRestoreModalProps> = (
               ) : (
                 <>
                   <Upload className="w-4 h-4 stroke-[2.5]" />
-                  <span>{parsedRows.length > 0 ? `RESTORE SAB KUCHH (${parsedRows.length} TXS)` : 'FILE CHUNIYE'}</span>
+                  <span>
+                    {parsedRows.length > 0 || parsedUdhaarRows.length > 0 || parsedFuelRows.length > 0
+                      ? `RESTORE SAB KUCHH (${parsedRows.length + parsedUdhaarRows.length + parsedFuelRows.length} RECORDS)`
+                      : fileBase64
+                      ? 'RESTORE EXCEL BACKUP'
+                      : 'FILE CHUNIYE'}
+                  </span>
                 </>
               )}
             </button>
