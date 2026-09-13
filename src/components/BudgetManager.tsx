@@ -184,15 +184,15 @@ export const BudgetManager: React.FC<BudgetManagerProps> = ({
 
   // Summary statistics
   const totalBudgetLimit = useMemo(() => {
-    return displayBudgets.reduce((acc, b) => acc + (b.limit || 0), 0);
+    return (displayBudgets || []).reduce((acc, b) => acc + (b?.limit || 0), 0);
   }, [displayBudgets]);
 
   const totalSpent = useMemo(() => {
-    return displayBudgets.reduce((acc, b) => acc + (b.spent || 0), 0);
+    return (displayBudgets || []).reduce((acc, b) => acc + (b?.spent || 0), 0);
   }, [displayBudgets]);
 
   const exceededCount = useMemo(() => {
-    return displayBudgets.filter((b) => b.limit > 0 && b.spent > b.limit).length;
+    return (displayBudgets || []).filter((b) => b && b.limit > 0 && b.spent > b.limit).length;
   }, [displayBudgets]);
 
   // Helper to trigger toast

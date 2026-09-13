@@ -80,9 +80,9 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({ transactions }) =>
       .slice(-7);
   }, [transactions]);
 
-  const totalExpense = categoryData.reduce((acc, c) => acc + c.value, 0);
+  const totalExpense = (categoryData || []).reduce((acc, c) => acc + (c?.value || 0), 0);
 
-  if (transactions.length === 0) {
+  if (!transactions || transactions.length === 0) {
     return null;
   }
 

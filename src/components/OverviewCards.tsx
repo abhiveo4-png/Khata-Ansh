@@ -14,14 +14,20 @@ import { formatCurrency } from '../utils/formatters';
 
 interface OverviewCardsProps {
   summary: FinancialSummary;
+  isPrivacyMode?: boolean;
 }
 
-export const OverviewCards: React.FC<OverviewCardsProps> = ({ summary }) => {
+export const OverviewCards: React.FC<OverviewCardsProps> = ({ summary, isPrivacyMode = false }) => {
   const investableSurplus = Math.max(0, summary.totalIncome - summary.totalExpense);
   const isPositiveSavings = summary.netSavings >= 0;
   const budgetPercentage = summary.monthlyBudget > 0 
     ? Math.min(100, Math.round((summary.totalExpense / summary.monthlyBudget) * 100))
     : 0;
+
+  const displayAmount = (val: number) => {
+    if (isPrivacyMode) return '••••';
+    return val.toLocaleString('en-IN');
+  };
 
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -40,7 +46,7 @@ export const OverviewCards: React.FC<OverviewCardsProps> = ({ summary }) => {
         <div className="mt-3">
           <div className="text-2xl sm:text-3xl font-bold text-white tracking-tight flex items-baseline">
             <span className="text-emerald-400 mr-1 text-xl font-normal">₹</span>
-            <span>{summary.totalIncome.toLocaleString('en-IN')}</span>
+            <span>{displayAmount(summary.totalIncome)}</span>
           </div>
         </div>
 
@@ -67,7 +73,7 @@ export const OverviewCards: React.FC<OverviewCardsProps> = ({ summary }) => {
         <div className="mt-3">
           <div className="text-2xl sm:text-3xl font-bold text-white tracking-tight flex items-baseline">
             <span className="text-rose-400 mr-1 text-xl font-normal">₹</span>
-            <span>{summary.totalExpense.toLocaleString('en-IN')}</span>
+            <span>{displayAmount(summary.totalExpense)}</span>
           </div>
         </div>
 
@@ -95,7 +101,7 @@ export const OverviewCards: React.FC<OverviewCardsProps> = ({ summary }) => {
         <div className="mt-3">
           <div className="text-2xl sm:text-3xl font-bold text-cyan-300 tracking-tight flex items-baseline font-mono">
             <span className="mr-1 text-xl font-normal text-cyan-400">₹</span>
-            <span>{investableSurplus.toLocaleString('en-IN')}</span>
+            <span>{displayAmount(investableSurplus)}</span>
           </div>
         </div>
 
@@ -123,7 +129,7 @@ export const OverviewCards: React.FC<OverviewCardsProps> = ({ summary }) => {
             {budgetPercentage}%
           </div>
           <span className="text-xs text-slate-400">
-            Limit: {formatCurrency(summary.monthlyBudget)}
+            Limit: {isPrivacyMode ? '₹••••' : formatCurrency(summary.monthlyBudget)}
           </span>
         </div>
 

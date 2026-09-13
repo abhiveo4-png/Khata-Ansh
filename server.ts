@@ -173,6 +173,37 @@ export interface FinancialSummary {
   dailyAverageExpense: number;
 }
 
+export interface UdhaarRecord {
+  id: string;
+  userId: string;
+  type: 'lent' | 'borrowed'; // 'lent' (Maine Diya / Lena hai) | 'borrowed' (Maine Liya / Dena hai)
+  personName: string; // e.g. "Rohan", "Papa"
+  amount: number;
+  description?: string;
+  date: string; // YYYY-MM-DD
+  time?: string;
+  status: 'pending' | 'settled';
+  settledAt?: string;
+  createdAt: string;
+}
+
+export interface FuelLog {
+  id: string;
+  userId: string;
+  date: string; // YYYY-MM-DD
+  time?: string;
+  vehicleName?: string; // e.g. "Bike", "Car", "Activa"
+  fuelAmount: number; // ₹ paid
+  fuelLiters?: number;
+  odometer: number; // km reading e.g. 45200
+  previousOdometer?: number;
+  distanceCovered?: number; // km
+  calculatedMileage?: number; // km/l
+  costPerKm?: number; // ₹/km
+  notes?: string;
+  createdAt: string;
+}
+
 // Default standard categories including Uncategorized
 export const DEFAULT_CATEGORIES: CategoryDef[] = [
   {
@@ -450,6 +481,8 @@ interface UserDataStore {
   transactions: Transaction[];
   budgets: CategoryBudget[];
   categories: CategoryDef[];
+  udhaars?: UdhaarRecord[];
+  fuelLogs?: FuelLog[];
 }
 
 let users: UserProfile[] = loadJson<UserProfile[]>(USERS_FILE, []);
@@ -583,22 +616,102 @@ function saveActiveAccounts(updated: Record<string, string>): void {
   persistToPg('active_accounts', chatActiveAccounts).catch(() => {});
 }
 
-function setActiveAccountForChat(chatId: string, userId: string): void {
-  chatActiveAccounts[String(chatId)] = userId;
+function setActiveAccountForChat(chatId: string | number, userId: string): void {
+  const cId = String(chatId).trim();
+  if (!cId) return;
+  chatActiveAccounts[cId] = userId;
   saveActiveAccounts(chatActiveAccounts);
 }
 
-export function getLinkedUsersForChat(chatId: string): UserProfile[] {
-  const cId = String(chatId);
-  return users.filter(
-    u => (u.linkedMembers && u.linkedMembers.some(m => String(m.telegramChatId) === cId)) ||
-         String(u.telegramChatId) === cId
-  );
+export function getLinkedUsersForChat(
+  chatId: string | number,
+  fromUserId?: string | number,
+  username?: string
+): UserProfile[] {
+  // Always load fresh users & active accounts from disk
+  users = loadJson<UserProfile[]>(USERS_FILE, users);
+  chatActiveAccounts = loadJson<Record<string, string>>(ACTIVE_ACCOUNTS_FILE, chatActiveAccounts);
+
+  const cId = String(chatId || '').trim();
+  const fId = String(fromUserId || '').trim();
+  const rawUser = String(username || '').replace('@', '').toLowerCase().trim();
+
+  const matchingUsers: UserProfile[] = [];
+  let modified = false;
+
+  for (const u of users) {
+    const uChatId = String(u.telegramChatId || '').trim();
+    const uUsername = String(u.telegramUsername || '').replace('@', '').toLowerCase().trim();
+
+    const matchOwnerChatId = (cId && uChatId === cId) || (fId && uChatId === fId);
+    const matchOwnerUsername = Boolean(rawUser && uUsername && uUsername === rawUser);
+
+    const matchMember = u.linkedMembers && u.linkedMembers.some(m => {
+      const mChatId = String(m.telegramChatId || '').trim();
+      const mUsername = String(m.telegramUsername || '').replace('@', '').toLowerCase().trim();
+      return (cId && mChatId === cId) || (fId && mChatId === fId) || Boolean(rawUser && mUsername && mUsername === rawUser);
+    });
+
+    if (matchOwnerChatId || matchOwnerUsername || matchMember) {
+      // Self-heal: If user was matched by username or member but telegramChatId was missing or different, sync it
+      if (cId && !u.telegramChatId) {
+        u.telegramChatId = cId;
+        if (rawUser && !u.telegramUsername) u.telegramUsername = rawUser;
+        modified = true;
+      }
+      matchingUsers.push(u);
+    }
+  }
+
+  // Fallback 1: Check active accounts map in case chat was mapped
+  if (matchingUsers.length === 0) {
+    const activeId = (cId && chatActiveAccounts[cId]) || (fId && chatActiveAccounts[fId]);
+    if (activeId) {
+      const found = users.find(u => u.id === activeId);
+      if (found) {
+        if (cId && !found.telegramChatId) {
+          found.telegramChatId = cId;
+          modified = true;
+        }
+        matchingUsers.push(found);
+      }
+    }
+  }
+
+  // Fallback 2: If only 1 user exists in system (single-tenant / sole ledger owner)
+  if (matchingUsers.length === 0 && users.length === 1) {
+    const singleUser = users[0];
+    if (cId && !singleUser.telegramChatId) {
+      singleUser.telegramChatId = cId;
+      if (rawUser) singleUser.telegramUsername = rawUser;
+      modified = true;
+    }
+    if (cId) {
+      chatActiveAccounts[cId] = singleUser.id;
+      saveActiveAccounts(chatActiveAccounts);
+    }
+    matchingUsers.push(singleUser);
+  }
+
+  if (modified) {
+    saveUsers(users);
+  }
+
+  return matchingUsers;
 }
 
-export function getActiveAccountForChat(chatId: string, linkedUsers: UserProfile[]): UserProfile | null {
+export function getActiveAccountForChat(
+  chatId: string | number,
+  linkedUsers: UserProfile[],
+  fromUserId?: string | number
+): UserProfile | null {
   if (!linkedUsers || linkedUsers.length === 0) return null;
-  const activeId = chatActiveAccounts[String(chatId)];
+
+  chatActiveAccounts = loadJson<Record<string, string>>(ACTIVE_ACCOUNTS_FILE, chatActiveAccounts);
+  const cId = String(chatId || '').trim();
+  const fId = String(fromUserId || '').trim();
+
+  const activeId = (cId && chatActiveAccounts[cId]) || (fId && chatActiveAccounts[fId]);
   if (activeId) {
     const found = linkedUsers.find(u => u.id === activeId);
     if (found) return found;
@@ -708,11 +821,16 @@ function getUserData(userId: string): UserDataStore {
       transactions: initialTx,
       budgets: initialBudgets,
       categories: [...DEFAULT_CATEGORIES],
+      udhaars: [],
+      fuelLogs: [],
     };
     syncBudgetsWithCategories(store);
     saveJson(filePath, store);
     persistToPg(`user_data:${userId}`, store).catch(() => {});
   }
+
+  if (!store.udhaars) store.udhaars = [];
+  if (!store.fuelLogs) store.fuelLogs = [];
 
   userDataCache.set(userId, store);
   return store;
@@ -2047,6 +2165,8 @@ ${purchasesList}
 export const TELEGRAM_BOT_COMMANDS = [
   { command: 'balance', description: '💰 Net balance aur kul bachat dekhein' },
   { command: 'summary', description: '📊 Mahine ki income, kharcha & bachat report' },
+  { command: 'udhaar', description: '🤝 Udhaar Khata (Lena / Dena Hisab)' },
+  { command: 'fuel', description: '⛽ Vehicle Mileage & Fuel Log Tracker' },
   { command: 'spent', description: '🔍 Kisi item/merchant ka kharcha (e.g. /spent petrol)' },
   { command: 'gullak', description: '🐷 Monthly budget se bachi hui Gullak bachat' },
   { command: 'accounts', description: '👥 Linked accounts dekhein & unlink buttons' },
@@ -2066,6 +2186,7 @@ export const TELEGRAM_BOT_COMMANDS = [
 export const TELEGRAM_HANDY_KEYBOARD = {
   keyboard: [
     [{ text: '💰 Balance' }, { text: '📊 Summary' }],
+    [{ text: '🤝 Udhaar Khata' }, { text: '⛽ Fuel Tracker' }],
     [{ text: '🐷 Gullak' }, { text: '🎯 Category Budget' }],
     [{ text: '👥 My Accounts' }, { text: '📅 Aaj Ka Hisab' }],
     [{ text: '🤖 AI Tips & Bachat' }, { text: '🕒 Recent 5 Tx' }],
@@ -2082,6 +2203,10 @@ export const INLINE_KB_MAIN_COMMANDS = {
       { text: '📊 Summary', callback_data: 'cmd_summary' },
     ],
     [
+      { text: '🤝 Udhaar Khata', callback_data: 'cmd_udhaar' },
+      { text: '⛽ Fuel Tracker', callback_data: 'cmd_fuel' },
+    ],
+    [
       { text: '🐷 Gullak', callback_data: 'cmd_gullak' },
       { text: '🎯 Category Budget', callback_data: 'cmd_budget' },
     ],
@@ -2096,10 +2221,113 @@ export const INLINE_KB_MAIN_COMMANDS = {
   ],
 };
 
-export function buildAccountsReportTelegramMessage(chatId: string | number, userName: string): { text: string; replyMarkup: any } {
+export function buildUdhaarReportTelegramMessage(userId: string): { text: string; replyMarkup: any } {
+  const store = getUserData(userId);
+  const udhaars = store.udhaars || [];
+  const pending = udhaars.filter(u => u.status === 'pending');
+  const lent = pending.filter(u => u.type === 'lent');
+  const borrowed = pending.filter(u => u.type === 'borrowed');
+
+  const totalLent = lent.reduce((sum, u) => sum + u.amount, 0);
+  const totalBorrowed = borrowed.reduce((sum, u) => sum + u.amount, 0);
+  const netDue = totalLent - totalBorrowed;
+
+  let text = `🤝 <b>UDHAAR & KHATA HISAB</b>\n━━━━━━━━━━━━━━━━━━━━\n`;
+  text += `💸 <b>Maine Diya (Lena hai):</b> <b>₹${totalLent.toLocaleString('en-IN')}</b> (${lent.length} log)\n`;
+  text += `📥 <b>Maine Liya (Dena hai):</b> <b>₹${totalBorrowed.toLocaleString('en-IN')}</b> (${borrowed.length} log)\n`;
+  text += `📊 <b>Net Udhaar Balance:</b> <b>${netDue >= 0 ? `🟢 +₹${netDue.toLocaleString('en-IN')} (Aana hai)` : `🔴 -₹${Math.abs(netDue).toLocaleString('en-IN')} (Dena hai)`}</b>\n\n`;
+
+  if (pending.length === 0) {
+    text += `✨ <i>Saara hisab barabar hai! Koi pending udhaar nahi hai.</i>\n\n`;
+  } else {
+    if (lent.length > 0) {
+      text += `<b>🔹 Lena Baaki Hai (Lent):</b>\n`;
+      lent.slice(0, 5).forEach((u) => {
+        text += `• <b>${u.personName}:</b> ₹${u.amount.toLocaleString('en-IN')} <i>(${u.date})</i>\n`;
+      });
+      text += `\n`;
+    }
+    if (borrowed.length > 0) {
+      text += `<b>🔸 Dena Baaki Hai (Borrowed):</b>\n`;
+      borrowed.slice(0, 5).forEach((u) => {
+        text += `• <b>${u.personName}:</b> ₹${u.amount.toLocaleString('en-IN')} <i>(${u.date})</i>\n`;
+      });
+      text += `\n`;
+    }
+  }
+
+  text += `💡 <b>Naya Udhaar add karne ke tareeqe:</b>\n`;
+  text += `• <code>Diya 500 Rohan ko</code> (Lena hai)\n`;
+  text += `• <code>Liya 2000 Papa se</code> (Dena hai)\n`;
+  text += `• <code>Rohan settle</code> (Wapas mil gaya)`;
+
+  return {
+    text,
+    replyMarkup: {
+      inline_keyboard: [
+        [{ text: '💰 Balance', callback_data: 'cmd_balance' }, { text: '📊 Summary', callback_data: 'cmd_summary' }],
+        [{ text: '🎯 Category Budget', callback_data: 'cmd_budget' }, { text: '🕒 Recent 5 Tx', callback_data: 'cmd_recent' }],
+      ],
+    },
+  };
+}
+
+export function buildFuelReportTelegramMessage(userId: string): { text: string; replyMarkup: any } {
+  const store = getUserData(userId);
+  const logs = store.fuelLogs || [];
+
+  if (logs.length === 0) {
+    return {
+      text: `⛽ <b>VEHICLE MILEAGE & FUEL TRACKER</b>\n━━━━━━━━━━━━━━━━━━━━\nℹ️ Abhi tak koi fuel entry record nahi hui hai.\n\n💡 <b>Fuel & Mileage add karne ka format:</b>\n• <code>2000 petrol odo 45200</code>\n• <code>500 petrol odo 12340 bike</code>\n\nBot odometer se pichhle fuel up ka distance, mileage (km/l) aur per-km cost auto calculate karega!`,
+      replyMarkup: {
+        inline_keyboard: [
+          [{ text: '💰 Balance', callback_data: 'cmd_balance' }, { text: '📊 Summary', callback_data: 'cmd_summary' }],
+        ],
+      },
+    };
+  }
+
+  const latest = logs[0];
+  const totalFuelSpent = logs.reduce((sum, l) => sum + l.fuelAmount, 0);
+  const validMileageLogs = logs.filter(l => l.calculatedMileage && l.calculatedMileage > 0);
+  const avgMileage = validMileageLogs.length > 0 
+    ? Math.round((validMileageLogs.reduce((sum, l) => sum + (l.calculatedMileage || 0), 0) / validMileageLogs.length) * 10) / 10
+    : undefined;
+
+  let text = `⛽ <b>VEHICLE MILEAGE & FUEL TRACKER</b>\n━━━━━━━━━━━━━━━━━━━━\n`;
+  text += `🚗 <b>Vehicle:</b> ${latest.vehicleName || 'Vehicle'}\n`;
+  text += `📍 <b>Last Odometer:</b> <b>${latest.odometer.toLocaleString('en-IN')} km</b>\n`;
+  text += `💰 <b>Total Fuel Spend:</b> ₹${totalFuelSpent.toLocaleString('en-IN')} (${logs.length} entries)\n`;
+  if (avgMileage) {
+    text += `⚡ <b>Average Mileage:</b> <b>${avgMileage} km/l</b>\n`;
+  }
+  if (latest.distanceCovered) {
+    text += `📈 <b>Last Trip:</b> ${latest.distanceCovered} km\n`;
+    if (latest.calculatedMileage) text += `⚡ <b>Last Mileage:</b> ~${latest.calculatedMileage} km/l\n`;
+    if (latest.costPerKm) text += `💸 <b>Running Cost:</b> ₹${latest.costPerKm} / km\n`;
+  }
+  text += `\n💡 <b>Nayi Fuel Entry Bhejein:</b>\n• <code>2000 petrol odo ${latest.odometer + 300}</code>`;
+
+  return {
+    text,
+    replyMarkup: {
+      inline_keyboard: [
+        [{ text: '💰 Balance', callback_data: 'cmd_balance' }, { text: '📊 Summary', callback_data: 'cmd_summary' }],
+        [{ text: '🕒 Recent Tx', callback_data: 'cmd_recent' }, { text: '🤖 AI Tips', callback_data: 'cmd_tips' }],
+      ],
+    },
+  };
+}
+
+export function buildAccountsReportTelegramMessage(
+  chatId: string | number,
+  userName: string,
+  fromUserId?: string | number,
+  username?: string
+): { text: string; replyMarkup: any } {
   users = loadJson<UserProfile[]>(USERS_FILE, users);
   const cId = String(chatId);
-  const linkedUsers = getLinkedUsersForChat(cId);
+  const linkedUsers = getLinkedUsersForChat(cId, fromUserId, username);
 
   if (linkedUsers.length === 0) {
     const text = `👥 <b>AAPKE LINKED ACCOUNTS</b>
@@ -2129,7 +2357,7 @@ export function buildAccountsReportTelegramMessage(chatId: string | number, user
     };
   }
 
-  const activeUser = getActiveAccountForChat(cId, linkedUsers);
+  const activeUser = getActiveAccountForChat(cId, linkedUsers, fromUserId);
   let text = `👥 <b>AAPKE LINKED ACCOUNTS</b>
 ━━━━━━━━━━━━━━━━━━━━
 👤 <b>Telegram User:</b> ${userName} (ID: <code>${cId}</code>)
@@ -2286,8 +2514,10 @@ async function handleTelegramCallbackQuery(callbackQuery: any) {
 
   const callbackId = callbackQuery.id;
   const data = (callbackQuery.data || '').trim();
-  const chatId = String(callbackQuery.message?.chat?.id || callbackQuery.from?.id);
+  const chatId = String(callbackQuery.message?.chat?.id || callbackQuery.from?.id || '').trim();
   const fromUser = callbackQuery.from || {};
+  const fromId = String(fromUser.id || '').trim();
+  const fromUsername = fromUser.username ? String(fromUser.username).replace('@', '').trim() : '';
   const userName = fromUser.first_name || fromUser.username || 'User';
 
   // 1. Handle Unlink Button Callback
@@ -2303,23 +2533,27 @@ async function handleTelegramCallbackQuery(callbackQuery: any) {
 
     await answerTelegramCallbackQuery(token, callbackId, `${targetUser.name} unlink ho raha hai...`);
 
-    // Remove this chatId from targetUser's linkedMembers
+    // Remove this chatId / fromId from targetUser's linkedMembers
     if (targetUser.linkedMembers) {
-      targetUser.linkedMembers = targetUser.linkedMembers.filter(m => String(m.telegramChatId) !== String(chatId));
+      targetUser.linkedMembers = targetUser.linkedMembers.filter(
+        m => String(m.telegramChatId).trim() !== chatId && String(m.telegramChatId).trim() !== fromId
+      );
     }
-    if (String(targetUser.telegramChatId) === String(chatId)) {
+    if (String(targetUser.telegramChatId).trim() === chatId || String(targetUser.telegramChatId).trim() === fromId) {
       targetUser.telegramChatId = targetUser.linkedMembers?.[0]?.telegramChatId || undefined;
       targetUser.telegramUsername = targetUser.linkedMembers?.[0]?.telegramUsername || undefined;
     }
     saveUsers(users);
 
     // Update active accounts map if this unlinked account was active
-    const remaining = getLinkedUsersForChat(chatId);
-    if (chatActiveAccounts[chatId] === targetUser.id) {
+    const remaining = getLinkedUsersForChat(chatId, fromId, fromUsername);
+    if (chatActiveAccounts[chatId] === targetUser.id || (fromId && chatActiveAccounts[fromId] === targetUser.id)) {
       if (remaining.length > 0) {
         setActiveAccountForChat(chatId, remaining[0].id);
+        if (fromId) setActiveAccountForChat(fromId, remaining[0].id);
       } else {
         delete chatActiveAccounts[chatId];
+        if (fromId) delete chatActiveAccounts[fromId];
         saveActiveAccounts(chatActiveAccounts);
       }
     }
@@ -2330,7 +2564,7 @@ async function handleTelegramCallbackQuery(callbackQuery: any) {
       `✅ <b>Account Safaltapoorvak Unlink Ho Gaya!</b>\n\nAap <b>${targetUser.name}</b> (<code>${targetUser.email}</code>) ke ledger se successfully disconnect ho chuke hain.\n👥 <b>Bache hue accounts:</b> ${remaining.length}`
     );
 
-    const updatedReport = buildAccountsReportTelegramMessage(chatId, userName);
+    const updatedReport = buildAccountsReportTelegramMessage(chatId, userName, fromId, fromUsername);
     await sendTelegramReply(token, chatId, updatedReport.text, updatedReport.replyMarkup);
     return;
   }
@@ -2343,13 +2577,14 @@ async function handleTelegramCallbackQuery(callbackQuery: any) {
 
     if (targetUser) {
       setActiveAccountForChat(chatId, targetUser.id);
+      if (fromId) setActiveAccountForChat(fromId, targetUser.id);
       await answerTelegramCallbackQuery(token, callbackId, `Switched to ${targetUser.name}`);
       await sendTelegramReply(
         token,
         chatId,
         `🔄 <b>Active Default Khata Switch Ho Gaya!</b>\n\nAb aapka active khata <b>${targetUser.name}</b> (<code>${targetUser.email}</code>) set ho gaya hai.\n\nAb jo bhi kharcha ya income aap likhenge (jaise: <code>300 petrol upi</code>), wo <b>${targetUser.name}</b> ke khate me record hoga.`
       );
-      const updatedReport = buildAccountsReportTelegramMessage(chatId, userName);
+      const updatedReport = buildAccountsReportTelegramMessage(chatId, userName, fromId, fromUsername);
       await sendTelegramReply(token, chatId, updatedReport.text, updatedReport.replyMarkup);
     } else {
       await answerTelegramCallbackQuery(token, callbackId, 'Account nahi mila.');
@@ -2470,6 +2705,8 @@ async function handleTelegramCallbackQuery(callbackQuery: any) {
   let simulatedText = '';
   if (data === 'cmd_balance') simulatedText = '/balance';
   else if (data === 'cmd_summary') simulatedText = '/summary';
+  else if (data === 'cmd_udhaar' || data === 'cmd_khata') simulatedText = '/udhaar';
+  else if (data === 'cmd_fuel' || data === 'cmd_mileage') simulatedText = '/fuel';
   else if (data === 'cmd_gullak') simulatedText = '/gullak';
   else if (data === 'cmd_accounts') simulatedText = '/accounts';
   else if (data === 'cmd_budget' || data === 'cmd_catbudget') simulatedText = '/budget';
@@ -2497,15 +2734,21 @@ async function handleTelegramCallbackQuery(callbackQuery: any) {
 // ---------------- Telegram Message Ingestion Logic ----------------
 
 async function handleTelegramMessage(messageObj: any) {
-  const chatId = String(messageObj.chat.id);
-  const userName = messageObj.from?.first_name || messageObj.from?.username || 'User';
+  const chatId = String(messageObj.chat?.id || messageObj.from?.id || '').trim();
+  const fromId = String(messageObj.from?.id || '').trim();
+  const fromUser = messageObj.from || {};
+  const fromUsername = fromUser.username ? String(fromUser.username).replace('@', '').trim() : '';
+  const userName = fromUser.first_name 
+    ? `${fromUser.first_name}${fromUser.last_name ? ' ' + fromUser.last_name : ''}`.trim()
+    : fromUser.username || 'User';
   const rawText = (messageObj.text || messageObj.caption || '').trim();
   const botToken = botConfig.botToken || process.env.TELEGRAM_BOT_TOKEN;
 
-  if (!botToken) return;
+  if (!botToken || !chatId) return;
 
   // Always reload users from disk on every message so new registrations and links are immediately active
   users = loadJson<UserProfile[]>(USERS_FILE, users);
+  chatActiveAccounts = loadJson<Record<string, string>>(ACTIVE_ACCOUNTS_FILE, chatActiveAccounts);
 
   const lowerText = rawText.toLowerCase().trim();
   const command = rawText.split(' ')[0].toLowerCase();
@@ -2577,13 +2820,15 @@ async function handleTelegramMessage(messageObj: any) {
         userToLink.linkedMembers = [];
       }
 
-      const memberName = messageObj.from?.first_name || userName || userToLink.name;
+      const memberName = userName || userToLink.name;
       const isAlreadyLinked = 
-        String(userToLink.telegramChatId) === String(chatId) || 
-        userToLink.linkedMembers.some(m => String(m.telegramChatId) === String(chatId));
+        String(userToLink.telegramChatId).trim() === chatId || 
+        (fromId && String(userToLink.telegramChatId).trim() === fromId) ||
+        userToLink.linkedMembers.some(m => String(m.telegramChatId).trim() === chatId || (fromId && String(m.telegramChatId).trim() === fromId));
 
       if (isAlreadyLinked) {
         setActiveAccountForChat(chatId, userToLink.id);
+        if (fromId) setActiveAccountForChat(fromId, userToLink.id);
         await sendTelegramReply(
           botToken,
           chatId,
@@ -2595,12 +2840,12 @@ async function handleTelegramMessage(messageObj: any) {
       // If owner telegramChatId is not set, or matches this chat, or no owners yet: Direct Owner Link!
       const hasOwner = Boolean(userToLink.telegramChatId) && userToLink.linkedMembers.some(m => m.role === 'owner');
 
-      if (!hasOwner || String(userToLink.telegramChatId) === String(chatId)) {
+      if (!hasOwner || String(userToLink.telegramChatId).trim() === chatId || (fromId && String(userToLink.telegramChatId).trim() === fromId)) {
         userToLink.telegramChatId = chatId;
-        userToLink.telegramUsername = messageObj.from?.username || userName;
+        userToLink.telegramUsername = fromUsername || userName;
         
         // Add or update owner in linkedMembers
-        const existingMemIdx = userToLink.linkedMembers.findIndex(m => String(m.telegramChatId) === String(chatId));
+        const existingMemIdx = userToLink.linkedMembers.findIndex(m => String(m.telegramChatId).trim() === chatId || (fromId && String(m.telegramChatId).trim() === fromId));
         if (existingMemIdx >= 0) {
           userToLink.linkedMembers[existingMemIdx].role = 'owner';
           userToLink.linkedMembers[existingMemIdx].customAlias = `${userToLink.name} (Owner)`;
@@ -2611,13 +2856,14 @@ async function handleTelegramMessage(messageObj: any) {
             customAlias: `${userToLink.name} (Owner)`,
             role: 'owner',
             telegramChatId: chatId,
-            telegramUsername: messageObj.from?.username || userName,
+            telegramUsername: fromUsername || userName,
             linkedAt: new Date().toISOString(),
           });
         }
 
         saveUsers(users);
         setActiveAccountForChat(chatId, userToLink.id);
+        if (fromId) setActiveAccountForChat(fromId, userToLink.id);
 
         await sendTelegramReply(
           botToken,
@@ -2629,7 +2875,7 @@ async function handleTelegramMessage(messageObj: any) {
 
       // Secondary member joining an already claimed owner ledger -> Owner approval workflow
       if (!userToLink.pendingRequests) userToLink.pendingRequests = [];
-      const existingPending = userToLink.pendingRequests.find(r => String(r.chatId) === String(chatId));
+      const existingPending = userToLink.pendingRequests.find(r => String(r.chatId).trim() === chatId || (fromId && String(r.chatId).trim() === fromId));
 
       if (existingPending) {
         await sendTelegramReply(
@@ -2645,7 +2891,7 @@ async function handleTelegramMessage(messageObj: any) {
         id: reqId,
         chatId: String(chatId),
         name: memberName,
-        telegramUsername: messageObj.from?.username || userName,
+        telegramUsername: fromUsername || userName,
         linkCode: userToLink.linkCode,
         requestedAt: new Date().toISOString(),
       };
@@ -2659,11 +2905,11 @@ async function handleTelegramMessage(messageObj: any) {
       );
 
       // Notify Owner
-      if (userToLink.telegramChatId && String(userToLink.telegramChatId) !== String(chatId)) {
+      if (userToLink.telegramChatId && String(userToLink.telegramChatId).trim() !== chatId) {
         await sendTelegramReply(
           botToken,
           userToLink.telegramChatId,
-          `🔔 <b>NAYI MEMBER LINK REQUEST AAYI HAI!</b>\n\n👤 <b>Member:</b> <b>${memberName}</b> (@${messageObj.from?.username || 'N/A'})\n🔑 <b>Chat ID:</b> <code>${chatId}</code>\n📂 <b>Ledger:</b> ${userToLink.name} (${userToLink.email})\n\nKya aap is member ko apne khate me kharcha & kamai add karne ki permission dena chahte hain?`,
+          `🔔 <b>NAYI MEMBER LINK REQUEST AAYI HAI!</b>\n\n👤 <b>Member:</b> <b>${memberName}</b> (@${fromUsername || 'N/A'})\n🔑 <b>Chat ID:</b> <code>${chatId}</code>\n📂 <b>Ledger:</b> ${userToLink.name} (${userToLink.email})\n\nKya aap is member ko apne khate me kharcha & kamai add karne ki permission dena chahte hain?`,
           {
             inline_keyboard: [
               [
@@ -2686,31 +2932,32 @@ async function handleTelegramMessage(messageObj: any) {
     }
   }
 
-  // 2. Resolve User from Chat ID
-  const linkedUsersForChat = getLinkedUsersForChat(chatId);
-  let targetUser = getActiveAccountForChat(chatId, linkedUsersForChat);
+  // 2. Resolve User from Chat ID, fromId, or Username
+  const linkedUsersForChat = getLinkedUsersForChat(chatId, fromId, fromUsername);
+  let targetUser = getActiveAccountForChat(chatId, linkedUsersForChat, fromId);
 
   // If unlinked user
   if (!targetUser) {
     // If only one user exists in system, offer quick auto-link
-    if (users.length === 1 && (!users[0].telegramChatId || String(users[0].telegramChatId) === String(chatId))) {
+    if (users.length === 1) {
       targetUser = users[0];
       if (!targetUser.linkedMembers) targetUser.linkedMembers = [];
       targetUser.telegramChatId = chatId;
-      targetUser.telegramUsername = messageObj.from?.username || userName;
-      if (!targetUser.linkedMembers.some(m => String(m.telegramChatId) === String(chatId))) {
+      targetUser.telegramUsername = fromUsername || userName;
+      if (!targetUser.linkedMembers.some(m => String(m.telegramChatId).trim() === chatId)) {
         targetUser.linkedMembers.push({
           id: `mem_${chatId}`,
           name: userName || targetUser.name,
           customAlias: `${targetUser.name} (Owner)`,
           role: 'owner',
           telegramChatId: chatId,
-          telegramUsername: messageObj.from?.username || userName,
+          telegramUsername: fromUsername || userName,
           linkedAt: new Date().toISOString(),
         });
       }
       saveUsers(users);
       setActiveAccountForChat(chatId, targetUser.id);
+      if (fromId) setActiveAccountForChat(fromId, targetUser.id);
     } else {
       await sendTelegramReply(
         botToken,
@@ -2736,14 +2983,14 @@ async function handleTelegramMessage(messageObj: any) {
     lowerText.includes('mere account');
 
   if (isAccountsQuery) {
-    const report = buildAccountsReportTelegramMessage(chatId, userName);
+    const report = buildAccountsReportTelegramMessage(chatId, userName, fromId, fromUsername);
     await sendTelegramReply(botToken, chatId, report.text, report.replyMarkup);
     return;
   }
 
   // 4. Unlink Command (/unlink [account_name_or_id])
   if (command === '/unlink' || command === '/disconnect') {
-    const linked = getLinkedUsersForChat(chatId);
+    const linked = getLinkedUsersForChat(chatId, fromId, fromUsername);
     if (linked.length === 0) {
       await sendTelegramReply(botToken, chatId, 'ℹ️ Aap kisi bhi khate se judaa nahi hain.');
       return;
@@ -2760,20 +3007,22 @@ async function handleTelegramMessage(messageObj: any) {
 
       if (toUnlink) {
         if (toUnlink.linkedMembers) {
-          toUnlink.linkedMembers = toUnlink.linkedMembers.filter(m => String(m.telegramChatId) !== String(chatId));
+          toUnlink.linkedMembers = toUnlink.linkedMembers.filter(m => String(m.telegramChatId).trim() !== chatId && String(m.telegramChatId).trim() !== fromId);
         }
-        if (String(toUnlink.telegramChatId) === String(chatId)) {
+        if (String(toUnlink.telegramChatId).trim() === chatId || String(toUnlink.telegramChatId).trim() === fromId) {
           toUnlink.telegramChatId = toUnlink.linkedMembers?.[0]?.telegramChatId || undefined;
           toUnlink.telegramUsername = toUnlink.linkedMembers?.[0]?.telegramUsername || undefined;
         }
         saveUsers(users);
 
-        const remaining = getLinkedUsersForChat(chatId);
-        if (chatActiveAccounts[chatId] === toUnlink.id) {
+        const remaining = getLinkedUsersForChat(chatId, fromId, fromUsername);
+        if (chatActiveAccounts[chatId] === toUnlink.id || (fromId && chatActiveAccounts[fromId] === toUnlink.id)) {
           if (remaining.length > 0) {
             setActiveAccountForChat(chatId, remaining[0].id);
+            if (fromId) setActiveAccountForChat(fromId, remaining[0].id);
           } else {
             delete chatActiveAccounts[chatId];
+            if (fromId) delete chatActiveAccounts[fromId];
             saveActiveAccounts(chatActiveAccounts);
           }
         }
@@ -2783,7 +3032,7 @@ async function handleTelegramMessage(messageObj: any) {
           chatId,
           `✅ <b>Account Safaltapoorvak Unlink Ho Gaya!</b>\n\nAap <b>${toUnlink.name}</b> (<code>${toUnlink.email}</code>) ke khate se disconnect ho chuke hain.\n👥 <b>Bache hue accounts:</b> ${remaining.length}`
         );
-        const updatedReport = buildAccountsReportTelegramMessage(chatId, userName);
+        const updatedReport = buildAccountsReportTelegramMessage(chatId, userName, fromId, fromUsername);
         await sendTelegramReply(botToken, chatId, updatedReport.text, updatedReport.replyMarkup);
         return;
       } else {
@@ -2793,16 +3042,16 @@ async function handleTelegramMessage(messageObj: any) {
     }
 
     // If no argument passed, show the accounts report with Unlink buttons
-    const report = buildAccountsReportTelegramMessage(chatId, userName);
+    const report = buildAccountsReportTelegramMessage(chatId, userName, fromId, fromUsername);
     await sendTelegramReply(botToken, chatId, `❌ <b>Kripya wo account chunein jise aap unlink karna chahte hain:</b>\n\n` + report.text, report.replyMarkup);
     return;
   }
 
   // 5. Switch Active Account Command (/switch [name_or_code])
   if (command === '/switch') {
-    const linked = getLinkedUsersForChat(chatId);
+    const linked = getLinkedUsersForChat(chatId, fromId, fromUsername);
     if (linked.length <= 1 && !commandArg) {
-      const report = buildAccountsReportTelegramMessage(chatId, userName);
+      const report = buildAccountsReportTelegramMessage(chatId, userName, fromId, fromUsername);
       await sendTelegramReply(botToken, chatId, report.text, report.replyMarkup);
       return;
     }
@@ -2818,18 +3067,19 @@ async function handleTelegramMessage(messageObj: any) {
 
       if (targetSwitch) {
         setActiveAccountForChat(chatId, targetSwitch.id);
+        if (fromId) setActiveAccountForChat(fromId, targetSwitch.id);
         await sendTelegramReply(
           botToken,
           chatId,
           `🔄 <b>Active Default Khata Switch Ho Gaya!</b>\n\nAb aapka active khata <b>${targetSwitch.name}</b> (<code>${targetSwitch.email}</code>) set ho gaya hai.\n\nAb jo bhi kharcha ya income aap likhenge, wo <b>${targetSwitch.name}</b> ke khate me record hoga.`
         );
-        const updatedReport = buildAccountsReportTelegramMessage(chatId, userName);
+        const updatedReport = buildAccountsReportTelegramMessage(chatId, userName, fromId, fromUsername);
         await sendTelegramReply(botToken, chatId, updatedReport.text, updatedReport.replyMarkup);
         return;
       }
     }
 
-    const report = buildAccountsReportTelegramMessage(chatId, userName);
+    const report = buildAccountsReportTelegramMessage(chatId, userName, fromId, fromUsername);
     await sendTelegramReply(botToken, chatId, `🔄 <b>Switch karne ke liye account chunein:</b>\n\n` + report.text, report.replyMarkup);
     return;
   }
@@ -2840,7 +3090,9 @@ async function handleTelegramMessage(messageObj: any) {
   const userCategories = userStore.categories;
 
   // Resolve sender member identity
-  const senderMember = targetUser.linkedMembers?.find(m => m.telegramChatId === chatId);
+  const senderMember = targetUser.linkedMembers?.find(
+    m => String(m.telegramChatId).trim() === chatId || (fromId && String(m.telegramChatId).trim() === fromId)
+  );
   const senderDisplayName = senderMember?.customAlias || senderMember?.name || userName || 'Telegram User';
 
   // Check for Excel / CSV Document Attachment in Telegram message
@@ -3391,6 +3643,231 @@ ${tipsText}
     return;
   }
 
+  // 8.8 Udhaar / Khata Book Matching & Commands
+  const isUdhaarQuery =
+    command === '/udhaar' ||
+    command === '/khata' ||
+    command === '/lena' ||
+    command === '/dena' ||
+    lowerText === 'udhaar' ||
+    lowerText === 'khata' ||
+    lowerText === 'udhaar hisab' ||
+    lowerText === 'khata hisab' ||
+    lowerText === 'lena dena' ||
+    lowerText.includes('🤝 udhaar khata');
+
+  if (isUdhaarQuery) {
+    const report = buildUdhaarReportTelegramMessage(userId);
+    await sendTelegramReply(botToken, chatId, report.text, report.replyMarkup);
+    return;
+  }
+
+  // Udhaar settlement match (e.g. "rohan settle", "settle rohan", "rohan ne wapas diye", "/settle rohan")
+  const settleMatch = lowerText.match(/^(?:\/settle|settle)\s+([a-zA-Z0-9\s]+)$/i) ||
+    lowerText.match(/^([a-zA-Z0-9]+)\s+(?:ne\s+)?(?:wapas\s+diya|wapas\s+diye|settle|chuka\s+diya|clear)$/i);
+
+  if (settleMatch) {
+    const person = settleMatch[1].trim().toLowerCase();
+    if (!userStore.udhaars) userStore.udhaars = [];
+    const foundIdx = userStore.udhaars.findIndex(u => u.status === 'pending' && u.personName.toLowerCase().includes(person));
+    if (foundIdx !== -1) {
+      const item = userStore.udhaars[foundIdx];
+      item.status = 'settled';
+      item.settledAt = new Date().toISOString();
+      saveUserData(userId, userStore);
+
+      await sendTelegramReply(
+        botToken,
+        chatId,
+        `✅ <b>Udhaar Settle Ho Gaya!</b> 🎉\n\n👤 <b>Person:</b> <b>${item.personName}</b>\n💰 <b>Raqam:</b> ₹${item.amount.toLocaleString('en-IN')}\n🏷️ <b>Type:</b> ${item.type === 'lent' ? 'Maine Diya Tha (Wapas Mil Gaya)' : 'Maine Liya Tha (Chuka Diya)'}\n\n📊 <i>Khata updated!</i>`,
+        buildUdhaarReportTelegramMessage(userId).replyMarkup
+      );
+      return;
+    }
+  }
+
+  // Udhaar Add Pattern (e.g. "diya 500 rohan ko", "rohan ko 500 diya", "liya 2000 papa se", "papa se 2000 liya", "lent 500 to rohan", "borrowed 2000 from papa")
+  const diyaMatch = lowerText.match(/(?:diya|diye|lent|give|de\s+diya)\s+(\d+(?:\.\d+)?)\s*(?:rs|rupaye|₹)?\s*(?:to\s+|ko\s+)?([a-zA-Z0-9]+)/i) ||
+    lowerText.match(/([a-zA-Z0-9]+)\s+(?:ko\s+)?(\d+(?:\.\d+)?)\s*(?:rs|rupaye|₹)?\s*(?:diya|diye|lent)/i) ||
+    lowerText.match(/(\d+(?:\.\d+)?)\s*(?:rs|rupaye|₹)?\s*(?:diya|diye|lent)\s*(?:to\s+|ko\s+)?([a-zA-Z0-9]+)/i);
+
+  const liyaMatch = lowerText.match(/(?:liya|liye|borrowed|take|le\s+liya)\s+(\d+(?:\.\d+)?)\s*(?:rs|rupaye|₹)?\s*(?:from\s+|se\s+)?([a-zA-Z0-9]+)/i) ||
+    lowerText.match(/([a-zA-Z0-9]+)\s+(?:se\s+)?(\d+(?:\.\d+)?)\s*(?:rs|rupaye|₹)?\s*(?:liya|liye|borrowed)/i) ||
+    lowerText.match(/(\d+(?:\.\d+)?)\s*(?:rs|rupaye|₹)?\s*(?:liya|liye|borrowed)\s*(?:from\s+|se\s+)?([a-zA-Z0-9]+)/i);
+
+  if (diyaMatch || liyaMatch) {
+    const isLent = Boolean(diyaMatch);
+    const match = diyaMatch || liyaMatch;
+    let amount = 0;
+    let person = '';
+
+    if (match) {
+      if (!isNaN(parseFloat(match[1])) && isNaN(parseFloat(match[2]))) {
+        amount = parseFloat(match[1]);
+        person = match[2].trim();
+      } else if (isNaN(parseFloat(match[1])) && !isNaN(parseFloat(match[2]))) {
+        person = match[1].trim();
+        amount = parseFloat(match[2]);
+      }
+    }
+
+    const nonPersonWords = ['cash', 'upi', 'card', 'petrol', 'sabzi', 'dahi', 'kharcha', 'income', 'bank', 'odo', 'km'];
+    if (amount > 0 && person && !nonPersonWords.includes(person.toLowerCase())) {
+      const capitalizedPerson = person.charAt(0).toUpperCase() + person.slice(1);
+      const newUdhaar: UdhaarRecord = {
+        id: `udh_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+        userId,
+        type: isLent ? 'lent' : 'borrowed',
+        personName: capitalizedPerson,
+        amount,
+        description: rawText,
+        date: getAppDateTime().date,
+        time: getAppDateTime().time,
+        status: 'pending',
+        createdAt: new Date().toISOString(),
+      };
+
+      if (!userStore.udhaars) userStore.udhaars = [];
+      userStore.udhaars.unshift(newUdhaar);
+      saveUserData(userId, userStore);
+
+      const reply = `🤝 <b>UDHAAR RECORD HO GAYA!</b>
+━━━━━━━━━━━━━━━━━━━━
+🏷️ <b>Type:</b> ${isLent ? '💸 Maine Diya (Lena Hai)' : '📥 Maine Liya (Dena Hai)'}
+👤 <b>Person:</b> <b>${capitalizedPerson}</b>
+💰 <b>Raqam:</b> <b>₹${amount.toLocaleString('en-IN')}</b>
+📅 <b>Tareeq:</b> ${newUdhaar.date} • ${newUdhaar.time} (IST)
+
+💡 <i>Jab ${capitalizedPerson} hisab clear karein, to bhejein:</i>
+• <code>${capitalizedPerson} settle</code>`;
+
+      await sendTelegramReply(botToken, chatId, reply, buildUdhaarReportTelegramMessage(userId).replyMarkup);
+      return;
+    }
+  }
+
+  // 8.9 Fuel & Mileage Tracker Matching & Commands
+  const isFuelQuery =
+    command === '/fuel' ||
+    command === '/mileage' ||
+    lowerText === 'fuel' ||
+    lowerText === 'mileage' ||
+    lowerText === 'fuel log' ||
+    lowerText === 'mileage hisab' ||
+    lowerText.includes('⛽ fuel tracker');
+
+  if (isFuelQuery) {
+    const report = buildFuelReportTelegramMessage(userId);
+    await sendTelegramReply(botToken, chatId, report.text, report.replyMarkup);
+    return;
+  }
+
+  // Fuel + Odometer log (e.g. "2000 petrol odo 45200" or "petrol 500 odo 12340 bike" or "odo 45200 petrol 2000")
+  const hasOdo = lowerText.includes('odo') || lowerText.includes('odometer') || lowerText.includes('km reading');
+  const hasFuelKeyword = lowerText.includes('petrol') || lowerText.includes('diesel') || lowerText.includes('cng') || lowerText.includes('fuel');
+
+  if (hasOdo && hasFuelKeyword) {
+    const odoMatch = lowerText.match(/(?:odo|odometer|reading)\s*[:=]?\s*(\d{3,7})/i) ||
+      lowerText.match(/(\d{3,7})\s*(?:odo|odometer|km)/i);
+    
+    const fuelAmtMatch = lowerText.match(/(?:petrol|diesel|cng|fuel)\s*[:=]?\s*(?:rs|rupaye|₹)?\s*(\d+(?:\.\d+)?)/i) ||
+      lowerText.match(/(\d+(?:\.\d+)?)\s*(?:rs|rupaye|₹)?\s*(?:ka\s+)?(?:petrol|diesel|cng|fuel)/i);
+
+    if (odoMatch && fuelAmtMatch) {
+      const odo = parseInt(odoMatch[1], 10);
+      const fuelAmount = parseFloat(fuelAmtMatch[1]);
+      let vehicleName = 'Bike';
+      if (lowerText.includes('car') || lowerText.includes('swift') || lowerText.includes('creta') || lowerText.includes('i20')) vehicleName = 'Car';
+      else if (lowerText.includes('activa') || lowerText.includes('scooty') || lowerText.includes('jupiter')) vehicleName = 'Activa';
+      else if (lowerText.includes('bike') || lowerText.includes('bullet') || lowerText.includes('splendor') || lowerText.includes('pulsar')) vehicleName = 'Bike';
+
+      if (odo > 0 && fuelAmount > 0) {
+        if (!userStore.fuelLogs) userStore.fuelLogs = [];
+        const sortedPast = [...userStore.fuelLogs].sort((a, b) => b.odometer - a.odometer);
+        const prevLog = sortedPast.find(l => l.odometer < odo && (!vehicleName || l.vehicleName?.toLowerCase() === vehicleName.toLowerCase())) || sortedPast[0];
+
+        let distanceCovered: number | undefined;
+        let calculatedMileage: number | undefined;
+        let costPerKm: number | undefined;
+
+        if (prevLog && odo > prevLog.odometer) {
+          distanceCovered = odo - prevLog.odometer;
+          const approxLiters = fuelAmount / 100; // ~₹100/L average in India
+          if (approxLiters > 0) {
+            calculatedMileage = Math.round((distanceCovered / approxLiters) * 10) / 10;
+          }
+          costPerKm = Math.round((fuelAmount / distanceCovered) * 100) / 100;
+        }
+
+        const newLog: FuelLog = {
+          id: `fuel_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+          userId,
+          date: getAppDateTime().date,
+          time: getAppDateTime().time,
+          vehicleName,
+          fuelAmount,
+          odometer: odo,
+          previousOdometer: prevLog ? prevLog.odometer : undefined,
+          distanceCovered,
+          calculatedMileage,
+          costPerKm,
+          notes: rawText,
+          createdAt: new Date().toISOString(),
+        };
+
+        userStore.fuelLogs.unshift(newLog);
+
+        // Record as expense transaction
+        const fuelTx: Transaction = {
+          id: `tx_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
+          userId,
+          type: 'expense',
+          amount: fuelAmount,
+          category: 'Transportation & Fuel',
+          description: `${vehicleName} Fuel (Odo: ${odo} km)`,
+          date: newLog.date,
+          time: newLog.time,
+          paymentMethod: 'UPI',
+          source: 'telegram',
+          telegramChatId: chatId,
+          telegramMessageId: messageObj.message_id,
+          telegramUser: senderDisplayName,
+          createdAt: newLog.createdAt,
+          tags: ['fuel', vehicleName.toLowerCase()],
+        };
+        userTransactions.unshift(fuelTx);
+
+        saveUserData(userId, userStore);
+        const summary = calculateUserSummary(userId);
+
+        let fuelReply = `⛽ <b>FUEL & MILEAGE LOG RECORDED!</b>
+━━━━━━━━━━━━━━━━━━━━
+🚗 <b>Vehicle:</b> <b>${vehicleName}</b>
+💰 <b>Fuel Amount:</b> <b>₹${fuelAmount.toLocaleString('en-IN')}</b>
+📍 <b>Current Odometer:</b> <b>${odo.toLocaleString('en-IN')} km</b>
+`;
+
+        if (distanceCovered) {
+          fuelReply += `\n📈 <b>Pichhle fuel up se chali:</b> <b>${distanceCovered} km</b>\n`;
+          if (calculatedMileage) fuelReply += `⚡ <b>Estimated Mileage:</b> <b>~${calculatedMileage} km/l</b>\n`;
+          if (costPerKm) fuelReply += `💸 <b>Running Cost:</b> <b>₹${costPerKm} / km</b>\n`;
+        } else {
+          fuelReply += `\n💡 <i>Pehli fuel entry! Agli baar fuel bharne par bot exact mileage aur per-km cost nikalega.</i>\n`;
+        }
+
+        fuelReply += `━━━━━━━━━━━━━━━━━━━━\n📊 <b>Net Bacha Balance:</b> ₹${summary.netSavings.toLocaleString('en-IN')}`;
+
+        await sendTelegramReply(botToken, chatId, fuelReply, {
+          inline_keyboard: [
+            [{ text: '⛽ Mileage Summary', callback_data: 'cmd_fuel' }, { text: '💰 Balance', callback_data: 'cmd_balance' }],
+            [{ text: '📊 Summary', callback_data: 'cmd_summary' }, { text: '🤖 AI Tips', callback_data: 'cmd_tips' }],
+          ],
+        });
+        return;
+      }
+    }
+  }
+
   // 9. AI & Fallback Transaction Parser
   try {
     const parsedList = await parseMessageWithGemini(rawText, userCategories);
@@ -3461,6 +3938,29 @@ ${isInc ? `📈 <b>Kul Income:</b> ₹${summary.totalIncome.toLocaleString('en-I
         })
         .join('\n');
       replyText = `✅ <b>${parsedList.length} TRANSACTIONS ADD HO GAYE</b>${memberTag}\n\n${itemsList}\n\n━━━━━━━━━━━━━━━━━━━━\n📊 <b>Net Bacha Balance:</b> ₹${summary.netSavings.toLocaleString('en-IN')}`;
+    }
+
+    // Smart Budget Alert Check
+    const affectedCategories = new Set(parsedList.filter(p => p.type === 'expense').map(p => p.category));
+    let budgetAlertText = '';
+    for (const catName of affectedCategories) {
+      const budgetObj = userStore.budgets.find(b => b.category.toLowerCase() === catName.toLowerCase());
+      if (budgetObj && budgetObj.limit > 0) {
+        const currentMonth = getAppDateTime().date.substring(0, 7);
+        const totalCatSpent = userTransactions
+          .filter(t => t.type === 'expense' && t.category.toLowerCase() === catName.toLowerCase() && t.date.startsWith(currentMonth))
+          .reduce((s, t) => s + t.amount, 0);
+        const pct = Math.round((totalCatSpent / budgetObj.limit) * 100);
+
+        if (pct >= 100) {
+          budgetAlertText += `\n\n🚨 <b>BUDGET EXCEEDED ALERT!</b>\n<b>${catName}</b> ka budget <b>${pct}%</b> cross ho gaya hai (₹${totalCatSpent.toLocaleString('en-IN')} / ₹${budgetObj.limit.toLocaleString('en-IN')})!`;
+        } else if (pct >= 80) {
+          budgetAlertText += `\n\n⚠️ <b>SMART BUDGET WARNING!</b>\n<b>${catName}</b> ka <b>${pct}%</b> budget khatam ho chuka hai (₹${totalCatSpent.toLocaleString('en-IN')} / ₹${budgetObj.limit.toLocaleString('en-IN')}). Dhyan se kharch karein!`;
+        }
+      }
+    }
+    if (budgetAlertText) {
+      replyText += budgetAlertText;
     }
 
     await sendTelegramReply(botToken, chatId, replyText, {
@@ -5695,6 +6195,295 @@ app.post('/api/ai/insights', async (req, res) => {
     res.status(500).json({ error: 'Failed to generate AI insights' });
   }
 });
+
+// 7.1 Udhaar / Khata Book APIs
+app.get('/api/udhaar', (req, res) => {
+  const user = getRequestUser(req);
+  if (!user) return res.json({ udhaars: [] });
+  const store = getUserData(user.id);
+  res.json({ udhaars: store.udhaars || [] });
+});
+
+app.post('/api/udhaar', (req, res) => {
+  const user = getRequestUser(req);
+  if (!user) return res.status(401).json({ error: 'User session required' });
+  const store = getUserData(user.id);
+  const { type, personName, amount, description, date, dueDate } = req.body;
+
+  if (!personName || !amount) {
+    return res.status(400).json({ error: 'Person name and amount are required' });
+  }
+
+  const newRecord: UdhaarRecord = {
+    id: `udh_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+    userId: user.id,
+    type: type === 'borrowed' ? 'borrowed' : 'lent',
+    personName: String(personName).trim(),
+    amount: Math.abs(Number(amount)),
+    description: description ? String(description).trim() : undefined,
+    date: date || getAppDateTime().date,
+    time: getAppDateTime().time,
+    status: 'pending',
+    createdAt: new Date().toISOString(),
+  };
+
+  if (!store.udhaars) store.udhaars = [];
+  store.udhaars.unshift(newRecord);
+  saveUserData(user.id, store);
+
+  res.json({ success: true, udhaar: newRecord, udhaars: store.udhaars });
+});
+
+app.put('/api/udhaar/:id', (req, res) => {
+  const user = getRequestUser(req);
+  if (!user) return res.status(401).json({ error: 'User session required' });
+  const store = getUserData(user.id);
+  const { id } = req.params;
+  const updates = req.body || {};
+
+  if (!store.udhaars) store.udhaars = [];
+  const itemIndex = store.udhaars.findIndex(u => u.id === id);
+  if (itemIndex === -1) {
+    return res.status(404).json({ error: 'Udhaar record not found' });
+  }
+
+  const existing = store.udhaars[itemIndex];
+  if (updates.status === 'settled' && existing.status !== 'settled') {
+    existing.status = 'settled';
+    existing.settledAt = new Date().toISOString();
+  } else if (updates.status === 'pending') {
+    existing.status = 'pending';
+    existing.settledAt = undefined;
+  }
+
+  if (updates.personName) existing.personName = String(updates.personName).trim();
+  if (updates.amount) existing.amount = Math.abs(Number(updates.amount));
+  if (updates.description !== undefined) existing.description = updates.description;
+  if (updates.date) existing.date = updates.date;
+
+  saveUserData(user.id, store);
+  res.json({ success: true, udhaar: existing, udhaars: store.udhaars });
+});
+
+app.delete('/api/udhaar/:id', (req, res) => {
+  const user = getRequestUser(req);
+  if (!user) return res.status(401).json({ error: 'User session required' });
+  const store = getUserData(user.id);
+  const { id } = req.params;
+
+  if (!store.udhaars) store.udhaars = [];
+  store.udhaars = store.udhaars.filter(u => u.id !== id);
+  saveUserData(user.id, store);
+
+  res.json({ success: true, udhaars: store.udhaars });
+});
+
+// 7.2 Vehicle Fuel & Mileage Tracker APIs
+app.get('/api/fuel', (req, res) => {
+  const user = getRequestUser(req);
+  if (!user) return res.json({ logs: [], fuelLogs: [] });
+  const store = getUserData(user.id);
+  const logs = store.fuelLogs || [];
+  res.json({ logs, fuelLogs: logs });
+});
+
+app.post('/api/fuel', (req, res) => {
+  const user = getRequestUser(req);
+  if (!user) return res.status(401).json({ error: 'User session required' });
+  const store = getUserData(user.id);
+  const { vehicleName, fuelAmount, fuelLiters, odometer, notes, date, recordAsExpense = true } = req.body;
+
+  const cleanOdo = Number(odometer);
+  const cleanAmount = Number(fuelAmount);
+
+  if (isNaN(cleanOdo) || isNaN(cleanAmount) || cleanAmount <= 0) {
+    return res.status(400).json({ error: 'Valid Odometer reading and Fuel amount are required' });
+  }
+
+  if (!store.fuelLogs) store.fuelLogs = [];
+
+  // Sort existing logs by odometer to calculate distance
+  const sortedPastLogs = [...store.fuelLogs].sort((a, b) => b.odometer - a.odometer);
+  const prevLog = sortedPastLogs.find(l => l.odometer < cleanOdo && (!vehicleName || l.vehicleName?.toLowerCase() === vehicleName.toLowerCase())) || sortedPastLogs[0];
+
+  let distanceCovered: number | undefined;
+  let calculatedMileage: number | undefined;
+  let costPerKm: number | undefined;
+
+  if (prevLog && cleanOdo > prevLog.odometer) {
+    distanceCovered = cleanOdo - prevLog.odometer;
+    const approxLiters = Number(fuelLiters) || (cleanAmount / 100); // approx ₹100/L if not specified
+    if (approxLiters > 0) {
+      calculatedMileage = Math.round((distanceCovered / approxLiters) * 10) / 10;
+    }
+    costPerKm = Math.round((cleanAmount / distanceCovered) * 100) / 100;
+  }
+
+  const newLog: FuelLog = {
+    id: `fuel_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+    userId: user.id,
+    date: date || getAppDateTime().date,
+    time: getAppDateTime().time,
+    vehicleName: vehicleName ? String(vehicleName).trim() : 'Vehicle',
+    fuelAmount: cleanAmount,
+    fuelLiters: fuelLiters ? Number(fuelLiters) : undefined,
+    odometer: cleanOdo,
+    previousOdometer: prevLog ? prevLog.odometer : undefined,
+    distanceCovered,
+    calculatedMileage,
+    costPerKm,
+    notes: notes ? String(notes).trim() : undefined,
+    createdAt: new Date().toISOString(),
+  };
+
+  store.fuelLogs.unshift(newLog);
+
+  // Also create a linked transaction in Transportation & Fuel if requested
+  if (recordAsExpense) {
+    const fuelTx: Transaction = {
+      id: `tx_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
+      userId: user.id,
+      type: 'expense',
+      amount: cleanAmount,
+      category: 'Transportation & Fuel',
+      description: `${vehicleName || 'Vehicle'} Fuel (Odo: ${cleanOdo} km)`,
+      date: newLog.date,
+      time: newLog.time,
+      paymentMethod: 'UPI',
+      source: 'manual',
+      createdAt: newLog.createdAt,
+      tags: ['fuel', vehicleName || 'vehicle'],
+    };
+    store.transactions.unshift(fuelTx);
+  }
+
+  saveUserData(user.id, store);
+  const summary = calculateUserSummary(user.id);
+
+  res.json({
+    success: true,
+    log: newLog,
+    logs: store.fuelLogs,
+    fuelLogs: store.fuelLogs,
+    summary,
+  });
+});
+
+app.delete('/api/fuel/:id', (req, res) => {
+  const user = getRequestUser(req);
+  if (!user) return res.status(401).json({ error: 'User session required' });
+  const store = getUserData(user.id);
+  const { id } = req.params;
+
+  if (!store.fuelLogs) store.fuelLogs = [];
+  store.fuelLogs = store.fuelLogs.filter(f => f.id !== id);
+  saveUserData(user.id, store);
+
+  res.json({ success: true, logs: store.fuelLogs, fuelLogs: store.fuelLogs });
+});
+
+// 7.3 Daily Digest & Smart Alerts Service
+async function sendDailyTelegramDigest(type: 'morning' | 'evening') {
+  const botToken = botConfig.botToken || process.env.TELEGRAM_BOT_TOKEN;
+  if (!botToken) return;
+
+  const activeChats = Object.keys(chatActiveAccounts);
+  for (const chatId of activeChats) {
+    const userId = chatActiveAccounts[chatId];
+    if (!userId) continue;
+    const user = users.find(u => u.id === userId);
+    if (!user) continue;
+
+    const store = getUserData(userId);
+    const summary = calculateUserSummary(userId);
+    const now = new Date();
+    const todayDate = getAppDateTime().date;
+
+    const todayTxs = store.transactions.filter(t => t.date === todayDate);
+    const todayExpense = todayTxs.filter(t => t.type === 'expense').reduce((a, b) => a + b.amount, 0);
+    const todayIncome = todayTxs.filter(t => t.type === 'income').reduce((a, b) => a + b.amount, 0);
+
+    // Days remaining in current month
+    const totalDaysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+    const daysRemaining = Math.max(1, totalDaysInMonth - now.getDate() + 1);
+    const monthlyRemainingBudget = Math.max(0, summary.monthlyBudget - summary.monthlySpent);
+    const safeDailyLimit = Math.round(monthlyRemainingBudget / daysRemaining);
+
+    if (type === 'morning') {
+      const morningMsg = `🌅 <b>SHUBH PRABHAT, ${user.name.toUpperCase()}!</b>
+━━━━━━━━━━━━━━━━━━━━
+📊 <b>Aapka Aaj Ka Financial Plan:</b>
+
+💰 <b>Safe-to-Spend Daily Limit:</b> <b>₹${safeDailyLimit.toLocaleString('en-IN')}</b>
+🎯 <b>Monthly Budget Bacha:</b> ₹${monthlyRemainingBudget.toLocaleString('en-IN')} (${daysRemaining} din baaki)
+💵 <b>Current Net Balance:</b> ₹${summary.netSavings.toLocaleString('en-IN')}
+
+💡 <i>Kharcha hote hi bot par message bhejein, jaise:</i>
+• <code>200 nashta cash</code>
+• <code>500 petrol upi</code>`;
+
+      await sendTelegramReply(botToken, chatId, morningMsg, {
+        inline_keyboard: [
+          [{ text: '💰 Balance', callback_data: 'cmd_balance' }, { text: '🎯 Category Budget', callback_data: 'cmd_budget' }],
+          [{ text: '📊 Summary', callback_data: 'cmd_summary' }, { text: '🤖 AI Tips', callback_data: 'cmd_tips' }],
+        ],
+      });
+    } else {
+      const eveningMsg = `🌙 <b>SHUBH RATRI, ${user.name.toUpperCase()}! (AAJ KA HISAB)</b>
+━━━━━━━━━━━━━━━━━━━━
+📊 <b>Aaj Ka Total Kharcha:</b> <b>₹${todayExpense.toLocaleString('en-IN')}</b> (${todayTxs.filter(t => t.type === 'expense').length} items)
+${todayIncome > 0 ? `🟢 <b>Aaj Ki Income:</b> ₹${todayIncome.toLocaleString('en-IN')}\n` : ''}
+💰 <b>Net Bacha Balance:</b> ₹${summary.netSavings.toLocaleString('en-IN')}
+🎯 <b>Mahine Ka Bacha Budget:</b> ₹${monthlyRemainingBudget.toLocaleString('en-IN')}
+
+${todayExpense > safeDailyLimit ? `⚠️ <i>Aaj ka kharcha safe limit (₹${safeDailyLimit}) se thoda jyada raha.</i>` : `✅ <i>Shabash! Aaj ka kharcha budget ke andar raha!</i>`}`;
+
+      await sendTelegramReply(botToken, chatId, eveningMsg, {
+        inline_keyboard: [
+          [{ text: '🕒 Recent 5 Tx', callback_data: 'cmd_recent' }, { text: '📊 Monthly Summary', callback_data: 'cmd_summary' }],
+          [{ text: '↩️ Undo / Delete', callback_data: 'cmd_undo' }, { text: '🤖 AI Tips', callback_data: 'cmd_tips' }],
+        ],
+      });
+    }
+  }
+}
+
+// Manual trigger for testing Daily Digest
+app.post('/api/digest/trigger', async (req, res) => {
+  const { type = 'morning' } = req.body;
+  try {
+    await sendDailyTelegramDigest(type === 'evening' ? 'evening' : 'morning');
+    res.json({ success: true, message: `${type} digest successfully dispatched to active Telegram chats!` });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Scheduled Background Cron for 9:00 AM & 10:00 PM IST
+let lastDigestSentDate = '';
+let lastDigestSentType = '';
+
+setInterval(() => {
+  try {
+    const istInfo = getAppDateTime();
+    const currentTime = istInfo.time; // "09:00", "22:00"
+    const currentDate = istInfo.date; // "YYYY-MM-DD"
+
+    if (currentTime === '09:00' && (lastDigestSentDate !== currentDate || lastDigestSentType !== 'morning')) {
+      lastDigestSentDate = currentDate;
+      lastDigestSentType = 'morning';
+      console.log(`[Digest] Dispatching Morning Daily Digest for ${currentDate} 09:00 IST...`);
+      sendDailyTelegramDigest('morning').catch(e => console.error('[Digest] Error in morning cron:', e));
+    } else if (currentTime === '22:00' && (lastDigestSentDate !== currentDate || lastDigestSentType !== 'evening')) {
+      lastDigestSentDate = currentDate;
+      lastDigestSentType = 'evening';
+      console.log(`[Digest] Dispatching Evening Daily Digest for ${currentDate} 22:00 IST...`);
+      sendDailyTelegramDigest('evening').catch(e => console.error('[Digest] Error in evening cron:', e));
+    }
+  } catch (e) {
+    // ignore
+  }
+}, 30000); // Check every 30 seconds
 
 // 8. Storage Engine Status & Postgres Synchronization
 app.get('/api/storage/status', (req, res) => {

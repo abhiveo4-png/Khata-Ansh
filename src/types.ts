@@ -174,4 +174,45 @@ export interface GullakSummary {
   monthlyHistory: GullakMonthRecord[];
 }
 
+export interface UdhaarRecord {
+  id: string;
+  userId: string;
+  type: 'lent' | 'borrowed'; // 'lent' (Diya / Lena hai / You'll Get) | 'borrowed' (Liya / Dena hai / You'll Give)
+  personName: string; // e.g. "Rohan", "Papa", "Sharma Ji"
+  amount: number;
+  description?: string;
+  date: string; // YYYY-MM-DD
+  time?: string;
+  status: 'pending' | 'settled';
+  settledAt?: string;
+  createdAt: string;
+}
+
+export interface FuelLog {
+  id: string;
+  userId: string;
+  date: string; // YYYY-MM-DD
+  time?: string;
+  vehicleName?: string; // e.g. "Bike", "Car", "Activa", "i20"
+  fuelAmount: number; // ₹ paid
+  fuelLiters?: number; // approx or entered
+  odometer: number; // km reading e.g. 45200
+  previousOdometer?: number;
+  distanceCovered?: number; // km
+  calculatedMileage?: number; // km/l
+  costPerKm?: number; // ₹/km
+  notes?: string;
+  createdAt: string;
+}
+
+export interface BudgetAlert {
+  category: string;
+  limit: number;
+  spent: number;
+  percentage: number;
+  status: 'warning' | 'exceeded'; // warning >= 80%, exceeded >= 100%
+  message: string;
+}
+
+
 
