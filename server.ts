@@ -547,6 +547,9 @@ async function initPgDatabase(): Promise<boolean> {
         } else if (row.key === 'bot_config') {
           if (row.data) {
             botConfig = { ...botConfig, ...row.data };
+            if (process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_BOT_TOKEN.trim()) {
+              botConfig.botToken = process.env.TELEGRAM_BOT_TOKEN.trim();
+            }
             saveJson(BOT_CONFIG_FILE, botConfig);
           }
         } else if (row.key === 'telegram_logs') {
@@ -2521,7 +2524,7 @@ async function sendTelegramReply(
 }
 
 async function handleTelegramCallbackQuery(callbackQuery: any) {
-  const token = botConfig.botToken || process.env.TELEGRAM_BOT_TOKEN;
+  const token = process.env.TELEGRAM_BOT_TOKEN || botConfig.botToken;
   if (!token) return;
 
   const callbackId = callbackQuery.id;
@@ -2754,7 +2757,7 @@ async function handleTelegramMessage(messageObj: any) {
     ? `${fromUser.first_name}${fromUser.last_name ? ' ' + fromUser.last_name : ''}`.trim()
     : fromUser.username || 'User';
   const rawText = (messageObj.text || messageObj.caption || '').trim();
-  const botToken = botConfig.botToken || process.env.TELEGRAM_BOT_TOKEN;
+  const botToken = process.env.TELEGRAM_BOT_TOKEN || botConfig.botToken;
 
   if (!botToken || !chatId) return;
 
@@ -4023,7 +4026,7 @@ async function startTelegramPollingWorker() {
   console.log('🤖 Starting Telegram Direct Long Polling Engine with Handy Buttons & Commands...');
 
   while (isPollingActive) {
-    const token = botConfig.botToken || process.env.TELEGRAM_BOT_TOKEN;
+    const token = process.env.TELEGRAM_BOT_TOKEN || botConfig.botToken;
     if (!token) {
       await new Promise(r => setTimeout(r, 3000));
       continue;
@@ -4280,7 +4283,7 @@ app.post(['/api/auth/delete-account', '/api/users/delete'], async (req, res) => 
 
   // 4. Optionally notify telegram chat if linked
   if (user.telegramChatId) {
-    const botToken = botConfig.botToken || process.env.TELEGRAM_BOT_TOKEN;
+    const botToken = process.env.TELEGRAM_BOT_TOKEN || botConfig.botToken;
     if (botToken) {
       sendTelegramReply(
         botToken,
@@ -4485,7 +4488,7 @@ app.post(['/api/members/approve-request', '/api/auth/members/approve-request'], 
   setActiveAccountForChat(foundReq.chatId, user.id);
 
   // Notify member on Telegram
-  const botToken = botConfig.botToken || process.env.TELEGRAM_BOT_TOKEN;
+  const botToken = process.env.TELEGRAM_BOT_TOKEN || botConfig.botToken;
   if (botToken) {
     sendTelegramReply(
       botToken,
@@ -4522,7 +4525,7 @@ app.post(['/api/members/reject-request', '/api/auth/members/reject-request'], as
   user.pendingRequests = user.pendingRequests.filter(r => r.id !== requestId);
   saveJson(USERS_FILE, users);
 
-  const botToken = botConfig.botToken || process.env.TELEGRAM_BOT_TOKEN;
+  const botToken = process.env.TELEGRAM_BOT_TOKEN || botConfig.botToken;
   if (botToken) {
     sendTelegramReply(
       botToken,
@@ -5816,7 +5819,7 @@ app.post(['/api/gullak/start-month', '/api/users/tracking-start-month'], (req, r
 
 // 5. Telegram Bot Config & Status
 app.get('/api/telegram/config', async (req, res) => {
-  const currentToken = botConfig.botToken || process.env.TELEGRAM_BOT_TOKEN || '';
+  const currentToken = process.env.TELEGRAM_BOT_TOKEN || botConfig.botToken || '';
   const appUrl = 'https://ais-dev-tqtvhllm5ccjbvvdxz44bm-657007980218.asia-east1.run.app';
   const webhookUrl = `${appUrl}/api/telegram/webhook`;
 
@@ -5888,8 +5891,8 @@ app.post('/api/telegram/config', async (req, res) => {
 });
 
 // Endpoint to manually or automatically trigger menu & commands synchronization
-app.post('/api/telegram/sync-commands', async (req, res) => {
-  const token = botConfig.botToken || process.env.TELEGRAM_BOT_TOKEN || '';
+app.all('/api/telegram/sync-commands', async (req, res) => {
+  const token = process.env.TELEGRAM_BOT_TOKEN || botConfig.botToken || '';
   if (!token) {
     return res.status(400).json({ success: false, error: 'Telegram bot token is not configured.' });
   }
@@ -6407,7 +6410,7 @@ app.delete('/api/fuel/:id', (req, res) => {
 
 // 7.3 Daily Digest & Smart Alerts Service
 async function sendDailyTelegramDigest(type: 'morning' | 'evening') {
-  const botToken = botConfig.botToken || process.env.TELEGRAM_BOT_TOKEN;
+  const botToken = process.env.TELEGRAM_BOT_TOKEN || botConfig.botToken;
   if (!botToken) return;
 
   const activeChats = Object.keys(chatActiveAccounts);
@@ -6687,6 +6690,16 @@ async function startServer() {
       console.log('📦 Storage Engine: PostgreSQL Database (Persistent)');
     } else {
       console.log(`📁 Storage Engine: Persistent Disk / Local (${DATA_DIR})`);
+    }
+
+    const startupToken = process.env.TELEGRAM_BOT_TOKEN || botConfig.botToken;
+    if (startupToken) {
+      syncTelegramBotCommandsAndMenu(startupToken)
+        .then(ok => {
+          if (ok) console.log('✅ Telegram bot commands & menu button synced successfully with Telegram!');
+          else console.log('⚠️ Could not sync Telegram bot commands (check token or network).');
+        })
+        .catch(e => console.error('Error auto-syncing Telegram bot commands:', e));
     }
   });
 }
