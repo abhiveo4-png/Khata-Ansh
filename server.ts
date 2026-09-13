@@ -4044,9 +4044,10 @@ async function startTelegramPollingWorker() {
       }
 
       if (response.status === 409) {
-        // Webhook is active and receiving updates directly - sleep and let Webhook handle traffic to save 100% bandwidth!
-        await new Promise(r => setTimeout(r, 30000));
-        continue;
+        // Webhook is active and receiving updates directly - stop polling loop permanently to save 100% bandwidth!
+        console.log('✅ Webhook is active on Telegram. Stopping background polling loop permanently.');
+        isPollingActive = false;
+        break;
       }
 
       if (!response.ok) {
@@ -4095,6 +4096,10 @@ app.get(['/api/users', '/api/auth/users'], (req, res) => {
 // Telegram Webhook receiver
 app.post('/api/telegram/webhook', async (req, res) => {
   res.status(200).send('OK');
+  if (isPollingActive) {
+    isPollingActive = false;
+    console.log('⚡ Webhook update received! Polling permanently disabled.');
+  }
   try {
     const update = req.body;
     if (update && update.message) {
