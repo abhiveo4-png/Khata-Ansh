@@ -6558,9 +6558,121 @@ async function startServer() {
     app.use(vite.middlewares);
   } else {
     const distPath = path.join(process.cwd(), 'dist');
-    app.use(express.static(distPath));
+    const indexHtmlPath = path.join(distPath, 'index.html');
+    
+    if (fs.existsSync(distPath)) {
+      app.use(express.static(distPath));
+    }
+
     app.get('*', (req, res) => {
-      res.sendFile(path.join(distPath, 'index.html'));
+      if (fs.existsSync(indexHtmlPath)) {
+        return res.sendFile(indexHtmlPath);
+      }
+
+      const botUser = botConfig.botUsername || 'Khata Bot';
+      const dbStatus = isPgConnected ? '🟢 Neon PostgreSQL (Connected)' : '🟡 Local Storage (Active)';
+
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      res.send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TeleExpense AI - Bot Server Live</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+      background: #0f172a;
+      color: #f8fafc;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      padding: 20px;
+    }
+    .card {
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 16px;
+      max-width: 520px;
+      width: 100%;
+      padding: 32px;
+      box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5);
+    }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 12px;
+      background: #064e3b;
+      color: #34d399;
+      border-radius: 9999px;
+      font-size: 13px;
+      font-weight: 600;
+      margin-bottom: 16px;
+    }
+    h1 { font-size: 24px; font-weight: 700; margin-bottom: 8px; color: #ffffff; }
+    p { color: #94a3b8; font-size: 14px; line-height: 1.6; margin-bottom: 24px; }
+    .status-box {
+      background: #0f172a;
+      border: 1px solid #334155;
+      border-radius: 12px;
+      padding: 16px;
+      margin-bottom: 24px;
+    }
+    .status-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 14px;
+      padding: 8px 0;
+      border-bottom: 1px solid #1e293b;
+    }
+    .status-row:last-child { border-bottom: none; }
+    .label { color: #94a3b8; }
+    .val { font-weight: 600; color: #f1f5f9; }
+    .btn {
+      display: block;
+      width: 100%;
+      text-align: center;
+      background: #2563eb;
+      color: #ffffff;
+      padding: 14px;
+      border-radius: 10px;
+      text-decoration: none;
+      font-weight: 600;
+      font-size: 15px;
+      transition: background 0.2s;
+    }
+    .btn:hover { background: #1d4ed8; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="badge">● Server Online & Running</div>
+    <h1>🤖 TeleExpense Bot Backend</h1>
+    <p>Aapka Telegram expense manager backend server successfully deploy ho chuka hai aur 24/7 active hai.</p>
+    
+    <div class="status-box">
+      <div class="status-row">
+        <span class="label">Telegram Bot</span>
+        <span class="val">@${botUser}</span>
+      </div>
+      <div class="status-row">
+        <span class="label">Database</span>
+        <span class="val">${dbStatus}</span>
+      </div>
+      <div class="status-row">
+        <span class="label">Webhook Path</span>
+        <span class="val"><code>/api/telegram/webhook</code></span>
+      </div>
+    </div>
+
+    <a href="https://t.me/${botUser.replace('@', '')}" target="_blank" class="btn">🚀 Open Telegram Bot</a>
+  </div>
+</body>
+</html>`);
     });
   }
 
