@@ -124,7 +124,7 @@ export default function App() {
 
   // Fetch transactions and summary
   const fetchTransactions = useCallback(async () => {
-    const activeUid = currentUser?.id || getActiveUserId() || 'user_ansh';
+    const activeUid = getActiveUserId() || 'user_ansh';
     const { data } = await safeFetchJson<{ transactions?: Transaction[]; summary?: FinancialSummary }>('/api/transactions');
     
     if (data?.transactions) {
@@ -134,7 +134,7 @@ export default function App() {
     if (data?.summary) {
       setSummary(data.summary);
     }
-  }, [currentUser]);
+  }, []);
 
   // Fetch Udhaar records
   const fetchUdhaars = useCallback(async () => {
@@ -220,8 +220,12 @@ export default function App() {
     return null;
   };
 
-  // Initial load
+  // Initial load - run strictly ONCE on mount
+  const hasMountedRef = useRef(false);
   useEffect(() => {
+    if (hasMountedRef.current) return;
+    hasMountedRef.current = true;
+
     const initApp = async () => {
       setIsLoading(true);
       try {
