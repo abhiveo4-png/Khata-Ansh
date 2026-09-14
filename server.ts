@@ -2174,11 +2174,354 @@ ${purchasesList}
 💡 <i>Tip: Naya kharcha log karne ke liye likhein (jaise: <code>300 ${itemQuery} cash</code>)</i>`;
 }
 
+// ---------------- Month-on-Month (MoM) Comparison Generator ----------------
+
+export function buildMonthComparisonReportTelegramMessage(userId: string, userName: string): { text: string; replyMarkup?: any } {
+  const store = getUserData(userId);
+  const txs = store.transactions || [];
+
+  const nowInfo = getAppDateTime();
+  const [currYStr, currMStr, currDStr] = nowInfo.date.split('-');
+  const currYear = parseInt(currYStr, 10);
+  const currMonth = parseInt(currMStr, 10);
+  const currDay = parseInt(currDStr, 10);
+
+  const currMonthKey = `${currYear}-${String(currMonth).padStart(2, '0')}`;
+
+  let prevYear = currYear;
+  let prevMonth = currMonth - 1;
+  if (prevMonth < 1) {
+    prevMonth = 12;
+    prevYear = currYear - 1;
+  }
+  const prevMonthKey = `${prevYear}-${String(prevMonth).padStart(2, '0')}`;
+
+  const monthNames = [
+    'January', 'February', 'March', 'April', 'May', 'June',
+    'July', 'August', 'September', 'October', 'November', 'December'
+  ];
+  const currMonthName = monthNames[currMonth - 1];
+  const prevMonthName = monthNames[prevMonth - 1];
+
+  const daysInPrevMonth = new Date(prevYear, prevMonth, 0).getDate();
+  const daysInCurrMonth = new Date(currYear, currMonth, 0).getDate();
+
+  const prevCutoffDay = Math.min(currDay, daysInPrevMonth);
+  const prevCutoffDate = `${prevMonthKey}-${String(prevCutoffDay).padStart(2, '0')}`;
+  const currCutoffDate = nowInfo.date;
+
+  // Current Month MTD (Day 1 to Today)
+  const currMtdTxs = txs.filter(t => t.date.startsWith(currMonthKey) && t.date <= currCutoffDate);
+  const currMtdExpenses = currMtdTxs.filter(t => t.type === 'expense');
+  const currMtdIncomes = currMtdTxs.filter(t => t.type === 'income');
+  const currMtdSpent = currMtdExpenses.reduce((s, t) => s + (Number(t.amount) || 0), 0);
+  const currMtdIncome = currMtdIncomes.reduce((s, t) => s + (Number(t.amount) || 0), 0);
+
+  // Previous Month MTD (Day 1 to Same Day)
+  const prevMtdTxs = txs.filter(t => t.date.startsWith(prevMonthKey) && t.date <= prevCutoffDate);
+  const prevMtdExpenses = prevMtdTxs.filter(t => t.type === 'expense');
+  const prevMtdIncomes = prevMtdTxs.filter(t => t.type === 'income');
+  const prevMtdSpent = prevMtdExpenses.reduce((s, t) => s + (Number(t.amount) || 0), 0);
+  const prevMtdIncome = prevMtdIncomes.reduce((s, t) => s + (Number(t.amount) || 0), 0);
+
+  // Previous Month Full Month Total
+  const prevFullTxs = txs.filter(t => t.date.startsWith(prevMonthKey));
+  const prevFullSpent = prevFullTxs.filter(t => t.type === 'expense').reduce((s, t) => s + (Number(t.amount) || 0), 0);
+
+  // Spend Difference MTD
+  const spentDiff = currMtdSpent - prevMtdSpent;
+  const absDiff = Math.abs(spentDiff);
+  const pctChange = prevMtdSpent > 0 ? Math.round((absDiff / prevMtdSpent) * 100) : 0;
+
+  // Category level breakdown MTD comparison
+  const catSpentMap: Record<string, { curr: number; prev: number }> = {};
+  for (const t of currMtdExpenses) {
+    const c = t.category || 'Other';
+    if (!catSpentMap[c]) catSpentMap[c] = { curr: 0, prev: 0 };
+    catSpentMap[c].curr += Number(t.amount) || 0;
+  }
+  for (const t of prevMtdExpenses) {
+    const c = t.category || 'Other';
+    if (!catSpentMap[c]) catSpentMap[c] = { curr: 0, prev: 0 };
+    catSpentMap[c].prev += Number(t.amount) || 0;
+  }
+
+  const catChanges = Object.entries(catSpentMap).map(([category, vals]) => {
+    return {
+      category,
+      curr: vals.curr,
+      prev: vals.prev,
+      diff: vals.curr - vals.prev,
+    };
+  }).sort((a, b) => Math.abs(b.diff) - Math.abs(a.diff));
+
+  const dailyAvg = currDay > 0 ? Math.round(currMtdSpent / currDay) : 0;
+  const projectedEnd = dailyAvg * daysInCurrMonth;
+
+  let headerStatus = '';
+  if (spentDiff < 0) {
+    headerStatus = `🟢 <b>GREAT SAVINGS!</b>\nPichle mahine <b>${currDay} tarikh</b> ke mukable aapne <b>₹${absDiff.toLocaleString('en-IN')} (${pctChange}%) KAM kharch</b> kiya hai! 👏🎉`;
+  } else if (spentDiff > 0) {
+    headerStatus = `🔴 <b>SPENDING WARNING!</b>\nPichle mahine <b>${currDay} tarikh</b> ke mukable aapne <b>₹${absDiff.toLocaleString('en-IN')} (${pctChange}%) JYADA kharch</b> kiya hai! ⚠️`;
+  } else {
+    headerStatus = `⚪ <b>BALANCED SPENDING:</b>\nAapka kharcha pichle mahine ke barabar (₹${currMtdSpent.toLocaleString('en-IN')}) chal raha hai.`;
+  }
+
+  let text = `📈 <b>MONTH-ON-MONTH COMPARISON (MoM)</b>
+━━━━━━━━━━━━━━━━━━━━
+👤 <b>Khata:</b> ${userName}
+📅 <b>Status:</b> 1 se ${currDay} tarikh tak
+
+${headerStatus}
+
+📊 <b>KHARCHA TULNA (Day 1 - ${currDay}):</b>
+• <b>Is Mahine (${currMonthName}):</b> <b>₹${currMtdSpent.toLocaleString('en-IN')}</b> (${currMtdExpenses.length} tx)
+• <b>Pichle Mahine (${prevMonthName}):</b> <b>₹${prevMtdSpent.toLocaleString('en-IN')}</b> (${prevMtdExpenses.length} tx)
+• <b>Fark (Difference):</b> ${spentDiff > 0 ? '🔺 +₹' : '🔻 -₹'}${absDiff.toLocaleString('en-IN')}
+
+💵 <b>INCOME COMPARISON:</b>
+• <b>${currMonthName}:</b> ₹${currMtdIncome.toLocaleString('en-IN')}
+• <b>${prevMonthName} (MTD):</b> ₹${prevMtdIncome.toLocaleString('en-IN')}
+
+━━━━━━━━━━━━━━━━━━━━
+🔮 <b>PROJECTION & PACING:</b>
+• <b>Daily Average Spend:</b> ₹${dailyAvg.toLocaleString('en-IN')} / din
+• <b>Projected End (${currMonthName}):</b> ₹${projectedEnd.toLocaleString('en-IN')}
+• <b>Pichla Mahina Full Total:</b> ₹${prevFullSpent.toLocaleString('en-IN')}
+`;
+
+  if (catChanges.length > 0) {
+    text += `\n🏷️ <b>TOP CATEGORY MOVERS:</b>\n`;
+    for (const c of catChanges.slice(0, 4)) {
+      const emoji = getCategoryEmoji(c.category);
+      if (c.diff > 0) {
+        text += `• ${emoji} <b>${c.category}:</b> ₹${c.curr.toLocaleString('en-IN')} (🔺 +₹${c.diff.toLocaleString('en-IN')} badha)\n`;
+      } else if (c.diff < 0) {
+        text += `• ${emoji} <b>${c.category}:</b> ₹${c.curr.toLocaleString('en-IN')} (🟢 -₹${Math.abs(c.diff).toLocaleString('en-IN')} bachat)\n`;
+      } else {
+        text += `• ${emoji} <b>${c.category}:</b> ₹${c.curr.toLocaleString('en-IN')} (Same)\n`;
+      }
+    }
+  }
+
+  text += `\n━━━━━━━━━━━━━━━━━━━━\n💡 <i>Har roz kharcha track karein taaki budget control me rahe!</i>`;
+
+  return {
+    text,
+    replyMarkup: {
+      inline_keyboard: [
+        [
+          { text: '📊 Mahine Ki Summary', callback_data: 'cmd_summary' },
+          { text: '🎯 Category Budget', callback_data: 'cmd_budget' },
+        ],
+        [
+          { text: '🤖 AI Bachat Tips', callback_data: 'cmd_tips' },
+          { text: '💰 Balance Check', callback_data: 'cmd_balance' },
+        ],
+      ],
+    },
+  };
+}
+
+// ---------------- Smart Natural Search Generator ----------------
+
+export function isTransactionSearchMatch(t: Transaction, cleanQ: string): boolean {
+  if (!t || !cleanQ) return false;
+  const desc = (t.description || '').toLowerCase();
+  const cat = (t.category || '').toLowerCase();
+  const pm = (t.paymentMethod || '').toLowerCase();
+  const user = (t.telegramUser || '').toLowerCase();
+  const raw = (t.rawMessage || '').toLowerCase();
+  const date = (t.date || '').toLowerCase();
+  const tags = (t.tags || []).map(tg => tg.toLowerCase());
+
+  if (desc.includes(cleanQ) || cat.includes(cleanQ) || pm.includes(cleanQ) || user.includes(cleanQ) || raw.includes(cleanQ) || date.includes(cleanQ)) {
+    return true;
+  }
+  if (tags.some(tg => tg.includes(cleanQ))) return true;
+
+  const words = cleanQ.split(/\s+/).filter(w => w.length >= 2);
+  if (words.length > 1) {
+    const allMatch = words.every(w =>
+      desc.includes(w) || cat.includes(w) || pm.includes(w) || user.includes(w) || tags.some(tg => tg.includes(w))
+    );
+    if (allMatch) return true;
+  }
+
+  return false;
+}
+
+export function buildSearchReportTelegramMessage(userId: string, rawQuery: string, userName: string): { text: string; replyMarkup?: any } {
+  const store = getUserData(userId);
+  const txs = store.transactions || [];
+  const q = rawQuery.trim();
+  const lowerQ = q.toLowerCase();
+
+  const compMatch = lowerQ.match(/^([><]=?)\s*(\d+(?:\.\d+)?)$/);
+  const isPureNumber = /^\d+(?:\.\d+)?$/.test(lowerQ);
+
+  let filtered = txs;
+  let searchTitle = q;
+
+  if (compMatch) {
+    const op = compMatch[1];
+    const val = parseFloat(compMatch[2]);
+    searchTitle = `Amount ${op} ₹${val.toLocaleString('en-IN')}`;
+    filtered = txs.filter(t => {
+      const amt = Number(t.amount) || 0;
+      if (op === '>') return amt > val;
+      if (op === '>=') return amt >= val;
+      if (op === '<') return amt < val;
+      if (op === '<=') return amt <= val;
+      return false;
+    });
+  } else if (isPureNumber) {
+    const val = parseFloat(lowerQ);
+    searchTitle = `Amount = ₹${val.toLocaleString('en-IN')}`;
+    filtered = txs.filter(t => Math.abs((Number(t.amount) || 0) - val) < 0.01);
+  } else {
+    if (lowerQ.includes('last month') || lowerQ.includes('pichla mahina') || lowerQ.includes('pichle mahine')) {
+      const nowInfo = getAppDateTime();
+      const [y, m] = nowInfo.date.split('-').map(Number);
+      let py = y;
+      let pm = m - 1;
+      if (pm < 1) { pm = 12; py = y - 1; }
+      const prevKey = `${py}-${String(pm).padStart(2, '0')}`;
+      const rest = lowerQ.replace(/last month|pichla mahina|pichle mahine/gi, '').trim();
+      if (rest) {
+        searchTitle = `"${rest}" in Last Month (${prevKey})`;
+        filtered = txs.filter(t => t.date.startsWith(prevKey) && isTransactionSearchMatch(t, rest));
+      } else {
+        searchTitle = `Last Month (${prevKey})`;
+        filtered = txs.filter(t => t.date.startsWith(prevKey));
+      }
+    } else {
+      filtered = txs.filter(t => isTransactionSearchMatch(t, lowerQ));
+    }
+  }
+
+  if (filtered.length === 0) {
+    return {
+      text: `🔍 <b>SEARCH RESULTS: "${searchTitle}"</b>\n━━━━━━━━━━━━━━━━━━━━\n👤 <b>Khata:</b> ${userName}\n\nℹ️ <b>Koi matching transaction nahi mila.</b>\n\n💡 <b>Suggestions:</b>\n• Keyword search: <code>/find medicine</code>, <code>/find petrol</code>, <code>/find swiggy</code>\n• Amount comparison: <code>/find > 2000</code>, <code>/find < 500</code>\n• Payment method: <code>/find upi</code>, <code>/find cash</code>\n• Timing: <code>/find last month</code>`,
+      replyMarkup: {
+        inline_keyboard: [
+          [{ text: '🕒 Recent 5 Tx', callback_data: 'cmd_recent' }, { text: '💰 Balance', callback_data: 'cmd_balance' }],
+          [{ text: '📊 Summary', callback_data: 'cmd_summary' }, { text: '📈 MoM Compare', callback_data: 'cmd_compare' }],
+        ],
+      },
+    };
+  }
+
+  const expenses = filtered.filter(t => t.type === 'expense');
+  const incomes = filtered.filter(t => t.type === 'income');
+  const totalExpense = expenses.reduce((s, t) => s + (Number(t.amount) || 0), 0);
+  const totalIncome = incomes.reduce((s, t) => s + (Number(t.amount) || 0), 0);
+
+  const displayList = filtered.slice(0, 8);
+  const itemsText = displayList.map((t, idx) => {
+    const isInc = t.type === 'income';
+    const sign = isInc ? '🟢 +' : '🔴 -';
+    const pm = t.paymentMethod ? `[${t.paymentMethod}]` : '';
+    const emoji = getCategoryEmoji(t.category);
+    const timeStr = t.time ? ` • ${t.time}` : '';
+    return `<b>[#${idx + 1}]</b> ${sign}<b>₹${Number(t.amount).toLocaleString('en-IN')}</b> • <b>${t.description}</b>\n   ${emoji} ${t.category} ${pm} <i>(📅 ${t.date}${timeStr})</i>`;
+  }).join('\n\n');
+
+  let text = `🔍 <b>SEARCH RESULTS: "${searchTitle}"</b>
+━━━━━━━━━━━━━━━━━━━━
+👤 <b>Khata:</b> ${userName}
+📌 <b>Total Matched:</b> <b>${filtered.length} transactions</b>
+${totalExpense > 0 ? `🔴 <b>Total Kharcha:</b> ₹${totalExpense.toLocaleString('en-IN')} (${expenses.length} tx)\n` : ''}${totalIncome > 0 ? `🟢 <b>Total Income:</b> ₹${totalIncome.toLocaleString('en-IN')} (${incomes.length} tx)\n` : ''}
+━━━━━━━━━━━━━━━━━━━━
+📋 <b>MATCHING TRANSACTIONS:</b>
+
+${itemsText}
+`;
+
+  if (filtered.length > 8) {
+    text += `\n<i>...aur ${filtered.length - 8} transactions hain (Web Dashboard par pura filter dekhein)</i>\n`;
+  }
+
+  text += `━━━━━━━━━━━━━━━━━━━━\n💡 <i>Delete karne ke liye: <code>delete ${filtered[0]?.description || 'item'}</code></i>`;
+
+  return {
+    text,
+    replyMarkup: {
+      inline_keyboard: [
+        [{ text: '💰 Balance', callback_data: 'cmd_balance' }, { text: '📊 Summary', callback_data: 'cmd_summary' }],
+        [{ text: '🕒 Recent 5 Tx', callback_data: 'cmd_recent' }, { text: '↩️ Undo Last', callback_data: 'cmd_undo' }],
+      ],
+    },
+  };
+}
+
+// ---------------- Duplicate / Double Charge Audit Generator ----------------
+
+export function buildDuplicatesReportTelegramMessage(userId: string, userName: string): { text: string; replyMarkup?: any } {
+  const store = getUserData(userId);
+  const txs = store.transactions || [];
+
+  const duplicatePairs: { original: Transaction; duplicate: Transaction; minutesApart: number }[] = [];
+
+  for (let i = 0; i < Math.min(txs.length, 100); i++) {
+    const t1 = txs[i];
+    for (let j = i + 1; j < Math.min(txs.length, 100); j++) {
+      const t2 = txs[j];
+      if (t1.type === t2.type && Math.abs(t1.amount - t2.amount) < 0.01 && t1.date === t2.date) {
+        const d1 = (t1.description || '').toLowerCase().trim();
+        const d2 = (t2.description || '').toLowerCase().trim();
+        const c1 = (t1.category || '').toLowerCase().trim();
+        const c2 = (t2.category || '').toLowerCase().trim();
+
+        if (d1 === d2 || (d1.length >= 3 && d2.length >= 3 && (d1.includes(d2) || d2.includes(d1))) || (c1 === c2 && c1 !== 'uncategorized')) {
+          let mins = 0;
+          if (t1.createdAt && t2.createdAt) {
+            mins = Math.abs(Math.round((new Date(t1.createdAt).getTime() - new Date(t2.createdAt).getTime()) / (60 * 1000)));
+          }
+          duplicatePairs.push({ original: t2, duplicate: t1, minutesApart: mins });
+          break;
+        }
+      }
+    }
+    if (duplicatePairs.length >= 5) break;
+  }
+
+  if (duplicatePairs.length === 0) {
+    return {
+      text: `🛡️ <b>DUPLICATE AUDIT REPORT:</b>\n━━━━━━━━━━━━━━━━━━━━\n👤 <b>Khata:</b> ${userName}\n\n✅ <b>Super! Koi bhi suspicious duplicate ya double-charge transaction nahi mila!</b>\n\nAapke saare transactions bilkul unique aur safe hain.`,
+      replyMarkup: {
+        inline_keyboard: [
+          [{ text: '💰 Balance', callback_data: 'cmd_balance' }, { text: '📊 Summary', callback_data: 'cmd_summary' }],
+          [{ text: '🕒 Recent 5 Tx', callback_data: 'cmd_recent' }, { text: '🎯 Category Budget', callback_data: 'cmd_budget' }],
+        ],
+      },
+    };
+  }
+
+  const list = duplicatePairs.map((p, idx) => {
+    const emoji = getCategoryEmoji(p.duplicate.category);
+    return `⚠️ <b>[#${idx + 1}] Duplicate Pair:</b>\n• ₹${p.duplicate.amount.toLocaleString('en-IN')} - <b>${p.duplicate.description}</b> (${emoji} ${p.duplicate.category})\n  📅 <i>${p.duplicate.date} (${p.minutesApart > 0 ? `${p.minutesApart} min gap` : 'Same day'})</i>`;
+  }).join('\n\n');
+
+  return {
+    text: `🛡️ <b>POTENTIAL DUPLICATES DETECTED!</b>\n━━━━━━━━━━━━━━━━━━━━\n👤 <b>Khata:</b> ${userName}\n⚠️ <b>${duplicatePairs.length} possible duplicate entries mili hain:</b>\n\n${list}\n\n━━━━━━━━━━━━━━━━━━━━\n💡 <b>Hataane ke liye:</b>\n• <code>/undo</code> - Aakhri transaction delete karein\n• <code>delete ${duplicatePairs[0]?.duplicate?.description}</code> - Name se delete karein`,
+    replyMarkup: {
+      inline_keyboard: [
+        [{ text: '🗑️ Undo Aakhri Tx', callback_data: 'cmd_undo' }, { text: '💰 Balance', callback_data: 'cmd_balance' }],
+        [{ text: '📊 Summary', callback_data: 'cmd_summary' }, { text: '🕒 Recent 5 Tx', callback_data: 'cmd_recent' }],
+      ],
+    },
+  };
+}
+
 // ---------------- Helper to send Telegram message & Handy Buttons ----------------
 
 export const TELEGRAM_BOT_COMMANDS = [
   { command: 'balance', description: '💰 Net balance aur kul bachat dekhein' },
   { command: 'summary', description: '📊 Mahine ki income, kharcha & bachat report' },
+  { command: 'compare', description: '📈 Is mahine vs Pichla mahina spending comparison' },
+  { command: 'find', description: '🔍 Search transactions (e.g. /find medicine ya /find > 2000)' },
+  { command: 'duplicates', description: '🛡️ Double-entry & duplicate check' },
   { command: 'udhaar', description: '🤝 Udhaar Khata (Lena / Dena Hisab)' },
   { command: 'fuel', description: '⛽ Vehicle Mileage & Fuel Log Tracker' },
   { command: 'spent', description: '🔍 Kisi item/merchant ka kharcha (e.g. /spent petrol)' },
@@ -2200,6 +2543,7 @@ export const TELEGRAM_BOT_COMMANDS = [
 export const TELEGRAM_HANDY_KEYBOARD = {
   keyboard: [
     [{ text: '💰 Balance' }, { text: '📊 Summary' }],
+    [{ text: '📈 MoM Compare' }, { text: '🔍 Search' }],
     [{ text: '🤝 Udhaar Khata' }, { text: '⛽ Fuel Tracker' }],
     [{ text: '🐷 Gullak' }, { text: '🎯 Category Budget' }],
     [{ text: '👥 My Accounts' }, { text: '📅 Aaj Ka Hisab' }],
@@ -2215,6 +2559,10 @@ export const INLINE_KB_MAIN_COMMANDS = {
     [
       { text: '💰 Balance', callback_data: 'cmd_balance' },
       { text: '📊 Summary', callback_data: 'cmd_summary' },
+    ],
+    [
+      { text: '📈 MoM Compare', callback_data: 'cmd_compare' },
+      { text: '🔍 Search', callback_data: 'cmd_search' },
     ],
     [
       { text: '🤝 Udhaar Khata', callback_data: 'cmd_udhaar' },
@@ -2731,6 +3079,9 @@ async function handleTelegramCallbackQuery(callbackQuery: any) {
   let simulatedText = '';
   if (data === 'cmd_balance') simulatedText = '/balance';
   else if (data === 'cmd_summary') simulatedText = '/summary';
+  else if (data === 'cmd_compare' || data === 'cmd_mom') simulatedText = '/compare';
+  else if (data === 'cmd_search' || data === 'cmd_find') simulatedText = '/find';
+  else if (data === 'cmd_duplicates') simulatedText = '/duplicates';
   else if (data === 'cmd_udhaar' || data === 'cmd_khata') simulatedText = '/udhaar';
   else if (data === 'cmd_fuel' || data === 'cmd_mileage') simulatedText = '/fuel';
   else if (data === 'cmd_gullak') simulatedText = '/gullak';
@@ -3186,6 +3537,9 @@ Aap neeche diye gaye inline buttons par tap karein, keyboard buttons use karein 
 • <code>1200 ki jeans card se</code>
 
 🎯 <b>Budget, Date & Item Reports:</b>
+• <code>/find medicine</code> ya <code>/find > 2000</code> - Smart search: koi bhi item, amount ya payment mode khojein
+• <code>/compare</code> - Is mahine vs pichle mahine ka live MoM spending comparison
+• <code>/duplicates</code> - Galti se hue double charge / duplicate transactions check karein
 • <code>/spent signature</code> ya <code>signature pe kitna kharch huwa</code> - Kisi bhi item/merchant ka kul kharcha, total purchases aur average
 • <code>petrol me kitna gaya</code> ya <code>zomato ka total kharcha</code> - Natural language spending query
 • <code>/gullak</code> - Unspent category budget se bachi hui Gullak bachat
@@ -3201,6 +3555,9 @@ Aap neeche diye gaye inline buttons par tap karein, keyboard buttons use karein 
 📊 <b>Handy Commands:</b>
 /balance - Kul bacha hua balance check karein
 /summary - Mahine ki summary report
+/compare - Is mahine vs pichla mahina MoM spending comparison
+/find - Smart natural search (e.g. <code>/find medicine</code>, <code>/find > 2000</code>)
+/duplicates - Double-entry & duplicate check audit
 /accounts - Jude hue accounts dekhein, switch karein & unlink buttons
 /budget - Category-wise kharcha aur bacha budget
 /date - Tareeq ka hisaab (jaise: <code>/date 2 sep</code> ya <code>kal</code>)
@@ -3669,6 +4026,91 @@ ${tipsText}
     return;
   }
 
+  // 8.6. Month-on-Month Comparison (/compare)
+  const isCompareQuery =
+    command === '/compare' ||
+    command === '/comparison' ||
+    command === '/mom' ||
+    command === '/vs' ||
+    lowerText === 'compare' ||
+    lowerText === 'comparison' ||
+    lowerText === '📈 compare' ||
+    lowerText === '📈 mom compare' ||
+    lowerText.includes('is mahine vs pichla mahina') ||
+    lowerText.includes('pichle mahine se compare') ||
+    lowerText.includes('pichle mahine ka comparison') ||
+    lowerText.includes('mahine ki tulna') ||
+    lowerText.includes('compare months');
+
+  if (isCompareQuery) {
+    const report = buildMonthComparisonReportTelegramMessage(userId, targetUser.name);
+    await sendTelegramReply(botToken, chatId, report.text, report.replyMarkup);
+    return;
+  }
+
+  // 8.7. Smart Natural Search (/find, /search, khojo, dhundo)
+  const isFindCmd =
+    command === '/find' ||
+    command === '/search' ||
+    command === '/khojo' ||
+    command === '/dhundo' ||
+    command === '/filter';
+
+  const naturalFindMatch =
+    lowerText.match(/^(?:find|search|khojo|dhundo)\s+(.+)$/i) ||
+    lowerText.match(/^(.+?)\s+(?:khojo|dhundo|search\s+karo)$/i);
+
+  if (isFindCmd || naturalFindMatch) {
+    let queryToSearch = '';
+    if (isFindCmd) {
+      queryToSearch = commandArg.trim();
+    } else if (naturalFindMatch) {
+      queryToSearch = naturalFindMatch[1].trim();
+    }
+
+    if (!queryToSearch) {
+      const guide = `🔍 <b>Smart Natural Search Guide:</b>
+━━━━━━━━━━━━━━━━━━━━
+📌 <i>Kharchon ya kamai ko aasaani se dhoondein:</i>
+
+• <code>/find medicine</code> - Kisi bhi item ya medicine ka hisab
+• <code>/find petrol</code> - Petrol ke saare transactions
+• <code>/find > 2000</code> - ₹2,000 se bade saare transactions
+• <code>/find < 500</code> - ₹500 se chhote transactions
+• <code>/find upi</code> ya <code>/find cash</code> - Payment method se search
+• <code>/find last month</code> - Pichle mahine ke transactions
+• <code>/find zomato last month</code> - Pichle mahine ke Zomato orders`;
+      await sendTelegramReply(botToken, chatId, guide, {
+        inline_keyboard: [
+          [{ text: '🕒 Recent 5 Tx', callback_data: 'cmd_recent' }, { text: '💰 Balance', callback_data: 'cmd_balance' }],
+          [{ text: '📊 Summary', callback_data: 'cmd_summary' }, { text: '📈 MoM Compare', callback_data: 'cmd_compare' }],
+        ],
+      });
+      return;
+    }
+
+    const report = buildSearchReportTelegramMessage(userId, queryToSearch, targetUser.name);
+    await sendTelegramReply(botToken, chatId, report.text, report.replyMarkup);
+    return;
+  }
+
+  // 8.72. Duplicate / Double Charge Audit (/duplicates)
+  const isDuplicatesQuery =
+    command === '/duplicates' ||
+    command === '/duplicate' ||
+    command === '/doublecharge' ||
+    lowerText === 'duplicates' ||
+    lowerText === 'duplicate' ||
+    lowerText.includes('duplicate check') ||
+    lowerText.includes('double entry') ||
+    lowerText.includes('duplicate kharcha');
+
+  if (isDuplicatesQuery) {
+    const report = buildDuplicatesReportTelegramMessage(userId, targetUser.name);
+    await sendTelegramReply(botToken, chatId, report.text, report.replyMarkup);
+    return;
+  }
+
   // 8.8 Udhaar / Khata Book Matching & Commands
   const isUdhaarQuery =
     command === '/udhaar' ||
@@ -3906,6 +4348,37 @@ ${tipsText}
 
     const msgTimeInfo = getAppDateTime(messageObj.date ? messageObj.date * 1000 : Date.now());
 
+    // 🛡️ Duplicate Transaction Blocker / Double Charge Alert Check
+    let detectedDuplicateTx: { existing: Transaction; minutesAgo: number } | null = null;
+    if (parsedList.length === 1) {
+      const p = parsedList[0];
+      const nowMs = Date.now();
+      for (const ex of userTransactions.slice(0, 25)) {
+        if (ex.type === p.type && Math.abs(ex.amount - p.amount) < 0.01) {
+          const pDesc = (p.description || '').toLowerCase().trim();
+          const exDesc = (ex.description || '').toLowerCase().trim();
+          const isDescMatch =
+            pDesc === exDesc ||
+            (pDesc.length >= 3 && exDesc.length >= 3 && (pDesc.includes(exDesc) || exDesc.includes(pDesc)));
+          const isCatMatch =
+            p.category && ex.category && p.category.toLowerCase() === ex.category.toLowerCase() && p.category !== 'Uncategorized';
+
+          let minutesAgo = 0;
+          if (ex.createdAt) {
+            minutesAgo = Math.round((nowMs - new Date(ex.createdAt).getTime()) / (60 * 1000));
+          }
+
+          if (
+            (minutesAgo >= 0 && minutesAgo <= 30 && (isDescMatch || isCatMatch)) ||
+            (ex.date === (p.date || msgTimeInfo.date) && isDescMatch && minutesAgo <= 90)
+          ) {
+            detectedDuplicateTx = { existing: ex, minutesAgo: Math.max(1, minutesAgo) };
+            break;
+          }
+        }
+      }
+    }
+
     for (const parsed of parsedList) {
       const finalTime = (parsed.time && /^\d{2}:\d{2}$/.test(parsed.time)) ? parsed.time : msgTimeInfo.time;
       const finalDate = (parsed.date && /^\d{4}-\d{2}-\d{2}$/.test(parsed.date)) ? parsed.date : msgTimeInfo.date;
@@ -3966,6 +4439,12 @@ ${isInc ? `📈 <b>Kul Income:</b> ₹${summary.totalIncome.toLocaleString('en-I
       replyText = `✅ <b>${parsedList.length} TRANSACTIONS ADD HO GAYE</b>${memberTag}\n\n${itemsList}\n\n━━━━━━━━━━━━━━━━━━━━\n📊 <b>Net Bacha Balance:</b> ₹${summary.netSavings.toLocaleString('en-IN')}`;
     }
 
+    if (detectedDuplicateTx) {
+      replyText += `\n\n🛡️ <b>DOUBLE CHARGE / DUPLICATE WARNING!</b> ⚠️
+Aapne <b>${detectedDuplicateTx.minutesAgo} min pehle</b> bhi same <b>₹${detectedDuplicateTx.existing.amount.toLocaleString('en-IN')} (${detectedDuplicateTx.existing.description})</b> record kiya tha!
+❓ <i>Agar ye galti se double entry ho gayi hai, to neeche "Undo Duplicate" button se turant delete karein:</i>`;
+    }
+
     // Smart Budget Alert Check
     const affectedCategories = new Set(parsedList.filter(p => p.type === 'expense').map(p => p.category));
     let budgetAlertText = '';
@@ -3989,17 +4468,34 @@ ${isInc ? `📈 <b>Kul Income:</b> ₹${summary.totalIncome.toLocaleString('en-I
       replyText += budgetAlertText;
     }
 
+    const inlineButtons = detectedDuplicateTx
+      ? [
+          [
+            { text: '🗑️ Undo Duplicate (#1)', callback_data: 'cmd_undo' },
+            { text: '✅ Keep Both', callback_data: 'cmd_balance' },
+          ],
+          [
+            { text: '💰 Balance', callback_data: 'cmd_balance' },
+            { text: '📊 Summary', callback_data: 'cmd_summary' },
+          ],
+          [
+            { text: '📈 MoM Compare', callback_data: 'cmd_compare' },
+            { text: '🔍 Search', callback_data: 'cmd_search' },
+          ],
+        ]
+      : [
+          [
+            { text: '💰 Check Balance', callback_data: 'cmd_balance' },
+            { text: '📊 Summary', callback_data: 'cmd_summary' },
+          ],
+          [
+            { text: '🤖 AI Faltu Kharcha', callback_data: 'cmd_tips' },
+            { text: '↩️ Undo / Delete', callback_data: 'cmd_undo' },
+          ],
+        ];
+
     await sendTelegramReply(botToken, chatId, replyText, {
-      inline_keyboard: [
-        [
-          { text: '💰 Check Balance', callback_data: 'cmd_balance' },
-          { text: '📊 Summary', callback_data: 'cmd_summary' },
-        ],
-        [
-          { text: '🤖 AI Faltu Kharcha', callback_data: 'cmd_tips' },
-          { text: '↩️ Undo / Delete', callback_data: 'cmd_undo' },
-        ],
-      ],
+      inline_keyboard: inlineButtons,
     });
 
     // Save log
@@ -5852,6 +6348,122 @@ app.get('/api/transactions/item-spending', (req, res) => {
   } catch (err: any) {
     console.error('Error fetching item spending:', err);
     return res.status(500).json({ error: err?.message || 'Failed to calculate item spending' });
+  }
+});
+
+// MONTH-ON-MONTH (MoM) COMPARISON API
+app.get('/api/analytics/compare', (req, res) => {
+  try {
+    const user = getRequestUser(req);
+    if (!user) {
+      return res.status(401).json({ error: 'User session not found' });
+    }
+    const report = buildMonthComparisonReportTelegramMessage(user.id, user.name);
+    const store = getUserData(user.id);
+    const txs = store.transactions || [];
+    const nowInfo = getAppDateTime();
+    const [currYStr, currMStr, currDStr] = nowInfo.date.split('-');
+    const currYear = parseInt(currYStr, 10);
+    const currMonth = parseInt(currMStr, 10);
+    const currDay = parseInt(currDStr, 10);
+    const currMonthKey = `${currYear}-${String(currMonth).padStart(2, '0')}`;
+
+    let prevYear = currYear;
+    let prevMonth = currMonth - 1;
+    if (prevMonth < 1) {
+      prevMonth = 12;
+      prevYear = currYear - 1;
+    }
+    const prevMonthKey = `${prevYear}-${String(prevMonth).padStart(2, '0')}`;
+    const daysInPrevMonth = new Date(prevYear, prevMonth, 0).getDate();
+    const prevCutoffDay = Math.min(currDay, daysInPrevMonth);
+    const prevCutoffDate = `${prevMonthKey}-${String(prevCutoffDay).padStart(2, '0')}`;
+
+    const currMtdSpent = txs.filter(t => t.date.startsWith(currMonthKey) && t.date <= nowInfo.date && t.type === 'expense')
+      .reduce((s, t) => s + (Number(t.amount) || 0), 0);
+    const prevMtdSpent = txs.filter(t => t.date.startsWith(prevMonthKey) && t.date <= prevCutoffDate && t.type === 'expense')
+      .reduce((s, t) => s + (Number(t.amount) || 0), 0);
+
+    return res.json({
+      success: true,
+      currMonth: currMonthKey,
+      prevMonth: prevMonthKey,
+      currDay,
+      currMtdSpent,
+      prevMtdSpent,
+      spentDiff: currMtdSpent - prevMtdSpent,
+      formattedReport: report.text,
+    });
+  } catch (err: any) {
+    console.error('Error calculating MoM comparison:', err);
+    return res.status(500).json({ error: err?.message || 'Failed to compare months' });
+  }
+});
+
+// SMART SEARCH TRANSACTIONS API
+app.get('/api/transactions/search', (req, res) => {
+  try {
+    const user = getRequestUser(req);
+    if (!user) {
+      return res.status(401).json({ error: 'User session not found' });
+    }
+    const q = String(req.query.q || '').trim();
+    if (!q) {
+      return res.status(400).json({ error: 'Query parameter "q" is required' });
+    }
+    const store = getUserData(user.id);
+    const txs = store.transactions || [];
+    const cleanQ = q.toLowerCase();
+
+    let filtered = txs;
+    const compMatch = cleanQ.match(/^([><]=?)\s*(\d+(?:\.\d+)?)$/);
+    const isPureNumber = /^\d+(?:\.\d+)?$/.test(cleanQ);
+
+    if (compMatch) {
+      const op = compMatch[1];
+      const val = parseFloat(compMatch[2]);
+      filtered = txs.filter(t => {
+        const amt = Number(t.amount) || 0;
+        if (op === '>') return amt > val;
+        if (op === '>=') return amt >= val;
+        if (op === '<') return amt < val;
+        if (op === '<=') return amt <= val;
+        return false;
+      });
+    } else if (isPureNumber) {
+      const val = parseFloat(cleanQ);
+      filtered = txs.filter(t => Math.abs((Number(t.amount) || 0) - val) < 0.01);
+    } else {
+      filtered = txs.filter(t => isTransactionSearchMatch(t, cleanQ));
+    }
+
+    return res.json({
+      success: true,
+      query: q,
+      totalMatches: filtered.length,
+      transactions: filtered,
+    });
+  } catch (err: any) {
+    console.error('Error searching transactions:', err);
+    return res.status(500).json({ error: err?.message || 'Failed to search transactions' });
+  }
+});
+
+// DUPLICATE TRANSACTION AUDIT API
+app.get('/api/transactions/duplicates', (req, res) => {
+  try {
+    const user = getRequestUser(req);
+    if (!user) {
+      return res.status(401).json({ error: 'User session not found' });
+    }
+    const report = buildDuplicatesReportTelegramMessage(user.id, user.name);
+    return res.json({
+      success: true,
+      reportText: report.text,
+    });
+  } catch (err: any) {
+    console.error('Error auditing duplicates:', err);
+    return res.status(500).json({ error: err?.message || 'Failed to audit duplicates' });
   }
 });
 
