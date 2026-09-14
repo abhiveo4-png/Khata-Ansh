@@ -6880,14 +6880,29 @@ async function startServer() {
     const indexHtmlPath = path.join(distPath, 'index.html');
     
     if (fs.existsSync(distPath)) {
+      // Static assets with hash can be cached for 1 year
+      app.use('/assets', express.static(path.join(distPath, 'assets'), {
+        maxAge: '1y',
+        immutable: true,
+      }));
+
+      // Service worker and manifest should NEVER be aggressively cached
       app.use(express.static(distPath, {
-        maxAge: '7d',
-        etag: true,
+        setHeaders: (res, filePath) => {
+          if (filePath.endsWith('.html') || filePath.endsWith('sw.js') || filePath.endsWith('manifest.webmanifest') || filePath.endsWith('registerSW.js')) {
+            res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+            res.setHeader('Pragma', 'no-cache');
+            res.setHeader('Expires', '0');
+          }
+        },
       }));
     }
 
     app.get('*', (req, res) => {
       if (fs.existsSync(indexHtmlPath)) {
+        res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+        res.setHeader('Pragma', 'no-cache');
+        res.setHeader('Expires', '0');
         return res.sendFile(indexHtmlPath);
       }
 
