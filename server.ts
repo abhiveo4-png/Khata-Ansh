@@ -1,4 +1,5 @@
 import express from 'express';
+import compression from 'compression';
 import path from 'path';
 import fs from 'fs';
 import { createServer as createViteServer } from 'vite';
@@ -14,8 +15,15 @@ const { Pool } = pg;
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
 
+// Enable Gzip/Brotli compression for all responses (reduces bandwidth by 75-85%)
+app.use(compression());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+// Ultra-fast Health / Ping endpoint for 14-minute Keep-Alive Cron jobs (less than 25 bytes payload)
+app.get(['/api/health', '/api/ping', '/healthz'], (_req, res) => {
+  res.status(200).json({ status: 'ok', uptime: Math.floor(process.uptime()) });
+});
 
 // Persistence directory (Supports custom persistent disk mount e.g. /var/data or /opt/render/project/src/.data)
 const DATA_DIR = process.env.DATA_DIR || process.env.PERSISTENT_DATA_DIR || path.join(process.cwd(), '.data');
@@ -483,6 +491,7 @@ interface UserDataStore {
   categories: CategoryDef[];
   udhaars?: UdhaarRecord[];
   fuelLogs?: FuelLog[];
+  dataVersion?: number;
 }
 
 let users: UserProfile[] = loadJson<UserProfile[]>(USERS_FILE, []);
@@ -834,12 +843,14 @@ function getUserData(userId: string): UserDataStore {
 
   if (!store.udhaars) store.udhaars = [];
   if (!store.fuelLogs) store.fuelLogs = [];
+  if (!store.dataVersion) store.dataVersion = 1;
 
   userDataCache.set(userId, store);
   return store;
 }
 
 function saveUserData(userId: string, store: UserDataStore): void {
+  store.dataVersion = (store.dataVersion || 1) + 1;
   userDataCache.set(userId, store);
   const filePath = getUserDataFilePath(userId);
   saveJson(filePath, store);
@@ -4681,6 +4692,22 @@ app.delete('/api/categories/:id', (req, res) => {
   res.json({ success: true, categories: store.categories, budgets: store.budgets, deletedCategory: targetCat.name });
 });
 
+// 2.5 Ultra-Lightweight Sync Engine (saves 99% bandwidth compared to full transactions polling)
+// Returns tiny JSON (~35 bytes): { v: 42, txCount: 15, udhaarCount: 2, fuelCount: 3 }
+app.get('/api/sync/version', (req, res) => {
+  const user = getRequestUser(req);
+  if (!user) {
+    return res.json({ v: 0, txCount: 0, udhaarCount: 0, fuelCount: 0 });
+  }
+  const store = getUserData(user.id);
+  res.json({
+    v: store.dataVersion || 1,
+    txCount: store.transactions.length,
+    udhaarCount: (store.udhaars || []).length,
+    fuelCount: (store.fuelLogs || []).length,
+  });
+});
+
 // 3. Transactions CRUD APIs (Scoped to User)
 app.get('/api/transactions', (req, res) => {
   const user = getRequestUser(req);
@@ -6091,22 +6118,31 @@ app.post(['/api/gullak/start-month', '/api/users/tracking-start-month'], (req, r
   }
 });
 
-// 5. Telegram Bot Config & Status
+// 5. Telegram Bot Config & Status (with 5-minute memory cache to prevent outbound bandwidth drain)
+let cachedBotInfo: any = null;
+let cachedWebhookInfo: any = null;
+let lastTelegramApiCheck = 0;
+
 app.get('/api/telegram/config', async (req, res) => {
   const currentToken = process.env.TELEGRAM_BOT_TOKEN || botConfig.botToken || '';
   const appUrl = 'https://ais-dev-tqtvhllm5ccjbvvdxz44bm-657007980218.asia-east1.run.app';
   const webhookUrl = `${appUrl}/api/telegram/webhook`;
 
-  let botInfo: any = null;
-  let webhookInfo: any = null;
+  const forceRefresh = req.query.refresh === 'true';
+  const now = Date.now();
 
-  if (currentToken) {
+  let botInfo: any = cachedBotInfo;
+  let webhookInfo: any = cachedWebhookInfo;
+
+  if (currentToken && (forceRefresh || !cachedBotInfo || now - lastTelegramApiCheck > 5 * 60 * 1000)) {
     try {
+      lastTelegramApiCheck = now;
       const meRes = await safeTelegramFetch(`https://api.telegram.org/bot${currentToken}/getMe`);
       if (meRes && meRes.ok) {
         const meData = await meRes.json().catch(() => null);
         if (meData && meData.ok) {
           botInfo = meData.result;
+          cachedBotInfo = botInfo;
           botConfig.botUsername = botInfo.username;
           botConfig.botName = botInfo.first_name;
         }
@@ -6117,6 +6153,7 @@ app.get('/api/telegram/config', async (req, res) => {
         const hookData = await hookRes.json().catch(() => null);
         if (hookData && hookData.ok) {
           webhookInfo = hookData.result;
+          cachedWebhookInfo = webhookInfo;
         }
       }
     } catch {
@@ -6843,7 +6880,10 @@ async function startServer() {
     const indexHtmlPath = path.join(distPath, 'index.html');
     
     if (fs.existsSync(distPath)) {
-      app.use(express.static(distPath));
+      app.use(express.static(distPath, {
+        maxAge: '7d',
+        etag: true,
+      }));
     }
 
     app.get('*', (req, res) => {

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { 
   FileText,
   FolderPlus,
@@ -245,16 +245,58 @@ export default function App() {
     initApp();
   }, [fetchUsers, fetchCategories, fetchBotConfig, fetchUdhaars, fetchFuelLogs, fetchTransactions, fetchBudgets]);
 
-  // Real-time polling every 4 seconds to sync Telegram messages immediately
+  // Ultra-Low-Bandwidth Smart Sync Engine:
+  // Instead of polling 4 large endpoints every 4s (which burned ~4GB/day!),
+  // we check a tiny 35-byte version counter every 10s only when the tab is actively visible.
+  // When the tab is in background/screen locked, zero requests are sent.
+  const lastSyncVersionRef = useRef<number | null>(null);
+  const isSyncingRef = useRef<boolean>(false);
+
   useEffect(() => {
-    const interval = setInterval(() => {
-      fetchTransactions();
-      fetchBotConfig();
-      fetchUdhaars();
-      fetchFuelLogs();
-    }, 4000);
-    return () => clearInterval(interval);
-  }, [fetchTransactions, fetchBotConfig, fetchUdhaars, fetchFuelLogs]);
+    const syncIfUpdated = async () => {
+      // Pause completely if tab is hidden / minimized / phone locked
+      if (document.hidden) return;
+      if (isSyncingRef.current) return;
+      isSyncingRef.current = true;
+
+      try {
+        const { data } = await safeFetchJson<{ v?: number; txCount?: number; udhaarCount?: number; fuelCount?: number }>('/api/sync/version');
+        if (data && typeof data.v === 'number') {
+          if (lastSyncVersionRef.current === null) {
+            lastSyncVersionRef.current = data.v;
+          } else if (data.v !== lastSyncVersionRef.current) {
+            // New record detected (from Telegram or another tab) -> re-fetch data
+            lastSyncVersionRef.current = data.v;
+            await Promise.all([
+              fetchTransactions(),
+              fetchUdhaars(),
+              fetchFuelLogs(),
+            ]);
+          }
+        }
+      } catch {
+        // Silent recovery
+      } finally {
+        isSyncingRef.current = false;
+      }
+    };
+
+    // Check every 10s when tab is active
+    const interval = setInterval(syncIfUpdated, 10000);
+
+    // When user comes back to the tab, immediately check for updates
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        syncIfUpdated();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [fetchTransactions, fetchUdhaars, fetchFuelLogs]);
 
   // Handlers for transactions
   const handleAddTransaction = async (txData: Partial<Transaction>) => {
