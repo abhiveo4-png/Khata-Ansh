@@ -4154,7 +4154,7 @@ app.post('/api/auth/register', (req, res) => {
   };
 
   users.push(newUser);
-  saveJson(USERS_FILE, users);
+  saveUsers(users);
   getUserData(newUser.id);
 
   const token = Buffer.from(JSON.stringify({ userId: newUser.id, email: newUser.email, t: Date.now() })).toString('base64');
@@ -4189,7 +4189,7 @@ app.post('/api/auth/login', (req, res) => {
     // Legacy profile without password: if password supplied, set it to secure the account
     if (sPassword && sPassword.length >= 4) {
       user.password = sPassword;
-      saveJson(USERS_FILE, users);
+      saveUsers(users);
     } else if (!sPassword) {
       return res.status(400).json({
         error: 'Password required. Please enter a 4+ digit PIN or password to secure your account.',
@@ -4221,7 +4221,7 @@ app.post('/api/auth/change-password', (req, res) => {
   }
 
   user.password = sNewPassword;
-  saveJson(USERS_FILE, users);
+  saveUsers(users);
 
   res.json({ success: true, message: 'Security password updated successfully!', user: toSafeUser(user) });
 });
@@ -4423,7 +4423,7 @@ app.post('/api/auth/members/alias', (req, res) => {
     member.role = role;
   }
 
-  saveJson(USERS_FILE, users);
+  saveUsers(users);
   res.json({ success: true, member, members: user.linkedMembers });
 });
 
@@ -4442,7 +4442,7 @@ app.delete('/api/auth/members/:memberId', (req, res) => {
     user.telegramUsername = user.linkedMembers[0]?.telegramUsername;
   }
 
-  saveJson(USERS_FILE, users);
+  saveUsers(users);
   res.json({ success: true, members: user.linkedMembers, user: toSafeUser(user) });
 });
 
@@ -4452,7 +4452,7 @@ app.post('/api/auth/regenerate-linkcode', (req, res) => {
     return res.status(401).json({ error: 'Unauthorized' });
   }
   user.linkCode = generateLinkCode();
-  saveJson(USERS_FILE, users);
+  saveUsers(users);
   res.json({ success: true, linkCode: user.linkCode, user: toSafeUser(user) });
 });
 
@@ -4495,7 +4495,7 @@ app.post(['/api/members/approve-request', '/api/auth/members/approve-request'], 
     });
   }
 
-  saveJson(USERS_FILE, users);
+  saveUsers(users);
   setActiveAccountForChat(foundReq.chatId, user.id);
 
   // Notify member on Telegram
@@ -4534,7 +4534,7 @@ app.post(['/api/members/reject-request', '/api/auth/members/reject-request'], as
   }
 
   user.pendingRequests = user.pendingRequests.filter(r => r.id !== requestId);
-  saveJson(USERS_FILE, users);
+  saveUsers(users);
 
   const botToken = process.env.TELEGRAM_BOT_TOKEN || botConfig.botToken;
   if (botToken) {
