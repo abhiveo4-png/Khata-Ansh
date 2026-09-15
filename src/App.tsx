@@ -435,6 +435,19 @@ export default function App() {
     }
   };
 
+  const handleUpdateUdhaar = async (id: string, updates: Partial<UdhaarRecord>) => {
+    const { data } = await safeFetchJson<{ success?: boolean; udhaars?: UdhaarRecord[] }>(`/api/udhaar/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(updates),
+    });
+    if (data?.udhaars) {
+      setUdhaars(data.udhaars);
+    } else {
+      await fetchUdhaars();
+    }
+  };
+
   // Fuel Handlers
   const handleAddFuelLog = async (newLog: Omit<FuelLog, 'id' | 'createdAt'>) => {
     const { data } = await safeFetchJson<{ success?: boolean; log?: FuelLog; fuelLogs?: FuelLog[]; summary?: FinancialSummary }>('/api/fuel', {
@@ -749,6 +762,7 @@ export default function App() {
             onAddRecord={handleAddUdhaar}
             onSettleRecord={handleSettleUdhaar}
             onDeleteRecord={handleDeleteUdhaar}
+            onUpdateRecord={handleUpdateUdhaar}
           />
         )}
 

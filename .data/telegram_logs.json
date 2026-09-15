@@ -1,5 +1,21 @@
 [
   {
+    "id": "log_1789477141448_s3a3",
+    "timestamp": "2026-09-15T12:59:01.448Z",
+    "type": "outgoing_reply",
+    "chatId": "838107368",
+    "botReply": "📲 <b>WHATSAPP REMINDER TAIYAAR HAI:</b>\n━━━━━━━━━━━━━━━━━━━━\n👤 <b>Naam:</b> <b>Jiju</b>\n💰 <b>Kul Bakaya:</b> <b>₹4,000</b>\n\n📝 <b>Message Preview:</b>\n<i>Hi Jiju, Namaskar -\n\nMere TeleExpense AI ledger me aapko diya gaya udhar bakaya hai jiski details:\n\n📅 Date-wise Details:\n• 2026-09-10: ₹2,000 (2000 diya Jiju ko 14th Sep)\n• 2026-09-15: ₹2,000 (2000 diya Jiju ko 14th Sep)\n\n💰 Kul Bakaya Raqam (Total Due): ₹4,000\n\nPlease check kare or apna udhar amount settle kare. 🙏</i>\n\n👇 Neeche button par click karke direct WhatsApp par bhejein:",
+    "status": "success"
+  },
+  {
+    "id": "log_1789476665896_o9it",
+    "timestamp": "2026-09-15T12:51:05.896Z",
+    "type": "outgoing_reply",
+    "chatId": "838107368",
+    "botReply": "🤝 <b>UDHAAR & KHATA (COMBINED HISAB)</b>\n━━━━━━━━━━━━━━━━━━━━\n💸 <b>Maine Diya (Lena Hai):</b> <b>₹4,000</b>\n📥 <b>Maine Liya (Dena Hai):</b> <b>₹0</b>\n📊 <b>Net Udhaar Balance:</b> <b>🟢 +₹4,000 (Lena Hai)</b>\n👥 <b>Active Khate:</b> 1 log (2 total entries)\n\n━━━━━━━━━━━━━━━━━━━━\n📋 <b>VYAKTI-ANUSAR COMBINED BREAKDOWN:</b>\n\n🟢 <b>Jiju:</b> <b>₹4,000 LENA HAI</b> <i>(2 entries)</i>\n   • 📅 <b>2026-09-15:</b> ₹2,000 diya <i>[ID: <code>_mlyx4</code>]</i>\n   • 📅 <b>2026-09-10:</b> ₹2,000 diya <i>[ID: <code>_ljdq5</code>]</i>\n\n━━━━━━━━━━━━━━━━━━━━\n💡 <b>Kaam ki Commands:</b>\n• Naya likhein: <code>2000 diya Jiju ko 14th Sep</code>\n• Date badlein: <code>date change Jiju 14 Sep</code> ya <code>/udhardate</code>\n• Settle karein: <code>Jiju settle</code>",
+    "status": "success"
+  },
+  {
     "id": "log_1786882719942",
     "timestamp": "2026-08-16T12:18:39.942Z",
     "type": "incoming_message",

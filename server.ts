@@ -910,8 +910,8 @@ function getRequestUser(req: express.Request): UserProfile | null {
 // Calculate Financial Summary for a user
 function calculateUserSummary(userId: string): FinancialSummary {
   const store = getUserData(userId);
-  const txList = store.transactions;
-  const budgetList = store.budgets;
+  syncBudgetsWithCategories(store);
+  const txList = store.transactions || [];
 
   let totalIncome = 0;
   let totalExpense = 0;
@@ -919,27 +919,32 @@ function calculateUserSummary(userId: string): FinancialSummary {
   let expenseCount = 0;
   let monthlySpent = 0;
 
-  const now = new Date();
-  const currentMonthPrefix = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  const istInfo = getAppDateTime();
+  const currentMonthPrefix = istInfo.date.substring(0, 7);
+  const currentDay = parseInt(istInfo.date.substring(8, 10), 10) || 1;
 
   for (const t of txList) {
+    const amt = Number(t.amount) || 0;
     if (t.type === 'income') {
-      totalIncome += t.amount;
+      totalIncome += amt;
       incomeCount++;
     } else {
-      totalExpense += t.amount;
+      totalExpense += amt;
       expenseCount++;
       if (t.date && t.date.startsWith(currentMonthPrefix)) {
-        monthlySpent += t.amount;
+        monthlySpent += amt;
       }
     }
   }
 
   const netSavings = totalIncome - totalExpense;
   const savingsRate = totalIncome > 0 ? Math.max(0, Math.round((netSavings / totalIncome) * 100)) : 0;
-  const monthlyBudget = budgetList.reduce((acc, b) => acc + (b.limit || 0), 0);
+  const expenseCats = new Set((store.categories || []).filter(c => c.type !== 'income').map(c => c.name.toLowerCase()));
+  const monthlyBudget = (store.budgets || [])
+    .filter(b => expenseCats.has(b.category.toLowerCase()))
+    .reduce((acc, b) => acc + (Number(b.limit) || 0), 0);
 
-  const daysInMonthSoFar = Math.max(1, now.getDate());
+  const daysInMonthSoFar = Math.max(1, currentDay);
   const dailyAverageExpense = Math.round(monthlySpent / daysInMonthSoFar);
 
   return {
@@ -1190,6 +1195,143 @@ export function parseCustomDateString(rawStr: string): string | null {
   }
 
   return null;
+}
+
+export function parseUdhaarIntentAndData(rawText: string): {
+  type: 'lent' | 'borrowed';
+  amount: number;
+  personName: string;
+  date: string;
+  description?: string;
+} | null {
+  const cleanText = rawText.trim();
+  const lower = cleanText.toLowerCase();
+
+  // Udhaar keywords check
+  const isLent = /\b(diya|diye|de\s+diya|lent|give|gave|bheja|send\s+kiya|transfer\s+kiya)\b/i.test(lower);
+  const isBorrowed = /\b(liya|liye|le\s+liya|mila|mile|wapas\s+mila|borrowed|borrow|received|take|took)\b/i.test(lower);
+
+  if (!isLent && !isBorrowed) {
+    if (!/\b(udhaar|udhar|khata)\b/i.test(lower)) {
+      return null;
+    }
+  }
+
+  // 1. Extract date substring
+  const MONTH_NAMES = "jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec|january|february|march|april|june|july|august|september|october|november|december";
+  let extractedDate = getIstDateOffset(0);
+  let textWithoutDate = cleanText;
+
+  const dmyRegex = new RegExp(`\\b(\\d{1,2}(?:st|nd|rd|th)?[\\s\\-_]+(?:${MONTH_NAMES})(?:[\\s\\-_]+\\d{2,4})?)\\b`, 'i');
+  const dmyMatch = cleanText.match(dmyRegex);
+
+  const mdyRegex = new RegExp(`\\b((?:${MONTH_NAMES})[\\s\\-_]+\\d{1,2}(?:st|nd|rd|th)?(?:[\\s\\-_,]+\\d{2,4})?)\\b`, 'i');
+  const mdyMatch = cleanText.match(mdyRegex);
+
+  const numMatch = cleanText.match(/\b\d{1,2}[\/\-\.]\d{1,2}(?:[\/\-\.]\d{2,4})?\b/);
+  const relMatch = cleanText.match(/\b(yesterday|kal|beeta kal|parso|parson|today|aaj)\b/i);
+
+  const matchedDateStr = dmyMatch?.[0] || mdyMatch?.[0] || numMatch?.[0] || relMatch?.[0];
+  if (matchedDateStr) {
+    const parsed = parseCustomDateString(matchedDateStr);
+    if (parsed) {
+      extractedDate = parsed;
+      textWithoutDate = cleanText.replace(matchedDateStr, ' ');
+    }
+  }
+
+  // 2. Extract Amount
+  const amtMatch = textWithoutDate.match(/(?:rs\.?|inr|₹)?\s*(\d+(?:\.\d+)?)\s*(?:rs\.?|rupaye|rupees|₹)?/i);
+  if (!amtMatch) return null;
+  const amount = parseFloat(amtMatch[1]);
+  if (isNaN(amount) || amount <= 0) return null;
+
+  // 3. Remove amount from remnant
+  let remnant = textWithoutDate.replace(amtMatch[0], ' ');
+
+  // 4. Remove Udhaar & Action stopwords
+  remnant = remnant
+    .replace(/\b(diya|diye|de\s+diya|lent|give|gave|bheja|send\s+kiya|transfer\s+kiya|liya|liye|le\s+liya|mila|mile|wapas\s+mila|borrowed|borrow|received|take|took)\b/gi, ' ')
+    .replace(/\b(udhaar|udhar|khata|advance|ko|se|from|to|ne|ka|ki|ke|pe|par|paid|got)\b/gi, ' ')
+    .replace(/[^a-zA-Z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  // If remnant is empty, or only contains generic non-person words, abort
+  const nonPersonWords = ['cash', 'upi', 'card', 'petrol', 'sabzi', 'dahi', 'kharcha', 'income', 'bank', 'odo', 'km', 'fuel', 'diesel', 'cng', 'bill'];
+  if (!remnant || nonPersonWords.includes(remnant.toLowerCase())) {
+    return null;
+  }
+
+  // Person name formatting: Capitalize first letters
+  const personName = remnant
+    .split(' ')
+    .filter(Boolean)
+    .map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+    .join(' ');
+
+  if (!personName) return null;
+
+  return {
+    type: isLent ? 'lent' : 'borrowed',
+    amount,
+    personName,
+    date: extractedDate,
+    description: rawText,
+  };
+}
+
+export function parseUdhaarDateChangeCommand(text: string): {
+  isDateChangeCommand: boolean;
+  target?: string;
+  dateStr?: string;
+  parsedDate?: string | null;
+} {
+  const clean = text.trim();
+  const lower = clean.toLowerCase();
+
+  const isDateChange = 
+    lower.startsWith('/udhardate') ||
+    lower.startsWith('/changedate') ||
+    lower.startsWith('/editdate') ||
+    lower.includes('date change') ||
+    lower.includes('change date') ||
+    lower.includes('date badlo') ||
+    lower.includes('tareeq badlo') ||
+    /\bki\s+date\b.*\b(karo|kardo|rakho|badlo)\b/i.test(lower);
+
+  if (!isDateChange) return { isDateChangeCommand: false };
+
+  const MONTH_NAMES = "jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec|january|february|march|april|june|july|august|september|october|november|december";
+  const dmyRegex = new RegExp(`\\b(\\d{1,2}(?:st|nd|rd|th)?[\\s\\-_]+(?:${MONTH_NAMES})(?:[\\s\\-_]+\\d{2,4})?)\\b`, 'i');
+  const mdyRegex = new RegExp(`\\b((?:${MONTH_NAMES})[\\s\\-_]+\\d{1,2}(?:st|nd|rd|th)?(?:[\\s\\-_,]+\\d{2,4})?)\\b`, 'i');
+  const numMatch = clean.match(/\b\d{1,2}[\/\-\.]\d{1,2}(?:[\/\-\.]\d{2,4})?\b/);
+  const relMatch = clean.match(/\b(yesterday|kal|beeta kal|parso|parson|today|aaj)\b/i);
+
+  const matchedDateStr = clean.match(dmyRegex)?.[0] || clean.match(mdyRegex)?.[0] || numMatch?.[0] || relMatch?.[0];
+  let parsedDate: string | null = null;
+  if (matchedDateStr) {
+    parsedDate = parseCustomDateString(matchedDateStr);
+  }
+
+  let remnant = clean;
+  if (matchedDateStr) {
+    remnant = remnant.replace(matchedDateStr, ' ');
+  }
+  remnant = remnant
+    .replace(/^\/(?:udhardate|changedate|editdate)\s*/i, ' ')
+    .replace(/\b(date\s+change|change\s+date|date\s+badlo|tareeq\s+badlo|date|tareeq)\b/gi, ' ')
+    .replace(/\b(ko|se|ki|ka|ke|to|for|karo|kardo|rakho|badlo)\b/gi, ' ')
+    .replace(/[^a-zA-Z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  return {
+    isDateChangeCommand: true,
+    target: remnant,
+    dateStr: matchedDateStr,
+    parsedDate,
+  };
 }
 
 export function extractCustomTimeString(text: string): string | undefined {
@@ -1866,6 +2008,13 @@ export function isPureDateQuery(rawText: string): string | null {
   if (!rawText) return null;
   const text = rawText.trim();
   const lower = text.toLowerCase();
+
+  // Exclude date change / modification commands, udhaar/khata actions, and fuel commands
+  if (
+    /\b(change|badal|badlo|karo|update|edit|set|udhar|udhaar|khata|diya|diye|liya|liye|settle|fuel|mileage)\b/i.test(lower)
+  ) {
+    return null;
+  }
 
   // 1. Direct command syntax: /date <date>, /day <date>, /tareeq <date>, /history <date>
   if (
@@ -2590,48 +2739,133 @@ export function buildUdhaarReportTelegramMessage(userId: string): { text: string
   const lent = pending.filter(u => u.type === 'lent');
   const borrowed = pending.filter(u => u.type === 'borrowed');
 
-  const totalLent = lent.reduce((sum, u) => sum + u.amount, 0);
-  const totalBorrowed = borrowed.reduce((sum, u) => sum + u.amount, 0);
+  const totalLent = lent.reduce((sum, u) => sum + (Number(u.amount) || 0), 0);
+  const totalBorrowed = borrowed.reduce((sum, u) => sum + (Number(u.amount) || 0), 0);
   const netDue = totalLent - totalBorrowed;
 
-  let text = `🤝 <b>UDHAAR & KHATA HISAB</b>\n━━━━━━━━━━━━━━━━━━━━\n`;
-  text += `💸 <b>Maine Diya (Lena hai):</b> <b>₹${totalLent.toLocaleString('en-IN')}</b> (${lent.length} log)\n`;
-  text += `📥 <b>Maine Liya (Dena hai):</b> <b>₹${totalBorrowed.toLocaleString('en-IN')}</b> (${borrowed.length} log)\n`;
-  text += `📊 <b>Net Udhaar Balance:</b> <b>${netDue >= 0 ? `🟢 +₹${netDue.toLocaleString('en-IN')} (Aana hai)` : `🔴 -₹${Math.abs(netDue).toLocaleString('en-IN')} (Dena hai)`}</b>\n\n`;
+  // Group pending entries by normalized person name
+  const personMap: Record<string, {
+    displayName: string;
+    totalLent: number;
+    totalBorrowed: number;
+    netDue: number;
+    entries: UdhaarRecord[];
+  }> = {};
 
-  if (pending.length === 0) {
+  for (const u of pending) {
+    const key = (u.personName || 'Unknown').trim().toLowerCase();
+    if (!personMap[key]) {
+      personMap[key] = {
+        displayName: u.personName.trim(),
+        totalLent: 0,
+        totalBorrowed: 0,
+        netDue: 0,
+        entries: [],
+      };
+    }
+    const amt = Number(u.amount) || 0;
+    if (u.type === 'lent') {
+      personMap[key].totalLent += amt;
+    } else {
+      personMap[key].totalBorrowed += amt;
+    }
+    personMap[key].netDue = personMap[key].totalLent - personMap[key].totalBorrowed;
+    personMap[key].entries.push(u);
+  }
+
+  const people = Object.values(personMap);
+  // Sort by highest pending net due
+  people.sort((a, b) => Math.abs(b.netDue) - Math.abs(a.netDue));
+
+  let text = `🤝 <b>UDHAAR & KHATA (COMBINED HISAB)</b>\n━━━━━━━━━━━━━━━━━━━━\n`;
+  text += `💸 <b>Maine Diya (Lena Hai):</b> <b>₹${totalLent.toLocaleString('en-IN')}</b>\n`;
+  text += `📥 <b>Maine Liya (Dena Hai):</b> <b>₹${totalBorrowed.toLocaleString('en-IN')}</b>\n`;
+  text += `📊 <b>Net Udhaar Balance:</b> <b>${netDue >= 0 ? `🟢 +₹${netDue.toLocaleString('en-IN')} (Lena Hai)` : `🔴 -₹${Math.abs(netDue).toLocaleString('en-IN')} (Dena Hai)`}</b>\n`;
+  text += `👥 <b>Active Khate:</b> ${people.length} log (${pending.length} total entries)\n\n`;
+
+  if (people.length === 0) {
     text += `✨ <i>Saara hisab barabar hai! Koi pending udhaar nahi hai.</i>\n\n`;
   } else {
-    if (lent.length > 0) {
-      text += `<b>🔹 Lena Baaki Hai (Lent):</b>\n`;
-      lent.slice(0, 5).forEach((u) => {
-        text += `• <b>${u.personName}:</b> ₹${u.amount.toLocaleString('en-IN')} <i>(${u.date})</i>\n`;
-      });
-      text += `\n`;
-    }
-    if (borrowed.length > 0) {
-      text += `<b>🔸 Dena Baaki Hai (Borrowed):</b>\n`;
-      borrowed.slice(0, 5).forEach((u) => {
-        text += `• <b>${u.personName}:</b> ₹${u.amount.toLocaleString('en-IN')} <i>(${u.date})</i>\n`;
-      });
+    text += `━━━━━━━━━━━━━━━━━━━━\n`;
+    text += `📋 <b>VYAKTI-ANUSAR COMBINED BREAKDOWN:</b>\n\n`;
+
+    for (const p of people) {
+      const isLena = p.netDue > 0;
+      const isDena = p.netDue < 0;
+      const statusIcon = isLena ? '🟢' : isDena ? '🔴' : '⚪';
+      const statusText = isLena 
+        ? `<b>₹${p.netDue.toLocaleString('en-IN')} LENA HAI</b>` 
+        : isDena 
+        ? `<b>₹${Math.abs(p.netDue).toLocaleString('en-IN')} DENA HAI</b>` 
+        : `<b>Hisab Barabar (₹0)</b>`;
+
+      text += `${statusIcon} <b>${p.displayName}:</b> ${statusText} <i>(${p.entries.length} ${p.entries.length === 1 ? 'entry' : 'entries'})</i>\n`;
+
+      // Sort entries by date descending
+      const sortedEntries = [...p.entries].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+      for (const e of sortedEntries) {
+        const typeLabel = e.type === 'lent' ? 'diya' : 'liya';
+        text += `   • 📅 <b>${e.date || 'N/A'}:</b> ₹${Number(e.amount).toLocaleString('en-IN')} ${typeLabel} <i>[ID: <code>${e.id.slice(-6)}</code>]</i>\n`;
+      }
       text += `\n`;
     }
   }
 
-  text += `💡 <b>Naya Udhaar add karne ke tareeqe:</b>\n`;
-  text += `• <code>Diya 500 Rohan ko</code> (Lena hai)\n`;
-  text += `• <code>Liya 2000 Papa se</code> (Dena hai)\n`;
-  text += `• <code>Rohan settle</code> (Wapas mil gaya)`;
+  text += `━━━━━━━━━━━━━━━━━━━━\n`;
+  text += `💡 <b>Kaam ki Commands:</b>\n`;
+  text += `• Naya likhein: <code>2000 diya Jiju ko 14th Sep</code>\n`;
+  text += `• Date badlein: <code>date change Jiju 14 Sep</code> ya <code>/udhardate</code>\n`;
+  text += `• WhatsApp Remind: <code>remind Jiju</code> ya <code>/remind Jiju</code>\n`;
+  text += `• Settle karein: <code>Jiju settle</code>`;
+
+  const inlineKeyboard: any[][] = [];
+  if (pending.length > 0) {
+    inlineKeyboard.push([
+      { text: '📅 Date Badlein', callback_data: 'udh_menu_date' },
+      { text: '📲 WhatsApp Remind', callback_data: 'udh_menu_remind' },
+    ]);
+    inlineKeyboard.push([
+      { text: '✅ Settle Khata', callback_data: 'udh_menu_settle' },
+    ]);
+  }
+  inlineKeyboard.push([
+    { text: '💰 Balance', callback_data: 'cmd_balance' },
+    { text: '📊 Summary', callback_data: 'cmd_summary' },
+  ]);
 
   return {
     text,
     replyMarkup: {
-      inline_keyboard: [
-        [{ text: '💰 Balance', callback_data: 'cmd_balance' }, { text: '📊 Summary', callback_data: 'cmd_summary' }],
-        [{ text: '🎯 Category Budget', callback_data: 'cmd_budget' }, { text: '🕒 Recent 5 Tx', callback_data: 'cmd_recent' }],
-      ],
+      inline_keyboard: inlineKeyboard,
     },
   };
+}
+
+export function buildWhatsAppReminderText(personName: string, entries: UdhaarRecord[]): { messageText: string; url: string; totalDue: number } {
+  const pendingEntries = entries.filter(e => e.status === 'pending');
+  // Sort by date ascending
+  const sorted = [...pendingEntries].sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+
+  let totalDue = 0;
+  const detailsLines = sorted.map(e => {
+    const amt = Number(e.amount) || 0;
+    if (e.type === 'lent') {
+      totalDue += amt;
+    } else {
+      totalDue -= amt;
+    }
+    const desc = e.description ? ` (${e.description})` : '';
+    const typeNote = e.type === 'borrowed' ? ' [Liya/Adjust]' : '';
+    return `• ${e.date || 'N/A'}: ₹${amt.toLocaleString('en-IN')}${desc}${typeNote}`;
+  });
+
+  const absTotal = Math.abs(totalDue).toLocaleString('en-IN');
+  const detailsText = detailsLines.length > 0 ? detailsLines.join('\n') : `• Kul Bakaya: ₹${absTotal}`;
+
+  const messageText = `Hi ${personName}, Namaskar -\n\nMere TeleExpense AI ledger me aapko diya gaya udhar bakaya hai jiski details:\n\n📅 Date-wise Details:\n${detailsText}\n\n💰 Kul Bakaya Raqam (Total Due): ₹${absTotal}\n\nPlease check kare or apna udhar amount settle kare. 🙏`;
+
+  const url = `https://wa.me/?text=${encodeURIComponent(messageText)}`;
+  return { messageText, url, totalDue };
 }
 
 export function buildFuelReportTelegramMessage(userId: string): { text: string; replyMarkup: any } {
@@ -2876,6 +3110,21 @@ async function sendTelegramReply(
         body: JSON.stringify(payload),
       });
     }
+
+    try {
+      const logEntry: any = {
+        id: `log_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
+        timestamp: new Date().toISOString(),
+        type: 'outgoing_reply',
+        chatId: String(chatId),
+        botReply: text,
+        status: 'success',
+      };
+      telegramLogs.unshift(logEntry);
+      if (telegramLogs.length > 100) telegramLogs.pop();
+      saveJson(LOGS_FILE, telegramLogs);
+    } catch {}
+
     return true;
   } catch {
     return false;
@@ -4130,6 +4379,352 @@ ${tipsText}
     return;
   }
 
+  // Udhaar Interactive Callback Handlers (udh_*)
+  const udhCmd = command.replace(/^\//, '');
+
+  if (udhCmd === 'udh_menu_date') {
+    if (!userStore.udhaars) userStore.udhaars = [];
+    const pending = userStore.udhaars.filter(u => u.status === 'pending');
+    if (pending.length === 0) {
+      await sendTelegramReply(botToken, chatId, '✨ <i>Koi pending udhaar entry nahi hai jiski date badli ja sake.</i>');
+      return;
+    }
+    const buttons = pending.slice(0, 8).map(u => ([
+      { text: `📅 ${u.personName}: ₹${u.amount.toLocaleString('en-IN')} (${u.date})`, callback_data: `udh_pick_${u.id}` }
+    ]));
+    buttons.push([{ text: '🔙 Back to Khata', callback_data: 'cmd_udhaar' }]);
+
+    await sendTelegramReply(
+      botToken,
+      chatId,
+      `📅 <b>TAREEQ (DATE) BADALNE KE LIYE ENTRY CHUNEIN:</b>\n━━━━━━━━━━━━━━━━━━━━\nNeeche di gayi entries me se select karein jiski date change karni hai:`,
+      { inline_keyboard: buttons }
+    );
+    return;
+  }
+
+  if (udhCmd.startsWith('udh_pick_')) {
+    const udhId = udhCmd.replace('udh_pick_', '').trim();
+    if (!userStore.udhaars) userStore.udhaars = [];
+    const entry = userStore.udhaars.find(u => u.id === udhId);
+    if (!entry) {
+      await sendTelegramReply(botToken, chatId, '❌ Entry nahi mili ya pehle hi delete/settle ho chuki hai.');
+      return;
+    }
+
+    const todayStr = getIstDateOffset(0);
+    const yesterdayStr = getIstDateOffset(-1);
+    const parsoStr = getIstDateOffset(-2);
+
+    const buttons = [
+      [
+        { text: `🟢 Aaj (${todayStr.slice(5)})`, callback_data: `udh_setd_${udhId}_today` },
+        { text: `🟡 Kal (${yesterdayStr.slice(5)})`, callback_data: `udh_setd_${udhId}_yesterday` },
+      ],
+      [
+        { text: `🟠 Parso (${parsoStr.slice(5)})`, callback_data: `udh_setd_${udhId}_parso` },
+        { text: `🔙 Back`, callback_data: 'udh_menu_date' },
+      ],
+    ];
+
+    await sendTelegramReply(
+      botToken,
+      chatId,
+      `📅 <b>TAREEQ (DATE) CHANGE KAREIN:</b>
+━━━━━━━━━━━━━━━━━━━━
+👤 <b>Person:</b> <b>${entry.personName}</b>
+💰 <b>Raqam:</b> ₹${entry.amount.toLocaleString('en-IN')} (${entry.type === 'lent' ? 'diya' : 'liya'})
+📅 <b>Current Date:</b> <b>${entry.date}</b>
+
+👉 <i>Quick date select karein ya chat me likhein:</i>
+• <code>date change ${entry.personName} 14 sep</code>
+• <code>/udhardate ${entry.personName} 14 sep</code>`,
+      { inline_keyboard: buttons }
+    );
+    return;
+  }
+
+  if (udhCmd.startsWith('udh_setd_')) {
+    const parts = udhCmd.replace('udh_setd_', '').split('_');
+    const udhId = parts[0];
+    const choice = parts.slice(1).join('_');
+    if (!userStore.udhaars) userStore.udhaars = [];
+    const entry = userStore.udhaars.find(u => u.id === udhId);
+    if (!entry) {
+      await sendTelegramReply(botToken, chatId, '❌ Entry nahi mili.');
+      return;
+    }
+
+    const oldDate = entry.date;
+    let newDate = getIstDateOffset(0);
+    if (choice === 'yesterday') newDate = getIstDateOffset(-1);
+    else if (choice === 'parso') newDate = getIstDateOffset(-2);
+    else if (/^\d{4}-\d{2}-\d{2}$/.test(choice)) newDate = choice;
+
+    entry.date = newDate;
+    saveUserData(userId, userStore);
+
+    await sendTelegramReply(
+      botToken,
+      chatId,
+      `✅ <b>Date Successfully Change Ho Gayi!</b> 🎉
+━━━━━━━━━━━━━━━━━━━━
+👤 <b>Person:</b> <b>${entry.personName}</b>
+💰 <b>Raqam:</b> ₹${entry.amount.toLocaleString('en-IN')}
+📅 <b>Puraani Date:</b> ${oldDate} ➡️ <b>Nayi Date:</b> <b>${newDate}</b>
+
+📊 <i>Khata updated!</i>`,
+      buildUdhaarReportTelegramMessage(userId).replyMarkup
+    );
+    return;
+  }
+
+  if (udhCmd.startsWith('udh_del_')) {
+    const udhId = udhCmd.replace('udh_del_', '').trim();
+    if (!userStore.udhaars) userStore.udhaars = [];
+    const idx = userStore.udhaars.findIndex(u => u.id === udhId);
+    if (idx !== -1) {
+      const deleted = userStore.udhaars[idx];
+      userStore.udhaars.splice(idx, 1);
+      saveUserData(userId, userStore);
+      await sendTelegramReply(
+        botToken,
+        chatId,
+        `🗑️ <b>Udhaar Entry Delete Ho Gayi:</b>\n\n👤 <b>${deleted.personName}</b>: ₹${deleted.amount.toLocaleString('en-IN')} (${deleted.date})`,
+        buildUdhaarReportTelegramMessage(userId).replyMarkup
+      );
+      return;
+    }
+  }
+
+  if (udhCmd === 'udh_menu_settle') {
+    if (!userStore.udhaars) userStore.udhaars = [];
+    const pending = userStore.udhaars.filter(u => u.status === 'pending');
+    const uniqueNames = Array.from(new Set(pending.map(u => u.personName)));
+    if (uniqueNames.length === 0) {
+      await sendTelegramReply(botToken, chatId, '✨ Koi pending khata nahi hai settle karne ke liye.');
+      return;
+    }
+    const buttons = uniqueNames.slice(0, 8).map(name => ([
+      { text: `✅ Settle ${name}`, callback_data: `udh_setl_name_${encodeURIComponent(name)}` }
+    ]));
+    buttons.push([{ text: '🔙 Back to Khata', callback_data: 'cmd_udhaar' }]);
+    await sendTelegramReply(
+      botToken,
+      chatId,
+      `✅ <b>KISKA HISAB CLEAR / SETTLE KARNA HAI?</b>\n━━━━━━━━━━━━━━━━━━━━\nSelect karein:`,
+      { inline_keyboard: buttons }
+    );
+    return;
+  }
+
+  if (udhCmd.startsWith('udh_setl_name_')) {
+    const personName = decodeURIComponent(udhCmd.replace('udh_setl_name_', '').trim());
+    if (!userStore.udhaars) userStore.udhaars = [];
+    let count = 0;
+    let settledAmt = 0;
+    userStore.udhaars.forEach(u => {
+      if (u.status === 'pending' && u.personName.toLowerCase() === personName.toLowerCase()) {
+        u.status = 'settled';
+        u.settledAt = new Date().toISOString();
+        count++;
+        settledAmt += u.amount;
+      }
+    });
+    saveUserData(userId, userStore);
+    await sendTelegramReply(
+      botToken,
+      chatId,
+      `✅ <b>${personName} Ka Saara Hisab Settle Ho Gaya!</b> 🎉\n━━━━━━━━━━━━━━━━━━━━\n💰 <b>Total Settle:</b> ₹${settledAmt.toLocaleString('en-IN')} (${count} entries)\n\n📊 <i>Ab ${personName} ka pending balance ₹0 hai.</i>`,
+      buildUdhaarReportTelegramMessage(userId).replyMarkup
+    );
+    return;
+  }
+
+  // Udhaar WhatsApp Reminder Menu & Generator
+  if (udhCmd === 'udh_menu_remind') {
+    if (!userStore.udhaars) userStore.udhaars = [];
+    const pending = userStore.udhaars.filter(u => u.status === 'pending');
+
+    const personMap: Record<string, { displayName: string; netDue: number; entries: any[] }> = {};
+    for (const u of pending) {
+      const key = (u.personName || 'Unknown').trim().toLowerCase();
+      if (!personMap[key]) {
+        personMap[key] = { displayName: u.personName.trim(), netDue: 0, entries: [] };
+      }
+      personMap[key].netDue += u.type === 'lent' ? u.amount : -u.amount;
+      personMap[key].entries.push(u);
+    }
+
+    const lenaPeople = Object.values(personMap).filter(p => p.netDue > 0);
+    if (lenaPeople.length === 0) {
+      await sendTelegramReply(botToken, chatId, '✨ <i>Koi pending udhaar nahi hai jiska reminder bhejna ho (Aapko kisi se lena baaki nahi hai).</i>');
+      return;
+    }
+
+    const buttons = lenaPeople.slice(0, 8).map(p => ([
+      { text: `📲 ${p.displayName} (₹${p.netDue.toLocaleString('en-IN')})`, callback_data: `udh_remind_name_${encodeURIComponent(p.displayName)}` }
+    ]));
+    buttons.push([{ text: '🔙 Back to Khata', callback_data: 'cmd_udhaar' }]);
+
+    await sendTelegramReply(
+      botToken,
+      chatId,
+      `📲 <b>WHATSAPP REMINDER BHEJEIN:</b>\n━━━━━━━━━━━━━━━━━━━━\nKisko reminder bhejna hai, unka naam chunein:\n\n<i>Ye WhatsApp par direct date-wise hisab ke sath formatted reminder message banayega.</i>`,
+      { inline_keyboard: buttons }
+    );
+    return;
+  }
+
+  if (udhCmd.startsWith('udh_remind_name_')) {
+    const personName = decodeURIComponent(udhCmd.replace('udh_remind_name_', '').trim());
+    if (!userStore.udhaars) userStore.udhaars = [];
+    const entries = userStore.udhaars.filter(
+      u => u.status === 'pending' && u.personName.toLowerCase() === personName.toLowerCase()
+    );
+
+    if (entries.length === 0) {
+      await sendTelegramReply(botToken, chatId, `❌ <b>${personName}</b> ka koi pending udhaar nahi mila.`);
+      return;
+    }
+
+    const { messageText, url, totalDue } = buildWhatsAppReminderText(personName, entries);
+
+    const replyMsg = `📲 <b>WHATSAPP REMINDER TAIYAAR HAI:</b>\n━━━━━━━━━━━━━━━━━━━━\n👤 <b>Naam:</b> <b>${personName}</b>\n💰 <b>Kul Bakaya:</b> <b>₹${Math.abs(totalDue).toLocaleString('en-IN')}</b>\n\n📝 <b>Message Preview:</b>\n<i>${messageText}</i>\n\n👇 Neeche diye gaye button par click karke direct WhatsApp par send karein:`;
+
+    await sendTelegramReply(
+      botToken,
+      chatId,
+      replyMsg,
+      {
+        inline_keyboard: [
+          [{ text: '💬 WhatsApp Par Bhejein', url }],
+          [{ text: '🔙 Back to Khata', callback_data: 'cmd_udhaar' }],
+        ],
+      }
+    );
+    return;
+  }
+
+  // Natural reminder command: "remind Jiju", "/remind Jiju", "whatsapp Jiju", "jiju ko remind karo"
+  const remindMatch = lowerText.match(/^(?:\/remind|remind|whatsapp)\s+([a-zA-Z0-9_\u0900-\u097F\s]+)$/i) ||
+                      lowerText.match(/^([a-zA-Z0-9_\u0900-\u097F\s]+)\s+ko\s+remind(?:\s+karo)?$/i);
+  if (remindMatch && !lowerText.includes('budget') && !lowerText.includes('category')) {
+    const targetName = remindMatch[1].trim();
+    if (!userStore.udhaars) userStore.udhaars = [];
+    const entries = userStore.udhaars.filter(
+      u => u.status === 'pending' && u.personName.toLowerCase().includes(targetName.toLowerCase())
+    );
+
+    if (entries.length > 0) {
+      const actualName = entries[0].personName;
+      const { messageText, url, totalDue } = buildWhatsAppReminderText(actualName, entries);
+      const replyMsg = `📲 <b>WHATSAPP REMINDER TAIYAAR HAI:</b>\n━━━━━━━━━━━━━━━━━━━━\n👤 <b>Naam:</b> <b>${actualName}</b>\n💰 <b>Kul Bakaya:</b> <b>₹${Math.abs(totalDue).toLocaleString('en-IN')}</b>\n\n📝 <b>Message Preview:</b>\n<i>${messageText}</i>\n\n👇 Neeche button par click karke direct WhatsApp par bhejein:`;
+
+      await sendTelegramReply(
+        botToken,
+        chatId,
+        replyMsg,
+        {
+          inline_keyboard: [
+            [{ text: '💬 WhatsApp Par Bhejein', url }],
+            [{ text: '🔙 Back to Khata', callback_data: 'cmd_udhaar' }],
+          ],
+        }
+      );
+      return;
+    }
+  }
+
+  // Udhaar Date Change Command Parser (e.g. "date change Jiju 14th Sep", "/udhardate Jiju 14 Sep", "jiju ki date 14 sep karo")
+  const dateChangeParsed = parseUdhaarDateChangeCommand(rawText);
+  if (dateChangeParsed.isDateChangeCommand) {
+    if (!userStore.udhaars) userStore.udhaars = [];
+    const target = (dateChangeParsed.target || '').toLowerCase().trim();
+    const newDate = dateChangeParsed.parsedDate;
+
+    if (!target && !newDate) {
+      // Guide & show recent entries
+      const pending = userStore.udhaars.filter(u => u.status === 'pending');
+      const buttons = pending.slice(0, 6).map(u => ([
+        { text: `📅 ${u.personName}: ₹${u.amount} (${u.date})`, callback_data: `udh_pick_${u.id}` }
+      ]));
+      buttons.push([{ text: '🔙 Back to Khata', callback_data: 'cmd_udhaar' }]);
+      await sendTelegramReply(
+        botToken,
+        chatId,
+        `📅 <b>UDHAAR ENTRY KI DATE BADLEIN:</b>\n━━━━━━━━━━━━━━━━━━━━\n💡 <i>Aap chat me aise likh sakte hain:</i>\n• <code>date change Jiju 14th Sep</code>\n• <code>date change Jiju kal</code>\n• <code>/udhardate Jiju 14 Sep</code>\n\n👇 Ya neeche se entry select karein:`,
+        { inline_keyboard: buttons }
+      );
+      return;
+    }
+
+    if (!newDate) {
+      await sendTelegramReply(
+        botToken,
+        chatId,
+        `⚠️ <b>Date samajh nahi aayi.</b> Kripya sahi tareeq likhein, jaise:\n• <code>date change ${target || 'Jiju'} 14th Sep</code>\n• <code>date change ${target || 'Jiju'} kal</code>\n• <code>date change ${target || 'Jiju'} 14/09/2026</code>`
+      );
+      return;
+    }
+
+    // Find entry matching person name or ID suffix
+    let matchingEntry: UdhaarRecord | undefined;
+    if (target) {
+      matchingEntry = userStore.udhaars.find(u => 
+        u.status === 'pending' && 
+        (u.personName.toLowerCase().includes(target) || u.id.toLowerCase().endsWith(target))
+      );
+      if (!matchingEntry) {
+        // Also check any settled entry if no pending matches
+        matchingEntry = userStore.udhaars.find(u => 
+          u.personName.toLowerCase().includes(target) || u.id.toLowerCase().endsWith(target)
+        );
+      }
+    } else {
+      // If no target provided, pick most recent pending entry
+      matchingEntry = userStore.udhaars.find(u => u.status === 'pending') || userStore.udhaars[0];
+    }
+
+    if (!matchingEntry) {
+      await sendTelegramReply(
+        botToken,
+        chatId,
+        `❌ <b>${target ? `"${target}" ke naam se koi entry` : 'Koi udhaar entry'} nahi mili.</b>\n\nApna khata check karne ke liye <code>/udhaar</code> bhejein.`
+      );
+      return;
+    }
+
+    const oldDate = matchingEntry.date;
+    matchingEntry.date = newDate;
+    saveUserData(userId, userStore);
+
+    // Calculate person's updated combined balance
+    const personPending = userStore.udhaars.filter(u => u.status === 'pending' && u.personName.toLowerCase() === matchingEntry!.personName.toLowerCase());
+    const personLent = personPending.filter(u => u.type === 'lent').reduce((s, u) => s + (Number(u.amount) || 0), 0);
+    const personBorrowed = personPending.filter(u => u.type === 'borrowed').reduce((s, u) => s + (Number(u.amount) || 0), 0);
+    const personNet = personLent - personBorrowed;
+
+    await sendTelegramReply(
+      botToken,
+      chatId,
+      `✅ <b>Date Successfully Change Ho Gayi!</b> 🎉
+━━━━━━━━━━━━━━━━━━━━
+👤 <b>Person:</b> <b>${matchingEntry.personName}</b>
+💰 <b>Raqam:</b> ₹${matchingEntry.amount.toLocaleString('en-IN')}
+📅 <b>Puraani Date:</b> ${oldDate} ➡️ <b>Nayi Date:</b> <b>${newDate}</b>
+━━━━━━━━━━━━━━━━━━━━
+👥 <b>${matchingEntry.personName} Ka Combined Hisab:</b>
+${personNet > 0 
+  ? `🟢 Ab ${matchingEntry.personName} se kul <b>₹${personNet.toLocaleString('en-IN')} LENA HAI</b> (${personPending.length} entries)`
+  : personNet < 0
+  ? `🔴 Ab ${matchingEntry.personName} ko kul <b>₹${Math.abs(personNet).toLocaleString('en-IN')} DENA HAI</b> (${personPending.length} entries)`
+  : `✅ Ab ${matchingEntry.personName} ka hisab barabar hai (₹0)`}`,
+      buildUdhaarReportTelegramMessage(userId).replyMarkup
+    );
+    return;
+  }
+
   // Udhaar settlement match (e.g. "rohan settle", "settle rohan", "rohan ne wapas diye", "/settle rohan")
   const settleMatch = lowerText.match(/^(?:\/settle|settle)\s+([a-zA-Z0-9\s]+)$/i) ||
     lowerText.match(/^([a-zA-Z0-9]+)\s+(?:ne\s+)?(?:wapas\s+diya|wapas\s+diye|settle|chuka\s+diya|clear)$/i);
@@ -4154,64 +4749,65 @@ ${tipsText}
     }
   }
 
-  // Udhaar Add Pattern (e.g. "diya 500 rohan ko", "rohan ko 500 diya", "liya 2000 papa se", "papa se 2000 liya", "lent 500 to rohan", "borrowed 2000 from papa")
-  const diyaMatch = lowerText.match(/(?:diya|diye|lent|give|de\s+diya)\s+(\d+(?:\.\d+)?)\s*(?:rs|rupaye|₹)?\s*(?:to\s+|ko\s+)?([a-zA-Z0-9]+)/i) ||
-    lowerText.match(/([a-zA-Z0-9]+)\s+(?:ko\s+)?(\d+(?:\.\d+)?)\s*(?:rs|rupaye|₹)?\s*(?:diya|diye|lent)/i) ||
-    lowerText.match(/(\d+(?:\.\d+)?)\s*(?:rs|rupaye|₹)?\s*(?:diya|diye|lent)\s*(?:to\s+|ko\s+)?([a-zA-Z0-9]+)/i);
+  // Udhaar Add Natural Pattern (e.g. "2000 diya Jiju ko 14th Sep", "diya 500 rohan ko", "liya 2000 papa se", "jiju ko 2000 diya 14 sep")
+  const parsedUdhaar = parseUdhaarIntentAndData(rawText);
+  if (parsedUdhaar) {
+    const { type, amount, personName, date, description } = parsedUdhaar;
+    const isLent = type === 'lent';
 
-  const liyaMatch = lowerText.match(/(?:liya|liye|borrowed|take|le\s+liya)\s+(\d+(?:\.\d+)?)\s*(?:rs|rupaye|₹)?\s*(?:from\s+|se\s+)?([a-zA-Z0-9]+)/i) ||
-    lowerText.match(/([a-zA-Z0-9]+)\s+(?:se\s+)?(\d+(?:\.\d+)?)\s*(?:rs|rupaye|₹)?\s*(?:liya|liye|borrowed)/i) ||
-    lowerText.match(/(\d+(?:\.\d+)?)\s*(?:rs|rupaye|₹)?\s*(?:liya|liye|borrowed)\s*(?:from\s+|se\s+)?([a-zA-Z0-9]+)/i);
+    const newUdhaar: UdhaarRecord = {
+      id: `udh_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+      userId,
+      type,
+      personName,
+      amount,
+      description: description || rawText,
+      date,
+      time: getAppDateTime().time,
+      status: 'pending',
+      createdAt: new Date().toISOString(),
+    };
 
-  if (diyaMatch || liyaMatch) {
-    const isLent = Boolean(diyaMatch);
-    const match = diyaMatch || liyaMatch;
-    let amount = 0;
-    let person = '';
+    if (!userStore.udhaars) userStore.udhaars = [];
+    userStore.udhaars.unshift(newUdhaar);
+    saveUserData(userId, userStore);
 
-    if (match) {
-      if (!isNaN(parseFloat(match[1])) && isNaN(parseFloat(match[2]))) {
-        amount = parseFloat(match[1]);
-        person = match[2].trim();
-      } else if (isNaN(parseFloat(match[1])) && !isNaN(parseFloat(match[2]))) {
-        person = match[1].trim();
-        amount = parseFloat(match[2]);
-      }
-    }
+    // Calculate person's total combined net balance in the ledger
+    const pendingForPerson = userStore.udhaars.filter(u => u.status === 'pending' && u.personName.toLowerCase() === personName.toLowerCase());
+    const personLent = pendingForPerson.filter(u => u.type === 'lent').reduce((s, u) => s + (Number(u.amount) || 0), 0);
+    const personBorrowed = pendingForPerson.filter(u => u.type === 'borrowed').reduce((s, u) => s + (Number(u.amount) || 0), 0);
+    const personNet = personLent - personBorrowed;
 
-    const nonPersonWords = ['cash', 'upi', 'card', 'petrol', 'sabzi', 'dahi', 'kharcha', 'income', 'bank', 'odo', 'km'];
-    if (amount > 0 && person && !nonPersonWords.includes(person.toLowerCase())) {
-      const capitalizedPerson = person.charAt(0).toUpperCase() + person.slice(1);
-      const newUdhaar: UdhaarRecord = {
-        id: `udh_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
-        userId,
-        type: isLent ? 'lent' : 'borrowed',
-        personName: capitalizedPerson,
-        amount,
-        description: rawText,
-        date: getAppDateTime().date,
-        time: getAppDateTime().time,
-        status: 'pending',
-        createdAt: new Date().toISOString(),
-      };
-
-      if (!userStore.udhaars) userStore.udhaars = [];
-      userStore.udhaars.unshift(newUdhaar);
-      saveUserData(userId, userStore);
-
-      const reply = `🤝 <b>UDHAAR RECORD HO GAYA!</b>
+    const reply = `🤝 <b>UDHAAR RECORD HO GAYA!</b>
 ━━━━━━━━━━━━━━━━━━━━
 🏷️ <b>Type:</b> ${isLent ? '💸 Maine Diya (Lena Hai)' : '📥 Maine Liya (Dena Hai)'}
-👤 <b>Person:</b> <b>${capitalizedPerson}</b>
+👤 <b>Person:</b> <b>${personName}</b>
 💰 <b>Raqam:</b> <b>₹${amount.toLocaleString('en-IN')}</b>
-📅 <b>Tareeq:</b> ${newUdhaar.date} • ${newUdhaar.time} (IST)
+📅 <b>Tareeq:</b> <b>${date}</b> • ${newUdhaar.time} (IST)
+━━━━━━━━━━━━━━━━━━━━
+👥 <b>${personName} Ka Combined Hisab:</b>
+${personNet > 0 
+  ? `🟢 Ab ${personName} se kul <b>₹${personNet.toLocaleString('en-IN')} LENA HAI</b> (${pendingForPerson.length} ${pendingForPerson.length === 1 ? 'entry' : 'entries'})`
+  : personNet < 0
+  ? `🔴 Ab ${personName} ko kul <b>₹${Math.abs(personNet).toLocaleString('en-IN')} DENA HAI</b> (${pendingForPerson.length} ${pendingForPerson.length === 1 ? 'entry' : 'entries'})`
+  : `✅ Ab ${personName} ka hisab barabar hai (₹0)`}
 
-💡 <i>Jab ${capitalizedPerson} hisab clear karein, to bhejein:</i>
-• <code>${capitalizedPerson} settle</code>`;
+💡 <i>Tareeq badalni ho to neeche button dabayein ya likhein:</i>
+• <code>date change ${personName} 14 sep</code>`;
 
-      await sendTelegramReply(botToken, chatId, reply, buildUdhaarReportTelegramMessage(userId).replyMarkup);
-      return;
-    }
+    await sendTelegramReply(botToken, chatId, reply, {
+      inline_keyboard: [
+        [
+          { text: '📅 Date Badlein', callback_data: `udh_pick_${newUdhaar.id}` },
+          { text: '🤝 Udhaar Summary', callback_data: 'cmd_udhaar' },
+        ],
+        [
+          { text: '✅ Settle', callback_data: `udh_setl_name_${encodeURIComponent(personName)}` },
+          { text: '🗑️ Delete', callback_data: `udh_del_${newUdhaar.id}` },
+        ],
+      ],
+    });
+    return;
   }
 
   // 8.9 Fuel & Mileage Tracker Matching & Commands
@@ -4427,7 +5023,8 @@ ${tipsText}
 📅 <b>Tareeq va Samay:</b> ${itemDate} • ${itemTime} (IST)
 
 ━━━━━━━━━━━━━━━━━━━━
-📊 <b>Net Bacha Balance:</b> ₹${summary.netSavings.toLocaleString('en-IN')}
+💵 <b>Net Wallet/Bank Balance:</b> ₹${summary.netSavings.toLocaleString('en-IN')} <i>(Kamai - Kharcha)</i>
+🎯 <b>Monthly Budget Bacha:</b> ₹${Math.max(0, summary.monthlyBudget - summary.monthlySpent).toLocaleString('en-IN')}
 ${isInc ? `📈 <b>Kul Income:</b> ₹${summary.totalIncome.toLocaleString('en-IN')}` : `📉 <b>Kul Kharcha:</b> ₹${summary.totalExpense.toLocaleString('en-IN')}`}`;
     } else {
       const itemsList = parsedList
@@ -4436,7 +5033,7 @@ ${isInc ? `📈 <b>Kul Income:</b> ₹${summary.totalIncome.toLocaleString('en-I
           return `• ${p.type === 'income' ? '🟢 +' : '🔴 -'}₹${p.amount.toLocaleString('en-IN')} ${p.description} (${p.category}) [${p.paymentMethod}] <i>(${tTime})</i>`;
         })
         .join('\n');
-      replyText = `✅ <b>${parsedList.length} TRANSACTIONS ADD HO GAYE</b>${memberTag}\n\n${itemsList}\n\n━━━━━━━━━━━━━━━━━━━━\n📊 <b>Net Bacha Balance:</b> ₹${summary.netSavings.toLocaleString('en-IN')}`;
+      replyText = `✅ <b>${parsedList.length} TRANSACTIONS ADD HO GAYE</b>${memberTag}\n\n${itemsList}\n\n━━━━━━━━━━━━━━━━━━━━\n💵 <b>Net Wallet/Bank Balance:</b> ₹${summary.netSavings.toLocaleString('en-IN')} <i>(Kamai - Kharcha)</i>\n🎯 <b>Monthly Budget Bacha:</b> ₹${Math.max(0, summary.monthlyBudget - summary.monthlySpent).toLocaleString('en-IN')}`;
     }
 
     if (detectedDuplicateTx) {
@@ -7345,16 +7942,18 @@ async function sendDailyTelegramDigest(type: 'morning' | 'evening') {
 
     const store = getUserData(userId);
     const summary = calculateUserSummary(userId);
-    const now = new Date();
-    const todayDate = getAppDateTime().date;
+    const gullak = calculateGullakSummary(userId);
+    const istInfo = getAppDateTime();
+    const todayDate = istInfo.date;
+    const [currY, currM, currD] = todayDate.split('-').map(Number);
 
-    const todayTxs = store.transactions.filter(t => t.date === todayDate);
-    const todayExpense = todayTxs.filter(t => t.type === 'expense').reduce((a, b) => a + b.amount, 0);
-    const todayIncome = todayTxs.filter(t => t.type === 'income').reduce((a, b) => a + b.amount, 0);
+    const todayTxs = (store.transactions || []).filter(t => t.date === todayDate);
+    const todayExpense = todayTxs.filter(t => t.type === 'expense').reduce((a, b) => a + (Number(b.amount) || 0), 0);
+    const todayIncome = todayTxs.filter(t => t.type === 'income').reduce((a, b) => a + (Number(b.amount) || 0), 0);
 
     // Days remaining in current month
-    const totalDaysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
-    const daysRemaining = Math.max(1, totalDaysInMonth - now.getDate() + 1);
+    const totalDaysInMonth = new Date(currY, currM, 0).getDate();
+    const daysRemaining = Math.max(1, totalDaysInMonth - currD + 1);
     const monthlyRemainingBudget = Math.max(0, summary.monthlyBudget - summary.monthlySpent);
     const safeDailyLimit = Math.round(monthlyRemainingBudget / daysRemaining);
 
@@ -7363,11 +7962,15 @@ async function sendDailyTelegramDigest(type: 'morning' | 'evening') {
 ━━━━━━━━━━━━━━━━━━━━
 📊 <b>Aapka Aaj Ka Financial Plan:</b>
 
-💰 <b>Safe-to-Spend Daily Limit:</b> <b>₹${safeDailyLimit.toLocaleString('en-IN')}</b>
-🎯 <b>Monthly Budget Bacha:</b> ₹${monthlyRemainingBudget.toLocaleString('en-IN')} (${daysRemaining} din baaki)
-💵 <b>Current Net Balance:</b> ₹${summary.netSavings.toLocaleString('en-IN')}
+💵 <b>Pocket / Bank Net Balance:</b> <b>₹${summary.netSavings.toLocaleString('en-IN')}</b>
+<i>(Kul Kamai - Kul Kharcha)</i>
 
-💡 <i>Kharcha hote hi bot par message bhejein, jaise:</i>
+🎯 <b>Monthly Budget Limit Bacha:</b> <b>₹${monthlyRemainingBudget.toLocaleString('en-IN')}</b> (${daysRemaining} din baaki)
+<i>(Target Budget: ₹${summary.monthlyBudget.toLocaleString('en-IN')} | Kharch: ₹${summary.monthlySpent.toLocaleString('en-IN')})</i>
+${gullak.currentMonthSaved > 0 && Math.abs(gullak.currentMonthSaved - monthlyRemainingBudget) > 1 ? `🐷 <b>Gullak Bachat:</b> ₹${gullak.currentMonthSaved.toLocaleString('en-IN')} <i>(Unspent Category Funds)</i>\n` : ''}
+💰 <b>Safe Daily Spend Limit:</b> <b>₹${safeDailyLimit.toLocaleString('en-IN')}/din</b>
+
+💡 <i>Kharcha hote hi bot par message bhejein:</i>
 • <code>200 nashta cash</code>
 • <code>500 petrol upi</code>`;
 
@@ -7382,9 +7985,12 @@ async function sendDailyTelegramDigest(type: 'morning' | 'evening') {
 ━━━━━━━━━━━━━━━━━━━━
 📊 <b>Aaj Ka Total Kharcha:</b> <b>₹${todayExpense.toLocaleString('en-IN')}</b> (${todayTxs.filter(t => t.type === 'expense').length} items)
 ${todayIncome > 0 ? `🟢 <b>Aaj Ki Income:</b> ₹${todayIncome.toLocaleString('en-IN')}\n` : ''}
-💰 <b>Net Bacha Balance:</b> ₹${summary.netSavings.toLocaleString('en-IN')}
-🎯 <b>Mahine Ka Bacha Budget:</b> ₹${monthlyRemainingBudget.toLocaleString('en-IN')}
+💵 <b>Pocket / Bank Net Balance:</b> <b>₹${summary.netSavings.toLocaleString('en-IN')}</b>
+<i>(Kul Kamai - Kul Kharcha)</i>
 
+🎯 <b>Monthly Budget Limit Bacha:</b> <b>₹${monthlyRemainingBudget.toLocaleString('en-IN')}</b>
+<i>(Target Budget me se bacha quota)</i>
+${gullak.currentMonthSaved > 0 && Math.abs(gullak.currentMonthSaved - monthlyRemainingBudget) > 1 ? `🐷 <b>Gullak Bachat:</b> ₹${gullak.currentMonthSaved.toLocaleString('en-IN')} <i>(Unspent Category Funds)</i>\n` : ''}
 ${todayExpense > safeDailyLimit ? `⚠️ <i>Aaj ka kharcha safe limit (₹${safeDailyLimit}) se thoda jyada raha.</i>` : `✅ <i>Shabash! Aaj ka kharcha budget ke andar raha!</i>`}`;
 
       await sendTelegramReply(botToken, chatId, eveningMsg, {

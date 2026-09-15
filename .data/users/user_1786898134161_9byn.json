@@ -530,5 +530,33 @@
       "isDefault": true,
       "description": "Auto-assigned when item does not match existing categories or needs review"
     }
-  ]
+  ],
+  "udhaars": [
+    {
+      "id": "udh_1789476508341_ljdq5",
+      "userId": "user_1786898134161_9byn",
+      "type": "lent",
+      "personName": "Jiju",
+      "amount": 2000,
+      "description": "2000 diya Jiju ko 14th Sep",
+      "date": "2026-09-10",
+      "time": "18:18",
+      "status": "pending",
+      "createdAt": "2026-09-15T12:48:28.342Z"
+    },
+    {
+      "id": "udh_1789476445149_mlyx4",
+      "userId": "user_1786898134161_9byn",
+      "type": "lent",
+      "personName": "Jiju",
+      "amount": 2000,
+      "description": "2000 diya Jiju ko 14th Sep",
+      "date": "2026-09-15",
+      "time": "18:17",
+      "status": "pending",
+      "createdAt": "2026-09-15T12:47:25.150Z"
+    }
+  ],
+  "fuelLogs": [],
+  "dataVersion": 4
 }
