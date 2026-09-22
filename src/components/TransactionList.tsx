@@ -146,47 +146,47 @@ export const TransactionList: React.FC<TransactionListProps> = ({
     const method = pm || 'UPI';
     if (method.toLowerCase() === 'cash' || method.toLowerCase() === 'nagad') {
       return (
-        <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-md text-[11px] font-medium bg-emerald-950/60 text-emerald-300 border border-emerald-500/20">
-          <Banknote className="w-3 h-3" />
+        <span className="inline-flex items-center space-x-1 px-2.5 py-0.5 rounded-lg text-[11px] font-semibold bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 backdrop-blur-md shadow-xs shadow-emerald-500/10">
+          <Banknote className="w-3 h-3 text-emerald-400" />
           <span>Cash</span>
         </span>
       );
     }
     if (method.toLowerCase() === 'card') {
       return (
-        <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-md text-[11px] font-medium bg-purple-950/60 text-purple-300 border border-purple-500/20">
-          <CreditCard className="w-3 h-3" />
+        <span className="inline-flex items-center space-x-1 px-2.5 py-0.5 rounded-lg text-[11px] font-semibold bg-purple-500/15 text-purple-300 border border-purple-500/30 backdrop-blur-md shadow-xs shadow-purple-500/10">
+          <CreditCard className="w-3 h-3 text-purple-400" />
           <span>Card</span>
         </span>
       );
     }
     if (method.toLowerCase().includes('bank')) {
       return (
-        <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-md text-[11px] font-medium bg-blue-950/60 text-blue-300 border border-blue-500/20">
+        <span className="inline-flex items-center space-x-1 px-2.5 py-0.5 rounded-lg text-[11px] font-semibold bg-cyan-500/15 text-cyan-300 border border-cyan-500/30 backdrop-blur-md shadow-xs shadow-cyan-500/10">
           <span>Bank Transfer</span>
         </span>
       );
     }
     return (
-      <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-md text-[11px] font-medium bg-indigo-950/60 text-indigo-300 border border-indigo-500/20">
-        <Smartphone className="w-3 h-3" />
+      <span className="inline-flex items-center space-x-1 px-2.5 py-0.5 rounded-lg text-[11px] font-semibold bg-indigo-500/15 text-indigo-300 border border-indigo-500/30 backdrop-blur-md shadow-xs shadow-indigo-500/10">
+        <Smartphone className="w-3 h-3 text-indigo-400" />
         <span>UPI</span>
       </span>
     );
   };
 
   return (
-    <div className="bg-[#0e1526] rounded-2xl border border-slate-800 shadow-xl shadow-black/20 overflow-hidden">
+    <div className="glass-card overflow-hidden">
       
       {/* Ledger Header & Filter Toolbar */}
-      <div className="p-4 sm:p-5 border-b border-slate-800/80 space-y-4">
+      <div className="p-4 sm:p-5 border-b border-white/[0.08] space-y-4">
         
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
           <div>
             <div className="flex items-center space-x-2.5">
               <h3 className="font-bold text-base text-white flex items-center space-x-2">
                 <span>Kharcha & Kamai History</span>
-                <span className="px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 text-xs font-medium">
+                <span className="px-2.5 py-0.5 rounded-full bg-white/[0.08] text-slate-200 border border-white/[0.1] text-xs font-semibold backdrop-blur-md">
                   {filteredTransactions.length} of {transactions.length}
                 </span>
               </h3>
@@ -204,7 +204,7 @@ export const TransactionList: React.FC<TransactionListProps> = ({
                     onClearAll();
                   }
                 }}
-                className="text-xs text-slate-400 hover:text-rose-400 px-3 py-1.5 rounded-xl border border-slate-800 hover:border-rose-500/30 hover:bg-rose-950/20 transition-all cursor-pointer"
+                className="text-xs text-slate-400 hover:text-rose-300 px-3 py-1.5 rounded-xl border border-white/[0.08] bg-white/[0.04] hover:border-rose-500/40 hover:bg-rose-500/15 transition-all cursor-pointer backdrop-blur-md active:scale-95"
               >
                 Sab Delete Karein
               </button>
@@ -217,18 +217,18 @@ export const TransactionList: React.FC<TransactionListProps> = ({
           
           {/* Search Input */}
           <div className="lg:col-span-2 relative">
-            <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+            <Search className="w-3.5 h-3.5 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
             <input
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder="Khojein: kharcha, category, amount..."
-              className="w-full pl-8 pr-3 py-2 bg-slate-950 border border-slate-700/80 rounded-xl text-xs text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/30"
+              className="w-full pl-9 pr-3 py-2 bg-black/40 border border-white/[0.1] rounded-xl text-xs text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-indigo-400 focus:ring-1 focus:ring-indigo-400/30 backdrop-blur-md"
             />
             {searchQuery && (
               <button
                 onClick={() => setSearchQuery('')}
-                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white"
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white p-1 rounded-md"
               >
                 <X className="w-3.5 h-3.5" />
               </button>
@@ -240,11 +240,11 @@ export const TransactionList: React.FC<TransactionListProps> = ({
             <select
               value={selectedType}
               onChange={(e) => setSelectedType(e.target.value as any)}
-              className="w-full px-3 py-2 bg-slate-950 border border-slate-700/80 rounded-xl text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
+              className="w-full px-3 py-2 bg-black/40 border border-white/[0.1] rounded-xl text-xs text-slate-200 focus:outline-none focus:border-indigo-400 backdrop-blur-md cursor-pointer"
             >
-              <option value="all">Sabhi Types</option>
-              <option value="income">🟢 Kamai (Income)</option>
-              <option value="expense">🔴 Kharcha (Expense)</option>
+              <option value="all" className="bg-slate-900">Sabhi Types</option>
+              <option value="income" className="bg-slate-900">🟢 Kamai (Income)</option>
+              <option value="expense" className="bg-slate-900">🔴 Kharcha (Expense)</option>
             </select>
           </div>
 
@@ -254,11 +254,11 @@ export const TransactionList: React.FC<TransactionListProps> = ({
               <select
                 value={selectedMember}
                 onChange={(e) => setSelectedMember(e.target.value)}
-                className="w-full px-3 py-2 bg-slate-950 border border-slate-700/80 rounded-xl text-xs text-cyan-300 focus:outline-none focus:border-indigo-500"
+                className="w-full px-3 py-2 bg-black/40 border border-white/[0.1] rounded-xl text-xs text-cyan-300 focus:outline-none focus:border-cyan-400 backdrop-blur-md cursor-pointer"
               >
-                <option value="all">👥 Sabhi Members ({uniqueMembers.length})</option>
+                <option value="all" className="bg-slate-900">👥 Sabhi Members ({uniqueMembers.length})</option>
                 {uniqueMembers.map((m) => (
-                  <option key={m} value={m}>
+                  <option key={m} value={m} className="bg-slate-900">
                     👤 {m}
                   </option>
                 ))}
@@ -271,11 +271,11 @@ export const TransactionList: React.FC<TransactionListProps> = ({
             <select
               value={selectedCategory}
               onChange={(e) => setSelectedCategory(e.target.value)}
-              className="w-full px-3 py-2 bg-slate-950 border border-slate-700/80 rounded-xl text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
+              className="w-full px-3 py-2 bg-black/40 border border-white/[0.1] rounded-xl text-xs text-slate-200 focus:outline-none focus:border-indigo-400 backdrop-blur-md cursor-pointer"
             >
-              <option value="all">Sabhi Categories</option>
+              <option value="all" className="bg-slate-900">Sabhi Categories</option>
               {uniqueCategories.map((c) => (
-                <option key={c} value={c}>
+                <option key={c} value={c} className="bg-slate-900">
                   {c}
                 </option>
               ))}
@@ -287,12 +287,12 @@ export const TransactionList: React.FC<TransactionListProps> = ({
             <select
               value={dateFilter}
               onChange={(e) => setDateFilter(e.target.value as any)}
-              className="w-full px-3 py-2 bg-slate-950 border border-slate-700/80 rounded-xl text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
+              className="w-full px-3 py-2 bg-black/40 border border-white/[0.1] rounded-xl text-xs text-slate-200 focus:outline-none focus:border-indigo-400 backdrop-blur-md cursor-pointer"
             >
-              <option value="all">Sabhi Tareeq</option>
-              <option value="today">Aaj (Today)</option>
-              <option value="yesterday">Kal (Yesterday)</option>
-              <option value="this_month">Is Mahine (This Month)</option>
+              <option value="all" className="bg-slate-900">Sabhi Tareeq</option>
+              <option value="today" className="bg-slate-900">Aaj (Today)</option>
+              <option value="yesterday" className="bg-slate-900">Kal (Yesterday)</option>
+              <option value="this_month" className="bg-slate-900">Is Mahine (This Month)</option>
             </select>
           </div>
 
@@ -304,7 +304,7 @@ export const TransactionList: React.FC<TransactionListProps> = ({
             <span className="text-slate-400">Filters active hain</span>
             <button
               onClick={resetFilters}
-              className="text-indigo-400 hover:text-indigo-300 font-medium underline cursor-pointer"
+              className="text-indigo-400 hover:text-indigo-300 font-semibold underline cursor-pointer"
             >
               Reset karein
             </button>
@@ -316,7 +316,7 @@ export const TransactionList: React.FC<TransactionListProps> = ({
       {/* Transaction Records List */}
       {filteredTransactions.length === 0 ? (
         <div className="py-16 text-center px-4">
-          <div className="w-12 h-12 rounded-2xl bg-slate-900 border border-slate-800 text-slate-500 mx-auto flex items-center justify-center mb-3">
+          <div className="w-14 h-14 rounded-2xl bg-white/[0.04] border border-white/[0.08] text-slate-400 mx-auto flex items-center justify-center mb-3 shadow-inner">
             <Filter className="w-6 h-6 text-slate-400" />
           </div>
           <h4 className="text-sm font-semibold text-slate-200">Koi transaction nahi mila</h4>
@@ -327,10 +327,10 @@ export const TransactionList: React.FC<TransactionListProps> = ({
           </p>
         </div>
       ) : (
-        <div className="divide-y divide-slate-800/60 overflow-x-auto">
+        <div className="divide-y divide-white/[0.06] overflow-x-auto">
           
           {/* Table Header */}
-          <div className="hidden md:grid grid-cols-12 gap-4 px-6 py-2.5 bg-slate-950/60 text-xs font-semibold text-slate-400 border-b border-slate-800">
+          <div className="hidden md:grid grid-cols-12 gap-4 px-6 py-3 bg-black/30 text-xs font-semibold text-slate-400 border-b border-white/[0.06]">
             <div className="col-span-4">Vivaran (Description)</div>
             <div className="col-span-3">Category</div>
             <div className="col-span-3">Payment & Tareeq</div>
@@ -347,18 +347,18 @@ export const TransactionList: React.FC<TransactionListProps> = ({
             return (
               <div
                 key={tx.id}
-                className={`grid grid-cols-1 md:grid-cols-12 gap-3 md:gap-4 px-5 md:px-6 py-3.5 hover:bg-slate-800/30 transition-colors items-center text-xs relative ${
-                  isUncategorized ? 'bg-amber-950/10 border-l-2 border-amber-400' : ''
+                className={`grid grid-cols-1 md:grid-cols-12 gap-3 md:gap-4 px-5 md:px-6 py-3.5 hover:bg-white/[0.03] transition-colors items-center text-xs relative ${
+                  isUncategorized ? 'bg-amber-500/[0.08] border-l-2 border-amber-400' : ''
                 }`}
               >
                 
                 {/* Description & Note */}
                 <div className="md:col-span-4 flex items-center space-x-3">
                   <div
-                    className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 border ${
+                    className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 transition-transform hover:scale-110 ${
                       isIncome 
-                        ? 'bg-emerald-950/70 border-emerald-500/30 text-emerald-400' 
-                        : 'bg-slate-900 border-slate-700/80 text-rose-400'
+                        ? 'icon-badge-emerald' 
+                        : 'icon-badge-rose'
                     }`}
                   >
                     {isIncome ? (
@@ -378,15 +378,15 @@ export const TransactionList: React.FC<TransactionListProps> = ({
                 <div className="md:col-span-3 relative">
                   <button
                     onClick={() => setActiveCategoryDropdownTxId(isDropdownOpen ? null : tx.id)}
-                    className={`inline-flex items-center space-x-1.5 px-2.5 py-1 rounded-xl text-[11px] font-medium border transition-all cursor-pointer ${
+                    className={`inline-flex items-center space-x-1.5 px-2.5 py-1 rounded-xl text-[11px] font-medium border transition-all cursor-pointer backdrop-blur-md shadow-xs ${
                       isUncategorized
-                        ? 'bg-amber-950/60 text-amber-300 border-amber-400/50 hover:bg-amber-900/60'
-                        : 'bg-slate-900 text-slate-200 border-slate-700 hover:border-slate-500'
+                        ? 'bg-amber-500/20 text-amber-300 border-amber-400/50 hover:bg-amber-500/30'
+                        : 'bg-white/[0.05] text-slate-200 border-white/[0.1] hover:border-white/20 hover:bg-white/[0.08]'
                     }`}
                     title="Category badalne ke liye click karein"
                   >
                     <span 
-                      className="w-2 h-2 rounded-full shrink-0" 
+                      className="w-2 h-2 rounded-full shrink-0 shadow-xs" 
                       style={{ backgroundColor: catDef.color || '#6366F1' }}
                     />
                     <span className="truncate max-w-[130px]">{tx.category}</span>
@@ -395,8 +395,8 @@ export const TransactionList: React.FC<TransactionListProps> = ({
 
                   {/* Popover Dropdown for Category Changer */}
                   {isDropdownOpen && (
-                    <div className="absolute left-0 top-full mt-1.5 z-40 bg-[#0b1120] border border-slate-700 rounded-xl shadow-2xl p-2 w-60 max-h-60 overflow-y-auto">
-                      <div className="text-[11px] font-semibold text-slate-400 px-2 py-1 uppercase tracking-wider border-b border-slate-800 mb-1">
+                    <div className="absolute left-0 top-full mt-1.5 z-40 bg-slate-950/95 border border-white/[0.15] backdrop-blur-2xl rounded-2xl shadow-2xl p-2 w-60 max-h-60 overflow-y-auto">
+                      <div className="text-[11px] font-semibold text-slate-400 px-2 py-1 uppercase tracking-wider border-b border-white/[0.08] mb-1">
                         Category Badlein:
                       </div>
                       {categories.map((c) => (
@@ -405,8 +405,8 @@ export const TransactionList: React.FC<TransactionListProps> = ({
                           onClick={() => handleCategoryChange(tx.id, c.name)}
                           className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs flex items-center space-x-2 transition-colors cursor-pointer ${
                             tx.category === c.name
-                              ? 'bg-indigo-950/80 text-indigo-300 font-semibold border border-indigo-500/40'
-                              : 'text-slate-300 hover:bg-slate-800'
+                              ? 'bg-indigo-500/20 text-indigo-300 font-semibold border border-indigo-500/40'
+                              : 'text-slate-300 hover:bg-white/[0.08]'
                           }`}
                         >
                           <span
@@ -435,9 +435,9 @@ export const TransactionList: React.FC<TransactionListProps> = ({
                   </div>
                   <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-slate-400">
                     {tx.telegramUser ? (
-                      <span className="inline-flex items-center text-cyan-300 bg-cyan-950/60 border border-cyan-500/20 px-1.5 py-0.5 rounded text-[10px] space-x-1">
+                      <span className="inline-flex items-center text-cyan-300 bg-cyan-500/15 border border-cyan-500/30 px-1.5 py-0.5 rounded-md text-[10px] space-x-1 backdrop-blur-md">
                         <User className="w-2.5 h-2.5 text-cyan-400" />
-                        <span className="truncate max-w-[120px]">{tx.telegramUser}</span>
+                        <span className="truncate max-w-[120px] font-medium">{tx.telegramUser}</span>
                       </span>
                     ) : tx.source === 'telegram' ? (
                       <span className="inline-flex items-center text-indigo-400 space-x-0.5 text-[10px]">
@@ -445,8 +445,8 @@ export const TransactionList: React.FC<TransactionListProps> = ({
                         <span>Telegram Bot</span>
                       </span>
                     ) : (
-                      <span className="inline-flex items-center text-slate-400 bg-slate-900 border border-slate-800 px-1.5 py-0.5 rounded text-[10px]">
-                        <Laptop className="w-2.5 h-2.5 mr-1 text-slate-500" />
+                      <span className="inline-flex items-center text-slate-300 bg-white/[0.05] border border-white/[0.08] px-1.5 py-0.5 rounded-md text-[10px]">
+                        <Laptop className="w-2.5 h-2.5 mr-1 text-slate-400" />
                         <span>Web App</span>
                       </span>
                     )}
@@ -458,7 +458,7 @@ export const TransactionList: React.FC<TransactionListProps> = ({
                 <div className="md:col-span-2 flex items-center justify-between md:justify-end space-x-2">
                   <div className="text-left md:text-right">
                     <span
-                      className={`text-sm font-bold tracking-tight ${
+                      className={`text-sm font-extrabold tracking-tight ${
                         isIncome ? 'text-emerald-400' : 'text-rose-400'
                       }`}
                     >
@@ -470,7 +470,7 @@ export const TransactionList: React.FC<TransactionListProps> = ({
                     <button
                       onClick={() => setEditingTransaction(tx)}
                       title="Transaction ya Tareeq edit karein"
-                      className="p-1.5 text-slate-400 hover:text-indigo-400 hover:bg-indigo-950/40 rounded-xl transition-colors shrink-0 cursor-pointer"
+                      className="p-1.5 text-slate-400 hover:text-indigo-300 hover:bg-indigo-500/20 rounded-xl transition-all shrink-0 cursor-pointer active:scale-95"
                     >
                       <Pencil className="w-3.5 h-3.5" />
                     </button>
@@ -478,7 +478,7 @@ export const TransactionList: React.FC<TransactionListProps> = ({
                     <button
                       onClick={() => onDeleteTransaction(tx.id)}
                       title="Transaction delete karein"
-                      className="p-1.5 text-slate-500 hover:text-rose-400 hover:bg-rose-950/40 rounded-xl transition-colors shrink-0 cursor-pointer"
+                      className="p-1.5 text-slate-400 hover:text-rose-300 hover:bg-rose-500/20 rounded-xl transition-all shrink-0 cursor-pointer active:scale-95"
                     >
                       <Trash2 className="w-3.5 h-3.5" />
                     </button>

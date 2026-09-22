@@ -179,33 +179,36 @@ export const MobileNavDrawer: React.FC<MobileNavDrawerProps> = ({
     <div className="fixed inset-0 z-50 md:hidden animate-in fade-in duration-200">
       {/* Dimmed backdrop */}
       <div 
-        className="fixed inset-0 bg-black/75 backdrop-blur-sm transition-opacity" 
+        className="fixed inset-0 bg-black/80 backdrop-blur-md transition-opacity" 
         onClick={onClose}
         aria-hidden="true"
       />
 
       {/* Sliding Drawer Container */}
       <div 
-        className="fixed inset-y-0 left-0 w-5/6 max-w-xs bg-[#0b1120] border-r border-slate-800 shadow-2xl flex flex-col z-10 animate-in slide-in-from-left duration-300"
+        className="fixed inset-y-0 left-0 w-5/6 max-w-xs bg-slate-950/90 backdrop-blur-2xl border-r border-white/[0.08] shadow-2xl flex flex-col z-10 animate-in slide-in-from-left duration-300"
       >
         {/* Drawer Header */}
-        <div className="p-4 border-b border-slate-800/90 flex items-center justify-between bg-[#080d1a]">
+        <div className="p-4 border-b border-white/[0.08] flex items-center justify-between bg-white/[0.02]">
           <div className="flex items-center space-x-2.5">
-            <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-indigo-600 to-cyan-500 flex items-center justify-center text-white shadow-md shadow-indigo-900/40">
-              <Wallet className="w-4 h-4" />
+            <div className="relative group">
+              <div className="absolute -inset-0.5 bg-gradient-to-r from-indigo-500 to-cyan-400 rounded-xl blur-xs opacity-75"></div>
+              <div className="relative w-8 h-8 rounded-xl bg-slate-900 border border-white/20 flex items-center justify-center text-white shadow-md shadow-indigo-900/40">
+                <Wallet className="w-4 h-4 text-cyan-300" />
+              </div>
             </div>
             <div>
               <div className="flex items-center space-x-1.5">
                 <span className="font-bold text-sm text-white">TeleExpense</span>
-                <span className="text-[10px] font-extrabold text-indigo-400 bg-indigo-950/90 border border-indigo-500/40 px-1 py-0.2 rounded">AI</span>
+                <span className="text-[10px] font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-indigo-400 to-pink-400 bg-indigo-950/80 border border-indigo-500/30 px-1 py-0.2 rounded">AI</span>
               </div>
-              <p className="text-[10px] text-slate-400">Khata Navigation</p>
+              <p className="text-[10px] text-slate-400">Smart Khata Navigation</p>
             </div>
           </div>
 
           <button
             onClick={onClose}
-            className="p-1.5 rounded-lg bg-slate-800/80 text-slate-400 hover:text-white hover:bg-slate-700 transition-colors cursor-pointer"
+            className="p-1.5 rounded-xl bg-white/[0.06] text-slate-300 hover:text-white hover:bg-white/[0.1] border border-white/[0.08] transition-all cursor-pointer active:scale-95"
             aria-label="Close menu"
           >
             <X className="w-4 h-4" />
@@ -213,9 +216,9 @@ export const MobileNavDrawer: React.FC<MobileNavDrawerProps> = ({
         </div>
 
         {/* User Profile Card in Drawer */}
-        <div className="p-3 bg-slate-900/60 border-b border-slate-800/60">
+        <div className="p-3 bg-white/[0.02] border-b border-white/[0.06]">
           {currentUser ? (
-            <div className="flex items-center justify-between p-2 rounded-xl bg-slate-950/80 border border-slate-800">
+            <div className="flex items-center justify-between p-2.5 rounded-xl bg-slate-900/60 border border-white/[0.08] backdrop-blur-md">
               <button
                 onClick={() => {
                   onClose();
@@ -223,7 +226,7 @@ export const MobileNavDrawer: React.FC<MobileNavDrawerProps> = ({
                 }}
                 className="flex items-center space-x-2.5 text-left overflow-hidden cursor-pointer"
               >
-                <div className="w-7 h-7 rounded-lg bg-indigo-600 text-white font-bold flex items-center justify-center text-xs shrink-0">
+                <div className="w-7 h-7 rounded-lg bg-gradient-to-tr from-indigo-500 to-purple-500 text-white font-bold flex items-center justify-center text-xs shrink-0 shadow-xs">
                   {currentUser.name.charAt(0).toUpperCase()}
                 </div>
                 <div className="min-w-0">
@@ -238,7 +241,7 @@ export const MobileNavDrawer: React.FC<MobileNavDrawerProps> = ({
                     onClose();
                     onLogout();
                   }}
-                  className="p-1.5 text-slate-400 hover:text-rose-400 rounded-lg hover:bg-rose-950/40 transition-colors"
+                  className="p-1.5 text-slate-400 hover:text-rose-400 rounded-lg hover:bg-rose-500/20 transition-colors cursor-pointer"
                   title="Logout"
                 >
                   <LogOut className="w-3.5 h-3.5" />
@@ -251,7 +254,7 @@ export const MobileNavDrawer: React.FC<MobileNavDrawerProps> = ({
                 onClose();
                 onOpenUserModal();
               }}
-              className="w-full py-2 px-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-semibold flex items-center justify-center space-x-2 shadow-sm cursor-pointer transition-all"
+              className="w-full py-2.5 px-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-semibold flex items-center justify-center space-x-2 shadow-md shadow-indigo-600/30 cursor-pointer transition-all active:scale-95"
             >
               <User className="w-3.5 h-3.5" />
               <span>Khata Login / Select</span>
@@ -278,12 +281,12 @@ export const MobileNavDrawer: React.FC<MobileNavDrawerProps> = ({
                 }}
                 className={`w-full flex items-center justify-between p-2.5 rounded-xl border text-left transition-all cursor-pointer ${
                   isSelected
-                    ? `${item.activeColor} shadow-sm font-semibold`
-                    : 'border-transparent hover:border-slate-800 bg-slate-900/30 hover:bg-slate-900 text-slate-300'
+                    ? `${item.activeColor} shadow-md font-semibold backdrop-blur-md`
+                    : 'border-transparent hover:border-white/[0.08] bg-white/[0.03] hover:bg-white/[0.06] text-slate-300'
                 }`}
               >
                 <div className="flex items-center space-x-2.5 min-w-0">
-                  <div className={`p-1.5 rounded-lg bg-slate-950 border border-slate-800 shrink-0 ${item.iconColor}`}>
+                  <div className={`p-2 rounded-xl bg-black/40 border border-white/[0.08] shrink-0 ${item.iconColor} shadow-xs`}>
                     <Icon className="w-4 h-4" />
                   </div>
                   <div className="min-w-0">
@@ -297,17 +300,17 @@ export const MobileNavDrawer: React.FC<MobileNavDrawerProps> = ({
                 </div>
 
                 <div className="flex items-center space-x-1.5 shrink-0 ml-2">
-                  <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded-md border ${item.badgeColor}`}>
+                  <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded-md border backdrop-blur-md ${item.badgeColor}`}>
                     {item.badge}
                   </span>
-                  <ChevronRight className={`w-3 h-3 ${isSelected ? 'text-white' : 'text-slate-500'}`} />
+                  <ChevronRight className={`w-3.5 h-3.5 ${isSelected ? 'text-white' : 'text-slate-500'}`} />
                 </div>
               </button>
             );
           })}
 
           {/* Quick Action Tools in Drawer */}
-          <div className="pt-3 mt-2 border-t border-slate-800/80 space-y-1.5">
+          <div className="pt-3 mt-2 border-t border-white/[0.08] space-y-1.5">
             <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400 px-2 py-1">
               Backup, Export & Tools
             </p>
@@ -318,24 +321,24 @@ export const MobileNavDrawer: React.FC<MobileNavDrawerProps> = ({
                 onClick={onTogglePrivacyMode}
                 className={`w-full flex items-center justify-between p-2.5 rounded-xl border text-xs font-medium cursor-pointer transition-all ${
                   isPrivacyMode
-                    ? 'bg-amber-950/40 text-amber-300 border-amber-500/40'
-                    : 'bg-slate-900/60 text-slate-300 border-slate-800 hover:bg-slate-800'
+                    ? 'bg-amber-500/15 text-amber-300 border-amber-500/40 backdrop-blur-md'
+                    : 'bg-white/[0.03] text-slate-300 border-white/[0.08] hover:bg-white/[0.06]'
                 }`}
               >
                 <div className="flex items-center space-x-2.5">
                   {isPrivacyMode ? (
-                    <EyeOff className="w-4 h-4 text-amber-400 shrink-0" />
+                    <EyeOff className="w-4 h-4 text-amber-400 shrink-0 animate-pulse" />
                   ) : (
                     <Eye className="w-4 h-4 text-slate-400 shrink-0" />
                   )}
                   <span className="font-semibold">
-                    {isPrivacyMode ? 'Privacy Mode Active (Amounts Hidden)' : 'Privacy Mode (Mask ₹••••)'}
+                    {isPrivacyMode ? 'Privacy Mode Active' : 'Privacy Mode (Mask ₹••••)'}
                   </span>
                 </div>
                 <span className={`text-[10px] font-mono px-2 py-0.5 rounded-md border ${
                   isPrivacyMode
-                    ? 'bg-amber-900/50 text-amber-200 border-amber-500/50 font-bold'
-                    : 'bg-slate-800 text-slate-400 border-slate-700'
+                    ? 'bg-amber-500/20 text-amber-200 border-amber-500/50 font-bold'
+                    : 'bg-black/40 text-slate-400 border-white/[0.08]'
                 }`}>
                   {isPrivacyMode ? 'ON' : 'OFF'}
                 </span>
@@ -348,13 +351,13 @@ export const MobileNavDrawer: React.FC<MobileNavDrawerProps> = ({
                 onClose();
                 onOpenBackupModal();
               }}
-              className="w-full flex items-center justify-between p-2.5 rounded-xl text-cyan-300 hover:bg-cyan-950/40 bg-cyan-950/20 border border-cyan-500/30 text-xs font-medium cursor-pointer transition-all"
+              className="w-full flex items-center justify-between p-2.5 rounded-xl text-cyan-300 hover:bg-cyan-500/20 bg-cyan-500/10 border border-cyan-500/30 text-xs font-medium cursor-pointer transition-all backdrop-blur-md"
             >
               <div className="flex items-center space-x-2.5">
                 <FileSpreadsheet className="w-4 h-4 text-cyan-400 shrink-0" />
                 <span className="font-semibold">Backup & Restore (Excel)</span>
               </div>
-              <ChevronRight className="w-3.5 h-3.5 text-cyan-500/70" />
+              <ChevronRight className="w-3.5 h-3.5 text-cyan-400" />
             </button>
 
             {/* Download / Export Ledger CSV Option */}
@@ -363,13 +366,13 @@ export const MobileNavDrawer: React.FC<MobileNavDrawerProps> = ({
                 onClose();
                 onExportCsv();
               }}
-              className="w-full flex items-center justify-between p-2.5 rounded-xl text-emerald-300 hover:bg-emerald-950/40 bg-emerald-950/20 border border-emerald-500/30 text-xs font-medium cursor-pointer transition-all"
+              className="w-full flex items-center justify-between p-2.5 rounded-xl text-emerald-300 hover:bg-emerald-500/20 bg-emerald-500/10 border border-emerald-500/30 text-xs font-medium cursor-pointer transition-all backdrop-blur-md"
             >
               <div className="flex items-center space-x-2.5">
                 <Download className="w-4 h-4 text-emerald-400 shrink-0" />
                 <span className="font-semibold">Download Ledger (CSV)</span>
               </div>
-              <ChevronRight className="w-3.5 h-3.5 text-emerald-500/70" />
+              <ChevronRight className="w-3.5 h-3.5 text-emerald-400" />
             </button>
 
             {/* AI Insights */}
@@ -378,13 +381,13 @@ export const MobileNavDrawer: React.FC<MobileNavDrawerProps> = ({
                 onClose();
                 onOpenAiInsights();
               }}
-              className="w-full flex items-center justify-between p-2.5 rounded-xl text-indigo-300 hover:bg-indigo-950/40 bg-indigo-950/20 border border-indigo-500/30 text-xs font-medium cursor-pointer transition-all"
+              className="w-full flex items-center justify-between p-2.5 rounded-xl text-indigo-200 hover:bg-indigo-500/20 bg-indigo-500/10 border border-indigo-500/30 text-xs font-medium cursor-pointer transition-all backdrop-blur-md"
             >
               <div className="flex items-center space-x-2.5">
                 <Sparkles className="w-4 h-4 text-indigo-400 shrink-0" />
                 <span>Gemini AI Bachat Tips</span>
               </div>
-              <ChevronRight className="w-3.5 h-3.5 text-indigo-500/70" />
+              <ChevronRight className="w-3.5 h-3.5 text-indigo-400" />
             </button>
 
             {/* Telegram Bot Setup - Only for abhiveo4@gmail.com */}
@@ -394,13 +397,13 @@ export const MobileNavDrawer: React.FC<MobileNavDrawerProps> = ({
                   onClose();
                   onOpenBotSetup();
                 }}
-                className="w-full flex items-center justify-between p-2.5 rounded-xl text-emerald-300 hover:bg-emerald-950/40 bg-emerald-950/20 border border-emerald-500/30 text-xs font-medium cursor-pointer transition-all"
+                className="w-full flex items-center justify-between p-2.5 rounded-xl text-emerald-300 hover:bg-emerald-500/20 bg-emerald-500/10 border border-emerald-500/30 text-xs font-medium cursor-pointer transition-all backdrop-blur-md"
               >
                 <div className="flex items-center space-x-2.5">
                   <Bot className="w-4 h-4 text-emerald-400 shrink-0" />
                   <span className="font-semibold">Telegram Bot Setup (Admin)</span>
                 </div>
-                <ChevronRight className="w-3.5 h-3.5 text-emerald-500/70" />
+                <ChevronRight className="w-3.5 h-3.5 text-emerald-400" />
               </button>
             )}
           </div>

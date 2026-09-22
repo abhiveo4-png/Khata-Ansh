@@ -14,6 +14,7 @@ import {
   ChevronDown,
   ChevronUp,
   Edit3,
+  Pencil,
   Layers
 } from 'lucide-react';
 import { UdhaarRecord } from '../types';
@@ -42,10 +43,14 @@ export const UdhaarKhataView: React.FC<UdhaarKhataViewProps> = ({
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [expandedPeople, setExpandedPeople] = useState<Record<string, boolean>>({});
 
-  // Date Editing Modal State
+  // Full Record Editing Modal State (Amount, Person Name, Date, Type, Description)
   const [editingRecord, setEditingRecord] = useState<UdhaarRecord | null>(null);
+  const [editPersonName, setEditPersonName] = useState('');
+  const [editAmount, setEditAmount] = useState('');
+  const [editType, setEditType] = useState<'lent' | 'borrowed'>('lent');
   const [editDate, setEditDate] = useState('');
-  const [isSavingDate, setIsSavingDate] = useState(false);
+  const [editDescription, setEditDescription] = useState('');
+  const [isSavingRecord, setIsSavingRecord] = useState(false);
 
   // Form State
   const [personName, setPersonName] = useState('');
@@ -128,22 +133,35 @@ export const UdhaarKhataView: React.FC<UdhaarKhataViewProps> = ({
     setExpandedPeople(prev => ({ ...prev, [key]: !prev[key] }));
   };
 
-  const handleOpenEditDate = (item: UdhaarRecord) => {
+  const handleOpenEditRecord = (item: UdhaarRecord) => {
     setEditingRecord(item);
+    setEditPersonName(item.personName || '');
+    setEditAmount(String(item.amount || ''));
+    setEditType(item.type || 'lent');
     setEditDate(item.date || new Date().toISOString().split('T')[0]);
+    setEditDescription(item.description || '');
   };
 
-  const handleSaveDate = async (e: React.FormEvent) => {
+  const handleSaveRecord = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!editingRecord || !editDate || !onUpdateRecord) return;
-    setIsSavingDate(true);
+    if (!editingRecord || !onUpdateRecord) return;
+    const parsedAmt = parseFloat(editAmount);
+    if (!editPersonName.trim() || isNaN(parsedAmt) || parsedAmt <= 0) return;
+
+    setIsSavingRecord(true);
     try {
-      await onUpdateRecord(editingRecord.id, { date: editDate });
+      await onUpdateRecord(editingRecord.id, {
+        personName: editPersonName.trim(),
+        amount: parsedAmt,
+        type: editType,
+        date: editDate || new Date().toISOString().split('T')[0],
+        description: editDescription.trim() || undefined,
+      });
       setEditingRecord(null);
     } catch (err) {
-      console.error('Error updating date:', err);
+      console.error('Error updating udhaar record:', err);
     } finally {
-      setIsSavingDate(false);
+      setIsSavingRecord(false);
     }
   };
 
@@ -233,55 +251,55 @@ export const UdhaarKhataView: React.FC<UdhaarKhataViewProps> = ({
   return (
     <div className="space-y-6">
       
-      {/* Top Banner / Hero Summary */}
+      {/* Top Banner / Hero Summary with Glassy Aesthetics */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         {/* You'll Get (Lena Hai) */}
-        <div className="bg-[#0e1526] border border-emerald-500/30 rounded-2xl p-4 sm:p-5 shadow-lg relative overflow-hidden">
+        <div className="glass-card rounded-2xl p-4 sm:p-5 relative overflow-hidden border border-emerald-500/20 bg-emerald-950/15 shadow-lg shadow-emerald-950/20">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-medium text-emerald-400 uppercase tracking-wider">
+            <span className="text-xs font-semibold text-emerald-400 uppercase tracking-wider">
               Lena Hai (You'll Get)
             </span>
-            <div className="w-8 h-8 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center">
-              <ArrowDownLeft className="w-4 h-4" />
+            <div className="icon-badge icon-badge-emerald">
+              <ArrowDownLeft className="w-4 h-4 text-emerald-400" />
             </div>
           </div>
-          <p className="text-2xl sm:text-3xl font-bold text-white mt-2 font-mono">
+          <p className="text-2xl sm:text-3xl font-bold text-white mt-2 font-mono drop-shadow-sm">
             {formatAmount(pendingLent)}
           </p>
-          <p className="text-xs text-slate-400 mt-1">
+          <p className="text-xs text-emerald-300/70 mt-1">
             {safeRecords.filter(r => r && r.type === 'lent' && r.status !== 'settled').length} logo se wapas lena hai
           </p>
         </div>
 
         {/* You'll Give (Dena Hai) */}
-        <div className="bg-[#0e1526] border border-rose-500/30 rounded-2xl p-4 sm:p-5 shadow-lg relative overflow-hidden">
+        <div className="glass-card rounded-2xl p-4 sm:p-5 relative overflow-hidden border border-rose-500/20 bg-rose-950/15 shadow-lg shadow-rose-950/20">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-medium text-rose-400 uppercase tracking-wider">
+            <span className="text-xs font-semibold text-rose-400 uppercase tracking-wider">
               Dena Hai (You'll Give)
             </span>
-            <div className="w-8 h-8 rounded-xl bg-rose-500/20 text-rose-400 flex items-center justify-center">
-              <ArrowUpRight className="w-4 h-4" />
+            <div className="icon-badge icon-badge-rose">
+              <ArrowUpRight className="w-4 h-4 text-rose-400" />
             </div>
           </div>
-          <p className="text-2xl sm:text-3xl font-bold text-white mt-2 font-mono">
+          <p className="text-2xl sm:text-3xl font-bold text-white mt-2 font-mono drop-shadow-sm">
             {formatAmount(pendingBorrowed)}
           </p>
-          <p className="text-xs text-slate-400 mt-1">
+          <p className="text-xs text-rose-300/70 mt-1">
             {safeRecords.filter(r => r && r.type === 'borrowed' && r.status !== 'settled').length} logo ko chukana hai
           </p>
         </div>
 
         {/* Net Udhaar Status */}
-        <div className="bg-[#0e1526] border border-indigo-500/30 rounded-2xl p-4 sm:p-5 shadow-lg relative overflow-hidden">
+        <div className="glass-card rounded-2xl p-4 sm:p-5 relative overflow-hidden border border-indigo-500/20 bg-indigo-950/15 shadow-lg shadow-indigo-950/20">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-medium text-indigo-400 uppercase tracking-wider">
+            <span className="text-xs font-semibold text-indigo-300 uppercase tracking-wider">
               Net Udhaar Position
             </span>
-            <div className="w-8 h-8 rounded-xl bg-indigo-500/20 text-indigo-400 flex items-center justify-center">
-              <HandCoins className="w-4 h-4" />
+            <div className="icon-badge icon-badge-indigo">
+              <HandCoins className="w-4 h-4 text-indigo-400" />
             </div>
           </div>
-          <p className={`text-2xl sm:text-3xl font-bold mt-2 font-mono ${netBalance >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+          <p className={`text-2xl sm:text-3xl font-bold mt-2 font-mono drop-shadow-sm ${netBalance >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
             {isPrivacyMode ? '₹••••' : `${netBalance >= 0 ? '+' : ''}₹${netBalance.toLocaleString('en-IN')}`}
           </p>
           <p className="text-xs text-slate-400 mt-1">
@@ -291,18 +309,18 @@ export const UdhaarKhataView: React.FC<UdhaarKhataViewProps> = ({
       </div>
 
       {/* Telegram Tip Banner */}
-      <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-3.5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs text-slate-300">
-        <div className="flex items-center space-x-2.5">
-          <span className="px-2 py-0.5 rounded-md bg-indigo-950 text-indigo-300 border border-indigo-500/30 font-semibold text-[10px]">
+      <div className="glass-card rounded-2xl p-3.5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs text-slate-300">
+        <div className="flex items-center space-x-2.5 flex-wrap gap-y-1">
+          <span className="px-2 py-0.5 rounded-md bg-indigo-500/15 text-indigo-300 border border-indigo-500/30 font-semibold text-[10px] uppercase tracking-wider">
             TELEGRAM KHATA
           </span>
-          <span>
-            Telegram par sidhe bhejein: <code className="bg-slate-950 px-1.5 py-0.5 rounded text-indigo-300">2000 diya Jiju ko 14th Sep</code> ya <code className="bg-slate-950 px-1.5 py-0.5 rounded text-indigo-300">date change Jiju 14 Sep</code>
+          <span className="text-slate-300">
+            Telegram par sidhe bhejein: <code className="bg-black/40 px-1.5 py-0.5 rounded text-indigo-300 border border-white/[0.06]">2000 diya Jiju ko</code> ya <code className="bg-black/40 px-1.5 py-0.5 rounded text-indigo-300 border border-white/[0.06]">date change Jiju 14 Sep</code>
           </span>
         </div>
         <button
           onClick={() => setIsAddModalOpen(true)}
-          className="w-full sm:w-auto px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold rounded-xl flex items-center justify-center space-x-1.5 cursor-pointer shadow-md transition-all shrink-0"
+          className="w-full sm:w-auto px-4 py-2 bg-gradient-to-r from-indigo-600 to-indigo-500 hover:from-indigo-500 hover:to-indigo-400 text-white font-semibold rounded-xl flex items-center justify-center space-x-1.5 cursor-pointer shadow-md shadow-indigo-600/30 transition-all shrink-0 active:scale-95"
         >
           <Plus className="w-3.5 h-3.5" />
           <span>Naya Udhaar Likhein</span>
@@ -313,12 +331,12 @@ export const UdhaarKhataView: React.FC<UdhaarKhataViewProps> = ({
       <div className="flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-3">
         
         {/* Left: View Mode Toggle */}
-        <div className="flex items-center space-x-1 bg-[#0e1526] p-1 rounded-xl border border-slate-800 shrink-0">
+        <div className="flex items-center space-x-1 bg-white/[0.04] p-1 rounded-xl border border-white/[0.08] backdrop-blur-md shrink-0">
           <button
             onClick={() => setViewMode('grouped')}
             className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center space-x-1.5 transition-all cursor-pointer ${
               viewMode === 'grouped'
-                ? 'bg-indigo-600 text-white shadow-sm'
+                ? 'bg-indigo-600 text-white shadow-sm shadow-indigo-600/30'
                 : 'text-slate-400 hover:text-white'
             }`}
           >
@@ -329,7 +347,7 @@ export const UdhaarKhataView: React.FC<UdhaarKhataViewProps> = ({
             onClick={() => setViewMode('list')}
             className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center space-x-1.5 transition-all cursor-pointer ${
               viewMode === 'list'
-                ? 'bg-indigo-600 text-white shadow-sm'
+                ? 'bg-indigo-600 text-white shadow-sm shadow-indigo-600/30'
                 : 'text-slate-400 hover:text-white'
             }`}
           >
@@ -339,12 +357,12 @@ export const UdhaarKhataView: React.FC<UdhaarKhataViewProps> = ({
         </div>
 
         {/* Middle: Filter Pills */}
-        <div className="flex items-center space-x-1.5 overflow-x-auto no-scrollbar bg-[#0e1526] p-1 rounded-xl border border-slate-800">
+        <div className="flex items-center space-x-1.5 overflow-x-auto no-scrollbar bg-white/[0.04] p-1 rounded-xl border border-white/[0.08] backdrop-blur-md">
           <button
             onClick={() => setFilter('all')}
             className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer whitespace-nowrap ${
               filter === 'all'
-                ? 'bg-indigo-600 text-white shadow-sm'
+                ? 'bg-indigo-600 text-white shadow-sm shadow-indigo-600/30'
                 : 'text-slate-400 hover:text-white'
             }`}
           >
@@ -354,7 +372,7 @@ export const UdhaarKhataView: React.FC<UdhaarKhataViewProps> = ({
             onClick={() => setFilter('lent')}
             className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer whitespace-nowrap ${
               filter === 'lent'
-                ? 'bg-emerald-600 text-white shadow-sm'
+                ? 'bg-emerald-600 text-white shadow-sm shadow-emerald-600/30'
                 : 'text-slate-400 hover:text-white'
             }`}
           >
@@ -364,7 +382,7 @@ export const UdhaarKhataView: React.FC<UdhaarKhataViewProps> = ({
             onClick={() => setFilter('borrowed')}
             className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer whitespace-nowrap ${
               filter === 'borrowed'
-                ? 'bg-rose-600 text-white shadow-sm'
+                ? 'bg-rose-600 text-white shadow-sm shadow-rose-600/30'
                 : 'text-slate-400 hover:text-white'
             }`}
           >
@@ -390,7 +408,7 @@ export const UdhaarKhataView: React.FC<UdhaarKhataViewProps> = ({
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="Naam ya reason dhundhein..."
-            className="w-full pl-9 pr-3 py-1.5 bg-[#0e1526] border border-slate-800 rounded-xl text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500"
+            className="w-full pl-9 pr-3 py-1.5 glass-input rounded-xl text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-400"
           />
         </div>
       </div>
@@ -574,20 +592,20 @@ export const UdhaarKhataView: React.FC<UdhaarKhataViewProps> = ({
                               </button>
                             )}
 
-                            {/* Date Edit Button */}
+                            {/* Edit / Badlein Button */}
                             <button
-                              onClick={() => handleOpenEditDate(item)}
-                              className="px-2 py-1 rounded-lg bg-indigo-950 hover:bg-indigo-900 text-indigo-300 border border-indigo-500/30 text-[11px] font-medium flex items-center space-x-1 cursor-pointer transition-colors"
-                              title="Puraani date badlein"
+                              onClick={() => handleOpenEditRecord(item)}
+                              className="px-2.5 py-1 rounded-lg bg-indigo-500/15 hover:bg-indigo-500/25 text-indigo-300 border border-indigo-500/30 text-[11px] font-medium flex items-center space-x-1 cursor-pointer transition-colors shadow-sm"
+                              title="Raqam, naam ya date badlein"
                             >
-                              <Calendar className="w-3 h-3" />
-                              <span>Date Badlein</span>
+                              <Pencil className="w-3 h-3 text-indigo-400" />
+                              <span>Edit</span>
                             </button>
 
                             {!itemIsSettled && (
                               <button
                                 onClick={() => onSettleRecord && onSettleRecord(item.id)}
-                                className="px-2 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] font-medium flex items-center space-x-1 cursor-pointer transition-all"
+                                className="px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] font-medium flex items-center space-x-1 cursor-pointer transition-all shadow-sm active:scale-95"
                                 title="Settle karein"
                               >
                                 <CheckCircle2 className="w-3 h-3" />
@@ -598,7 +616,7 @@ export const UdhaarKhataView: React.FC<UdhaarKhataViewProps> = ({
                             {onDeleteRecord && (
                               <button
                                 onClick={() => onDeleteRecord(item.id)}
-                                className="p-1 text-slate-500 hover:text-rose-400 rounded-lg hover:bg-slate-800 transition-colors cursor-pointer"
+                                className="p-1 text-slate-500 hover:text-rose-400 rounded-lg hover:bg-rose-500/10 transition-colors cursor-pointer"
                                 title="Delete"
                               >
                                 <Trash2 className="w-3.5 h-3.5" />
@@ -695,17 +713,17 @@ export const UdhaarKhataView: React.FC<UdhaarKhataViewProps> = ({
                 {/* Actions Footer */}
                 <div className="flex items-center justify-between gap-2 mt-4 pt-3 border-t border-slate-800/80 text-xs">
                   <div className="flex items-center space-x-2">
-                    {/* Date Edit Button */}
+                    {/* Edit / Badlein Button */}
                     <button
-                      onClick={() => handleOpenEditDate(item)}
-                      className="p-1.5 rounded-lg bg-indigo-950/80 hover:bg-indigo-900 text-indigo-300 border border-indigo-500/30 flex items-center space-x-1 cursor-pointer transition-colors"
-                      title="Date change karein"
+                      onClick={() => handleOpenEditRecord(item)}
+                      className="px-2.5 py-1 rounded-lg bg-indigo-500/15 hover:bg-indigo-500/25 text-indigo-300 border border-indigo-500/30 flex items-center space-x-1 cursor-pointer transition-colors shadow-sm"
+                      title="Raqam, naam ya date badlein"
                     >
-                      <Calendar className="w-3.5 h-3.5" />
-                      <span className="text-[11px] hidden sm:inline">Date Badlein</span>
+                      <Pencil className="w-3.5 h-3.5 text-indigo-400" />
+                      <span className="text-[11px] font-medium hidden sm:inline">Edit</span>
                     </button>
 
-                    {!isSettled && isLent && (
+                    {!itemIsSettled && isLent && (
                       <button
                         onClick={() => handleShareWhatsAppSingle(item)}
                         className="p-1.5 rounded-lg bg-emerald-950/60 hover:bg-emerald-900/80 text-emerald-400 border border-emerald-500/30 flex items-center space-x-1 cursor-pointer transition-colors"
@@ -715,10 +733,10 @@ export const UdhaarKhataView: React.FC<UdhaarKhataViewProps> = ({
                         <span className="text-[11px] hidden sm:inline">Remind</span>
                       </button>
                     )}
-                    {!isSettled && onSettleRecord && (
+                    {!itemIsSettled && onSettleRecord && (
                       <button
                         onClick={() => onSettleRecord(item.id)}
-                        className="px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-medium flex items-center space-x-1 cursor-pointer transition-all active:scale-95"
+                        className="px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-medium flex items-center space-x-1 cursor-pointer transition-all active:scale-95 shadow-sm"
                       >
                         <CheckCircle2 className="w-3.5 h-3.5" />
                         <span>{isLent ? 'Wapas Mil Gaya' : 'Chuka Diya'}</span>
@@ -729,7 +747,7 @@ export const UdhaarKhataView: React.FC<UdhaarKhataViewProps> = ({
                   {onDeleteRecord && (
                     <button
                       onClick={() => onDeleteRecord(item.id)}
-                      className="p-1.5 text-slate-500 hover:text-rose-400 rounded-lg hover:bg-slate-800 transition-colors cursor-pointer"
+                      className="p-1.5 text-slate-500 hover:text-rose-400 rounded-lg hover:bg-rose-500/10 transition-colors cursor-pointer"
                       title="Delete Entry"
                     >
                       <Trash2 className="w-3.5 h-3.5" />
@@ -742,74 +760,149 @@ export const UdhaarKhataView: React.FC<UdhaarKhataViewProps> = ({
         </div>
       )}
 
-      {/* 📅 Edit Date Modal */}
+      {/* ✏️ Full Record Edit Modal */}
       {editingRecord && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4 animate-in fade-in">
-          <div className="w-full max-w-sm rounded-2xl bg-[#0e1526] border border-slate-800 p-6 shadow-2xl text-slate-100">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md p-4 animate-in fade-in">
+          <div className="w-full max-w-md rounded-2xl bg-slate-950/95 border border-white/[0.15] p-6 shadow-2xl text-slate-100 backdrop-blur-2xl">
             <h3 className="text-base font-bold text-white flex items-center gap-2">
-              <Calendar className="w-5 h-5 text-indigo-400" />
-              <span>Udhaar Entry Ki Date Badlein</span>
+              <Pencil className="w-5 h-5 text-indigo-400" />
+              <span>Udhaar Entry Edit / Badlein</span>
             </h3>
             <p className="text-xs text-slate-400 mt-1">
-              <b>{editingRecord.personName}</b> - ₹{editingRecord.amount.toLocaleString('en-IN')}
+              Raqam, vyakti ka naam, tareeq ya note me badlav karein:
             </p>
 
-            <form onSubmit={handleSaveDate} className="mt-4 space-y-4">
+            <form onSubmit={handleSaveRecord} className="mt-4 space-y-3.5">
+              {/* Type Switcher */}
+              <div className="grid grid-cols-2 gap-2 p-1 bg-white/[0.04] rounded-xl border border-white/[0.08]">
+                <button
+                  type="button"
+                  onClick={() => setEditType('lent')}
+                  className={`py-2 rounded-lg text-xs font-semibold transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
+                    editType === 'lent'
+                      ? 'bg-emerald-600 text-white shadow-md shadow-emerald-600/30'
+                      : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  <ArrowDownLeft className="w-3.5 h-3.5" />
+                  <span>Diya (Lena Hai)</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setEditType('borrowed')}
+                  className={`py-2 rounded-lg text-xs font-semibold transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
+                    editType === 'borrowed'
+                      ? 'bg-rose-600 text-white shadow-md shadow-rose-600/30'
+                      : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  <ArrowUpRight className="w-3.5 h-3.5" />
+                  <span>Liya (Dena Hai)</span>
+                </button>
+              </div>
+
+              {/* Person Name */}
               <div>
                 <label className="block text-xs font-medium text-slate-300 mb-1">
-                  Nayi Tareeq (New Date) *
+                  Vyakti Ka Naam (Person Name) *
                 </label>
                 <input
-                  type="date"
+                  type="text"
                   required
-                  value={editDate}
-                  onChange={(e) => setEditDate(e.target.value)}
-                  className="w-full px-3 py-2.5 bg-slate-900 border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:border-indigo-500 font-mono"
+                  value={editPersonName}
+                  onChange={(e) => setEditPersonName(e.target.value)}
+                  className="w-full px-3 py-2 glass-input rounded-xl text-xs text-white focus:outline-none focus:border-indigo-400"
+                  placeholder="e.g. Jiju, Rohan, Papa"
                 />
+              </div>
+
+              {/* Amount & Date */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-slate-300 mb-1">
+                    Raqam (Amount ₹) *
+                  </label>
+                  <input
+                    type="number"
+                    required
+                    min="1"
+                    step="any"
+                    value={editAmount}
+                    onChange={(e) => setEditAmount(e.target.value)}
+                    className="w-full px-3 py-2 glass-input rounded-xl text-xs text-white font-mono focus:outline-none focus:border-indigo-400"
+                    placeholder="2000"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-slate-300 mb-1">
+                    Tareeq (Date) *
+                  </label>
+                  <input
+                    type="date"
+                    required
+                    value={editDate}
+                    onChange={(e) => setEditDate(e.target.value)}
+                    className="w-full px-3 py-2 glass-input rounded-xl text-xs text-white font-mono focus:outline-none focus:border-indigo-400"
+                  />
+                </div>
               </div>
 
               {/* Quick Date Chips */}
               <div>
-                <p className="text-[11px] text-slate-400 mb-1.5">Quick Select:</p>
+                <p className="text-[11px] text-slate-400 mb-1.5">Quick Date Select:</p>
                 <div className="grid grid-cols-3 gap-2">
                   <button
                     type="button"
                     onClick={() => setQuickDate(0)}
-                    className="py-1.5 px-2 bg-slate-800 hover:bg-slate-700 text-xs text-slate-200 rounded-lg border border-slate-700 font-medium transition-colors cursor-pointer"
+                    className="py-1.5 px-2 bg-white/[0.05] hover:bg-white/[0.1] text-xs text-slate-200 rounded-lg border border-white/[0.08] font-medium transition-colors cursor-pointer"
                   >
                     🟢 Aaj
                   </button>
                   <button
                     type="button"
                     onClick={() => setQuickDate(-1)}
-                    className="py-1.5 px-2 bg-slate-800 hover:bg-slate-700 text-xs text-slate-200 rounded-lg border border-slate-700 font-medium transition-colors cursor-pointer"
+                    className="py-1.5 px-2 bg-white/[0.05] hover:bg-white/[0.1] text-xs text-slate-200 rounded-lg border border-white/[0.08] font-medium transition-colors cursor-pointer"
                   >
                     🟡 Kal
                   </button>
                   <button
                     type="button"
                     onClick={() => setQuickDate(-2)}
-                    className="py-1.5 px-2 bg-slate-800 hover:bg-slate-700 text-xs text-slate-200 rounded-lg border border-slate-700 font-medium transition-colors cursor-pointer"
+                    className="py-1.5 px-2 bg-white/[0.05] hover:bg-white/[0.1] text-xs text-slate-200 rounded-lg border border-white/[0.08] font-medium transition-colors cursor-pointer"
                   >
                     🟠 Parso
                   </button>
                 </div>
               </div>
 
+              {/* Description / Reason */}
+              <div>
+                <label className="block text-xs font-medium text-slate-300 mb-1">
+                  Vivaran (Description / Reason)
+                </label>
+                <input
+                  type="text"
+                  value={editDescription}
+                  onChange={(e) => setEditDescription(e.target.value)}
+                  placeholder="e.g. 2000 diya jiju ko"
+                  className="w-full px-3 py-2 glass-input rounded-xl text-xs text-white focus:outline-none focus:border-indigo-400"
+                />
+              </div>
+
               <div className="flex items-center justify-end space-x-2 pt-2">
                 <button
                   type="button"
                   onClick={() => setEditingRecord(null)}
-                  className="px-4 py-2 rounded-xl border border-slate-700 bg-slate-800 text-slate-300 text-xs font-medium hover:bg-slate-700 cursor-pointer"
+                  className="px-4 py-2 rounded-xl border border-white/[0.1] bg-white/[0.05] text-slate-300 text-xs font-medium hover:bg-white/[0.1] cursor-pointer transition-colors"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  disabled={isSavingDate}
-                  className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold transition-all cursor-pointer shadow-md disabled:opacity-50"
+                  disabled={isSavingRecord}
+                  className="px-4 py-2 rounded-xl bg-gradient-to-r from-indigo-600 to-indigo-500 hover:from-indigo-500 hover:to-indigo-400 text-white text-xs font-bold transition-all cursor-pointer shadow-md shadow-indigo-600/30 disabled:opacity-50 active:scale-95"
                 >
-                  {isSavingDate ? 'Saving...' : 'Save Nayi Date'}
+                  {isSavingRecord ? 'Saving...' : 'Save Changes'}
                 </button>
               </div>
             </form>
@@ -819,25 +912,27 @@ export const UdhaarKhataView: React.FC<UdhaarKhataViewProps> = ({
 
       {/* Add Udhaar Record Modal */}
       {isAddModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4 animate-in fade-in">
-          <div className="w-full max-w-md rounded-2xl bg-[#0e1526] border border-slate-800 p-6 shadow-2xl text-slate-100">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md p-4 animate-in fade-in">
+          <div className="w-full max-w-md rounded-2xl bg-slate-950/95 border border-white/[0.15] p-6 shadow-2xl text-slate-100 backdrop-blur-2xl">
             <h3 className="text-base font-bold text-white flex items-center gap-2">
-              <HandCoins className="w-5 h-5 text-indigo-400" />
+              <div className="icon-badge icon-badge-indigo">
+                <HandCoins className="w-4 h-4 text-indigo-400" />
+              </div>
               <span>Naya Udhaar / Khata Entry</span>
             </h3>
             <p className="text-xs text-slate-400 mt-1 mb-4">
-              Kisko paisa diya ya kisse udhaar liya, uska hisaab yahan likhein.
+              Kisko paisa diya ya kisse udhaar liya, uska hisaab yahan darj karein.
             </p>
 
             <form onSubmit={handleSubmit} className="space-y-4">
               {/* Type Switcher */}
-              <div className="grid grid-cols-2 gap-2 p-1 bg-slate-900 rounded-xl border border-slate-800">
+              <div className="grid grid-cols-2 gap-2 p-1 bg-white/[0.04] rounded-xl border border-white/[0.08]">
                 <button
                   type="button"
                   onClick={() => setType('lent')}
                   className={`py-2 rounded-lg text-xs font-semibold transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
                     type === 'lent'
-                      ? 'bg-emerald-600 text-white shadow-md'
+                      ? 'bg-emerald-600 text-white shadow-md shadow-emerald-600/30'
                       : 'text-slate-400 hover:text-white'
                   }`}
                 >
@@ -849,7 +944,7 @@ export const UdhaarKhataView: React.FC<UdhaarKhataViewProps> = ({
                   onClick={() => setType('borrowed')}
                   className={`py-2 rounded-lg text-xs font-semibold transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
                     type === 'borrowed'
-                      ? 'bg-rose-600 text-white shadow-md'
+                      ? 'bg-rose-600 text-white shadow-md shadow-rose-600/30'
                       : 'text-slate-400 hover:text-white'
                   }`}
                 >
@@ -868,8 +963,8 @@ export const UdhaarKhataView: React.FC<UdhaarKhataViewProps> = ({
                   required
                   value={personName}
                   onChange={(e) => setPersonName(e.target.value)}
-                  placeholder="e.g. Rohan, Papa, Sharma Ji, Aman"
-                  className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-xl text-xs text-white focus:outline-none focus:border-indigo-500"
+                  placeholder="e.g. Rohan, Papa, Sharma Ji, Jiju"
+                  className="w-full px-3 py-2 glass-input rounded-xl text-xs text-white focus:outline-none focus:border-indigo-400"
                 />
               </div>
 
@@ -886,8 +981,8 @@ export const UdhaarKhataView: React.FC<UdhaarKhataViewProps> = ({
                     step="any"
                     value={amount}
                     onChange={(e) => setAmount(e.target.value)}
-                    placeholder="500"
-                    className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-xl text-xs text-white font-mono focus:outline-none focus:border-indigo-500"
+                    placeholder="2000"
+                    className="w-full px-3 py-2 glass-input rounded-xl text-xs text-white font-mono focus:outline-none focus:border-indigo-400"
                   />
                 </div>
                 <div>
@@ -898,7 +993,7 @@ export const UdhaarKhataView: React.FC<UdhaarKhataViewProps> = ({
                     type="date"
                     value={date}
                     onChange={(e) => setDate(e.target.value)}
-                    className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-xl text-xs text-white focus:outline-none focus:border-indigo-500"
+                    className="w-full px-3 py-2 glass-input rounded-xl text-xs text-white focus:outline-none focus:border-indigo-400 font-mono"
                   />
                 </div>
               </div>
@@ -913,7 +1008,7 @@ export const UdhaarKhataView: React.FC<UdhaarKhataViewProps> = ({
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
                   placeholder="e.g. Lunch bill split, petrol udhaar, emergency"
-                  className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-xl text-xs text-white focus:outline-none focus:border-indigo-500"
+                  className="w-full px-3 py-2 glass-input rounded-xl text-xs text-white focus:outline-none focus:border-indigo-400"
                 />
               </div>
 
@@ -922,14 +1017,14 @@ export const UdhaarKhataView: React.FC<UdhaarKhataViewProps> = ({
                 <button
                   type="button"
                   onClick={() => setIsAddModalOpen(false)}
-                  className="px-4 py-2 rounded-xl border border-slate-700 bg-slate-800 text-slate-300 text-xs font-medium hover:bg-slate-700 cursor-pointer"
+                  className="px-4 py-2 rounded-xl border border-white/[0.1] bg-white/[0.05] text-slate-300 text-xs font-medium hover:bg-white/[0.1] cursor-pointer transition-colors"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
                   disabled={isSubmitting}
-                  className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold transition-all cursor-pointer shadow-md disabled:opacity-50"
+                  className="px-4 py-2 rounded-xl bg-gradient-to-r from-indigo-600 to-indigo-500 hover:from-indigo-500 hover:to-indigo-400 text-white text-xs font-bold transition-all cursor-pointer shadow-md shadow-indigo-600/30 disabled:opacity-50 active:scale-95"
                 >
                   {isSubmitting ? 'Saving...' : 'Save Udhaar'}
                 </button>

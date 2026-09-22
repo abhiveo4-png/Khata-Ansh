@@ -604,33 +604,37 @@ export default function App() {
         <OverviewCards summary={summary} isPrivacyMode={isPrivacyMode} />
 
         {/* Horizontal Navigation Tabs - Desktop only (On mobile, accessible exclusively via the 3-bar drawer) */}
-        <div className="hidden md:flex items-center justify-between border-b border-slate-800 pb-0 gap-2">
-          <div className="flex items-center space-x-2 sm:space-x-4 overflow-x-auto no-scrollbar scroll-smooth">
+        <div className="hidden md:flex items-center justify-between p-1.5 rounded-2xl bg-slate-900/50 border border-white/[0.08] backdrop-blur-xl gap-2 shadow-lg shadow-black/20">
+          <div className="flex items-center space-x-1.5 overflow-x-auto no-scrollbar scroll-smooth py-0.5">
             
             <button
               onClick={() => setActiveTab('transactions')}
-              className={`pb-3 text-xs sm:text-sm font-semibold border-b-2 flex items-center space-x-2 transition-all shrink-0 cursor-pointer ${
+              className={`px-3.5 py-2 text-xs sm:text-sm font-semibold rounded-xl flex items-center space-x-2 transition-all shrink-0 cursor-pointer ${
                 activeTab === 'transactions'
-                  ? 'border-indigo-500 text-indigo-400'
-                  : 'border-transparent text-slate-400 hover:text-slate-200'
+                  ? 'bg-indigo-600/90 text-white shadow-md shadow-indigo-600/30 border border-indigo-400/30'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-white/[0.05]'
               }`}
             >
-              <FileText className="w-4 h-4" />
+              <FileText className={`w-4 h-4 ${activeTab === 'transactions' ? 'text-white' : 'text-indigo-400'}`} />
               <span>Kharcha & Kamai ({transactions.length})</span>
             </button>
 
             <button
               onClick={() => setActiveTab('udhaar')}
-              className={`pb-3 text-xs sm:text-sm font-semibold border-b-2 flex items-center space-x-2 transition-all shrink-0 cursor-pointer ${
+              className={`px-3.5 py-2 text-xs sm:text-sm font-semibold rounded-xl flex items-center space-x-2 transition-all shrink-0 cursor-pointer ${
                 activeTab === 'udhaar'
-                  ? 'border-emerald-500 text-emerald-400'
-                  : 'border-transparent text-slate-400 hover:text-slate-200'
+                  ? 'bg-emerald-600/90 text-white shadow-md shadow-emerald-600/30 border border-emerald-400/30'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-white/[0.05]'
               }`}
             >
-              <HandCoins className="w-4 h-4 text-emerald-400" />
+              <HandCoins className={`w-4 h-4 ${activeTab === 'udhaar' ? 'text-white' : 'text-emerald-400'}`} />
               <span className="flex items-center gap-1.5">
                 Udhaar / Khata Book
-                <span className="text-[10px] font-mono px-1.5 py-0.2 rounded-md bg-emerald-950/90 text-emerald-300 border border-emerald-500/40">
+                <span className={`text-[10px] font-mono px-1.5 py-0.2 rounded-md ${
+                  activeTab === 'udhaar' 
+                    ? 'bg-emerald-950/60 text-emerald-200 border border-emerald-300/40'
+                    : 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30'
+                }`}>
                   {udhaars.filter(u => u.status === 'pending').length} Active
                 </span>
               </span>
@@ -638,16 +642,20 @@ export default function App() {
 
             <button
               onClick={() => setActiveTab('fuel')}
-              className={`pb-3 text-xs sm:text-sm font-semibold border-b-2 flex items-center space-x-2 transition-all shrink-0 cursor-pointer ${
+              className={`px-3.5 py-2 text-xs sm:text-sm font-semibold rounded-xl flex items-center space-x-2 transition-all shrink-0 cursor-pointer ${
                 activeTab === 'fuel'
-                  ? 'border-amber-500 text-amber-400'
-                  : 'border-transparent text-slate-400 hover:text-slate-200'
+                  ? 'bg-amber-600/90 text-white shadow-md shadow-amber-600/30 border border-amber-400/30'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-white/[0.05]'
               }`}
             >
-              <Fuel className="w-4 h-4 text-amber-400" />
+              <Fuel className={`w-4 h-4 ${activeTab === 'fuel' ? 'text-white' : 'text-amber-400'}`} />
               <span className="flex items-center gap-1.5">
                 Fuel & Mileage
-                <span className="text-[10px] font-mono px-1.5 py-0.2 rounded-md bg-amber-950/90 text-amber-300 border border-amber-500/40">
+                <span className={`text-[10px] font-mono px-1.5 py-0.2 rounded-md ${
+                  activeTab === 'fuel'
+                    ? 'bg-amber-950/60 text-amber-200 border border-amber-300/40'
+                    : 'bg-amber-500/15 text-amber-300 border border-amber-500/30'
+                }`}>
                   {fuelLogs.length} Logs
                 </span>
               </span>
@@ -655,16 +663,20 @@ export default function App() {
 
             <button
               onClick={() => setActiveTab('gullak')}
-              className={`pb-3 text-xs sm:text-sm font-semibold border-b-2 flex items-center space-x-2 transition-all shrink-0 cursor-pointer ${
+              className={`px-3.5 py-2 text-xs sm:text-sm font-semibold rounded-xl flex items-center space-x-2 transition-all shrink-0 cursor-pointer ${
                 activeTab === 'gullak'
-                  ? 'border-amber-500 text-amber-400'
-                  : 'border-transparent text-slate-400 hover:text-slate-200'
+                  ? 'bg-gradient-to-r from-amber-500 to-yellow-500 text-white shadow-md shadow-amber-500/30 border border-amber-300/40'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-white/[0.05]'
               }`}
             >
-              <PiggyBank className="w-4 h-4 text-amber-400" />
+              <PiggyBank className={`w-4 h-4 ${activeTab === 'gullak' ? 'text-white' : 'text-amber-400'}`} />
               <span className="flex items-center gap-1.5">
-                Gullak (Bacha Budget)
-                <span className="text-[10px] font-mono px-1.5 py-0.2 rounded-md bg-amber-950/90 text-amber-300 border border-amber-500/40">
+                Gullak
+                <span className={`text-[10px] font-mono px-1.5 py-0.2 rounded-md ${
+                  activeTab === 'gullak'
+                    ? 'bg-amber-950/60 text-amber-200 border border-amber-300/40'
+                    : 'bg-amber-500/15 text-amber-300 border border-amber-500/30'
+                }`}>
                   Savings
                 </span>
               </span>
@@ -672,16 +684,20 @@ export default function App() {
 
             <button
               onClick={() => setActiveTab('investments')}
-              className={`pb-3 text-xs sm:text-sm font-semibold border-b-2 flex items-center space-x-2 transition-all shrink-0 cursor-pointer ${
+              className={`px-3.5 py-2 text-xs sm:text-sm font-semibold rounded-xl flex items-center space-x-2 transition-all shrink-0 cursor-pointer ${
                 activeTab === 'investments'
-                  ? 'border-cyan-400 text-cyan-300'
-                  : 'border-transparent text-slate-400 hover:text-slate-200'
+                  ? 'bg-cyan-600/90 text-white shadow-md shadow-cyan-600/30 border border-cyan-400/30'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-white/[0.05]'
               }`}
             >
-              <Coins className="w-4 h-4 text-cyan-400" />
+              <Coins className={`w-4 h-4 ${activeTab === 'investments' ? 'text-white' : 'text-cyan-400'}`} />
               <span className="flex items-center gap-1.5">
                 Investable Pool
-                <span className="text-[10px] font-mono px-1.5 py-0.2 rounded-md bg-cyan-950/90 text-cyan-300 border border-cyan-500/40">
+                <span className={`text-[10px] font-mono px-1.5 py-0.2 rounded-md ${
+                  activeTab === 'investments'
+                    ? 'bg-cyan-950/60 text-cyan-200 border border-cyan-300/40'
+                    : 'bg-cyan-500/15 text-cyan-300 border border-cyan-500/30'
+                }`}>
                   ₹{Math.max(0, summary.totalIncome - summary.totalExpense).toLocaleString('en-IN')}
                 </span>
               </span>
@@ -689,42 +705,42 @@ export default function App() {
 
             <button
               onClick={() => setActiveTab('categories')}
-              className={`pb-3 text-xs sm:text-sm font-semibold border-b-2 flex items-center space-x-2 transition-all shrink-0 cursor-pointer ${
+              className={`px-3.5 py-2 text-xs sm:text-sm font-semibold rounded-xl flex items-center space-x-2 transition-all shrink-0 cursor-pointer ${
                 activeTab === 'categories'
-                  ? 'border-indigo-500 text-indigo-400'
-                  : 'border-transparent text-slate-400 hover:text-slate-200'
+                  ? 'bg-indigo-600/90 text-white shadow-md shadow-indigo-600/30 border border-indigo-400/30'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-white/[0.05]'
               }`}
             >
-              <FolderPlus className="w-4 h-4" />
+              <FolderPlus className={`w-4 h-4 ${activeTab === 'categories' ? 'text-white' : 'text-indigo-400'}`} />
               <span>Categories ({categories.length})</span>
             </button>
 
             <button
               onClick={() => setActiveTab('analytics')}
-              className={`pb-3 text-xs sm:text-sm font-semibold border-b-2 flex items-center space-x-2 transition-all shrink-0 cursor-pointer ${
+              className={`px-3.5 py-2 text-xs sm:text-sm font-semibold rounded-xl flex items-center space-x-2 transition-all shrink-0 cursor-pointer ${
                 activeTab === 'analytics'
-                  ? 'border-indigo-500 text-indigo-400'
-                  : 'border-transparent text-slate-400 hover:text-slate-200'
+                  ? 'bg-purple-600/90 text-white shadow-md shadow-purple-600/30 border border-purple-400/30'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-white/[0.05]'
               }`}
             >
-              <PieChart className="w-4 h-4" />
-              <span>Analytics & Charts</span>
+              <PieChart className={`w-4 h-4 ${activeTab === 'analytics' ? 'text-white' : 'text-purple-400'}`} />
+              <span>Analytics</span>
             </button>
 
             <button
               onClick={() => setActiveTab('budgets')}
-              className={`pb-3 text-xs sm:text-sm font-semibold border-b-2 flex items-center space-x-2 transition-all shrink-0 cursor-pointer ${
+              className={`px-3.5 py-2 text-xs sm:text-sm font-semibold rounded-xl flex items-center space-x-2 transition-all shrink-0 cursor-pointer ${
                 activeTab === 'budgets'
-                  ? 'border-indigo-500 text-indigo-400'
-                  : 'border-transparent text-slate-400 hover:text-slate-200'
+                  ? 'bg-indigo-600/90 text-white shadow-md shadow-indigo-600/30 border border-indigo-400/30'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-white/[0.05]'
               }`}
             >
-              <Target className="w-4 h-4" />
-              <span>Monthly Budgets</span>
+              <Target className={`w-4 h-4 ${activeTab === 'budgets' ? 'text-white' : 'text-indigo-400'}`} />
+              <span>Budgets</span>
             </button>
           </div>
 
-          <div className="pb-3 flex items-center space-x-2">
+          <div className="flex items-center space-x-2 shrink-0 pr-1">
             <button
               onClick={() => {
                 fetchTransactions();
@@ -734,7 +750,7 @@ export default function App() {
                 fetchFuelLogs();
               }}
               title="Refresh ledger"
-              className="p-1.5 rounded-xl border border-slate-800 bg-slate-900 text-slate-400 hover:text-white hover:border-slate-600 transition-all cursor-pointer"
+              className="p-2 rounded-xl border border-white/[0.08] bg-white/[0.05] text-slate-300 hover:text-white hover:bg-white/[0.1] transition-all cursor-pointer shadow-xs active:scale-95"
             >
               <RefreshCw className="w-3.5 h-3.5" />
             </button>

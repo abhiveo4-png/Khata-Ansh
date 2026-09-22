@@ -1334,6 +1334,68 @@ export function parseUdhaarDateChangeCommand(text: string): {
   };
 }
 
+export function parseUdhaarEditCommand(text: string): {
+  isEditCommand: boolean;
+  target?: string;
+  newAmount?: number;
+  newDate?: string | null;
+} {
+  const clean = text.trim();
+  const lower = clean.toLowerCase();
+
+  const isEdit =
+    lower.startsWith('/editudhaar') ||
+    lower.startsWith('/changeudhaar') ||
+    lower.startsWith('/updateudhaar') ||
+    /\b(change|edit|update|badlo|badal\s+do|badal\s+kardo)\b.*\b(udhaar|udhar|khata|amount|rupaye)\b/i.test(lower) ||
+    /\b(udhaar|udhar|khata)\b.*\b(change|edit|update|badlo|badal)\b/i.test(lower) ||
+    /\b(amount\s+change|change\s+amount|raqam\s+badlo)\b/i.test(lower);
+
+  if (!isEdit) return { isEditCommand: false };
+
+  // 1. Check for date
+  const MONTH_NAMES = "jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec|january|february|march|april|june|july|august|september|october|november|december";
+  const dmyRegex = new RegExp(`\\b(\\d{1,2}(?:st|nd|rd|th)?[\\s\\-_]+(?:${MONTH_NAMES})(?:[\\s\\-_]+\\d{2,4})?)\\b`, 'i');
+  const dmyMatch = clean.match(dmyRegex);
+  const numMatch = clean.match(/\b\d{1,2}[\/\-\.]\d{1,2}(?:[\/\-\.]\d{2,4})?\b/);
+  const relMatch = clean.match(/\b(yesterday|kal|beeta kal|parso|parson|today|aaj)\b/i);
+
+  const matchedDateStr = dmyMatch?.[0] || numMatch?.[0] || relMatch?.[0];
+  let parsedDate: string | null = null;
+  if (matchedDateStr) {
+    parsedDate = parseCustomDateString(matchedDateStr);
+  }
+
+  let remnant = clean;
+  if (matchedDateStr) {
+    remnant = remnant.replace(matchedDateStr, ' ');
+  }
+
+  // 2. Extract new amount
+  const amtMatch = remnant.match(/(?:rs\.?|inr|₹)?\s*(\d+(?:\.\d+)?)\s*(?:rs\.?|rupaye|rupees|₹)?/i);
+  let newAmount: number | undefined;
+  if (amtMatch) {
+    newAmount = parseFloat(amtMatch[1]);
+    remnant = remnant.replace(amtMatch[0], ' ');
+  }
+
+  // 3. Clean remnant for target person name
+  remnant = remnant
+    .replace(/^\/(?:editudhaar|changeudhaar|updateudhaar)\s*/i, ' ')
+    .replace(/\b(change|edit|update|badlo|badal\s+do|badal\s+kardo|badal|udhaar|udhar|khata|amount|raqam|rupaye|rupees)\b/gi, ' ')
+    .replace(/\b(ko|se|ki|ka|ke|to|for|karo|kardo|rakho)\b/gi, ' ')
+    .replace(/[^a-zA-Z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  return {
+    isEditCommand: true,
+    target: remnant || undefined,
+    newAmount,
+    newDate: parsedDate,
+  };
+}
+
 export function extractCustomTimeString(text: string): string | undefined {
   const periodMatch = text.match(/\b(subah|dopahar|shaam|raat)\b/i);
   const period = periodMatch ? periodMatch[1].toLowerCase() : null;
@@ -4715,6 +4777,84 @@ ${tipsText}
 📅 <b>Puraani Date:</b> ${oldDate} ➡️ <b>Nayi Date:</b> <b>${newDate}</b>
 ━━━━━━━━━━━━━━━━━━━━
 👥 <b>${matchingEntry.personName} Ka Combined Hisab:</b>
+${personNet > 0 
+  ? `🟢 Ab ${matchingEntry.personName} se kul <b>₹${personNet.toLocaleString('en-IN')} LENA HAI</b> (${personPending.length} entries)`
+  : personNet < 0
+  ? `🔴 Ab ${matchingEntry.personName} ko kul <b>₹${Math.abs(personNet).toLocaleString('en-IN')} DENA HAI</b> (${personPending.length} entries)`
+  : `✅ Ab ${matchingEntry.personName} ka hisab barabar hai (₹0)`}`,
+      buildUdhaarReportTelegramMessage(userId).replyMarkup
+    );
+    return;
+  }
+
+  // Udhaar Edit / Amount Change Command Parser (e.g. "change udhaar jiju 2500", "edit udhaar jiju 2500", "jiju ka udhaar 2500 badlo")
+  const editUdhaarParsed = parseUdhaarEditCommand(rawText);
+  if (editUdhaarParsed.isEditCommand) {
+    if (!userStore.udhaars) userStore.udhaars = [];
+    const target = (editUdhaarParsed.target || '').toLowerCase().trim();
+    const newAmount = editUdhaarParsed.newAmount;
+    const newDate = editUdhaarParsed.newDate;
+
+    // Find entry matching target or fallback to recent pending entry
+    let matchingEntry: UdhaarRecord | undefined;
+    if (target) {
+      matchingEntry = userStore.udhaars.find(u => 
+        u.status === 'pending' && 
+        (u.personName.toLowerCase().includes(target) || u.id.toLowerCase().endsWith(target))
+      );
+      if (!matchingEntry) {
+        matchingEntry = userStore.udhaars.find(u => 
+          u.personName.toLowerCase().includes(target) || u.id.toLowerCase().endsWith(target)
+        );
+      }
+    } else {
+      matchingEntry = userStore.udhaars.find(u => u.status === 'pending') || userStore.udhaars[0];
+    }
+
+    if (!matchingEntry) {
+      await sendTelegramReply(
+        botToken,
+        chatId,
+        `❌ <b>${target ? `"${target}" ke naam se koi entry` : 'Koi udhaar entry'} nahi mili.</b>\n\n💡 <i>Khata check karne ke liye <code>/udhaar</code> bhejein.</i>`
+      );
+      return;
+    }
+
+    if (!newAmount && !newDate) {
+      await sendTelegramReply(
+        botToken,
+        chatId,
+        `💡 <b>Udhaar Kaise Change Karein:</b>\n━━━━━━━━━━━━━━━━━━━━\nChat me aise likhein:\n• <code>change udhaar ${matchingEntry.personName} 2500</code>\n• <code>date change ${matchingEntry.personName} 14 Sep</code>\n• <code>edit udhaar ${matchingEntry.personName} 3000</code>\n\n📌 <b>Current Entry:</b> ${matchingEntry.personName} - ₹${matchingEntry.amount.toLocaleString('en-IN')} (${matchingEntry.date})`
+      );
+      return;
+    }
+
+    const oldAmount = matchingEntry.amount;
+    const oldDate = matchingEntry.date;
+    if (newAmount && newAmount > 0) {
+      matchingEntry.amount = newAmount;
+    }
+    if (newDate) {
+      matchingEntry.date = newDate;
+    }
+    saveUserData(userId, userStore);
+
+    // Calculate person's updated combined balance
+    const personPending = userStore.udhaars.filter(u => u.status === 'pending' && u.personName.toLowerCase() === matchingEntry!.personName.toLowerCase());
+    const personLent = personPending.filter(u => u.type === 'lent').reduce((s, u) => s + (Number(u.amount) || 0), 0);
+    const personBorrowed = personPending.filter(u => u.type === 'borrowed').reduce((s, u) => s + (Number(u.amount) || 0), 0);
+    const personNet = personLent - personBorrowed;
+
+    await sendTelegramReply(
+      botToken,
+      chatId,
+      `✅ <b>Udhaar Entry Successfully Update Ho Gayi!</b> 🎉
+━━━━━━━━━━━━━━━━━━━━
+👤 <b>Person:</b> <b>${matchingEntry.personName}</b>
+💰 <b>Raqam:</b> ${newAmount ? `₹${oldAmount.toLocaleString('en-IN')} ➡️ <b>₹${matchingEntry.amount.toLocaleString('en-IN')}</b>` : `₹${matchingEntry.amount.toLocaleString('en-IN')}`}
+📅 <b>Date:</b> ${newDate ? `${oldDate} ➡️ <b>${matchingEntry.date}</b>` : matchingEntry.date}
+━━━━━━━━━━━━━━━━━━━━
+👥 <b>${matchingEntry.personName} Ka Naya Combined Hisab:</b>
 ${personNet > 0 
   ? `🟢 Ab ${matchingEntry.personName} se kul <b>₹${personNet.toLocaleString('en-IN')} LENA HAI</b> (${personPending.length} entries)`
   : personNet < 0
