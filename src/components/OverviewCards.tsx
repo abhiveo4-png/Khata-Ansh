@@ -50,7 +50,10 @@ export const OverviewCards: React.FC<OverviewCardsProps> = ({
     : (summary.personalExpense !== undefined ? summary.personalExpense : summary.totalExpense);
 
   const pendingReimbursements = summary.pendingReimbursements || 0;
-  const netSavings = summary.totalIncome - (summary.personalExpense !== undefined ? summary.personalExpense : summary.totalExpense) + pendingReimbursements;
+  const cashBalance = summary.totalIncome - summary.totalExpense;
+  const netSavings = isFamily
+    ? (summary.totalIncome - memberPersonalExpense)
+    : (summary.totalIncome - personalExpense);
 
   const displayAmount = (val: number, isMemberOwnAmount: boolean = false) => {
     if (isFamily && !isMemberOwnAmount) {
@@ -80,19 +83,15 @@ export const OverviewCards: React.FC<OverviewCardsProps> = ({
           <span className="text-rose-400">
             {isFamily ? 'Aapka Kharcha' : 'Personal Kharcha'} (₹{displayAmount(personalExpense, isFamily)})
           </span>
-          <span>+</span>
-          <button
-            type="button"
-            onClick={() => onOpenReimbursementSummary?.()}
-            className="text-cyan-400 hover:text-cyan-300 hover:underline cursor-pointer transition-all"
-            title="Reimbursement summary and settlement hub kholein"
-          >
-            Reimbursement (₹{displayAmount(pendingReimbursements)})
-          </button>
           <span>=</span>
           <span className="font-extrabold text-white bg-indigo-500/20 px-2 py-0.5 rounded border border-indigo-500/30">
             Net Savings: ₹{displayAmount(netSavings)}
           </span>
+          {!isFamily && (
+            <span className="text-[11px] text-slate-400 font-sans hidden sm:inline">
+              (Cash Balance: <span className="font-mono text-emerald-300">₹{displayAmount(cashBalance)}</span> + Rim Pending: <span className="font-mono text-cyan-300">₹{displayAmount(pendingReimbursements)}</span>)
+            </span>
+          )}
         </div>
         {isFamily ? (
           <span className="text-[11px] text-indigo-300 bg-indigo-950/60 px-2.5 py-0.5 rounded-md border border-indigo-500/30 font-sans flex items-center gap-1">
@@ -202,10 +201,10 @@ export const OverviewCards: React.FC<OverviewCardsProps> = ({
 
           <div className="mt-3 flex items-center justify-between text-xs pt-2.5 border-t border-white/[0.08] relative z-10">
             <span className="font-semibold text-indigo-300">
-              {isFamily ? '🔒 Hidden for Family' : `Bachat Rate: ${summary.savingsRate}%`}
+              {isFamily ? '🔒 Hidden for Family' : `Cash Balance: ₹${displayAmount(cashBalance)}`}
             </span>
             <span className="text-slate-400 text-[11px] font-medium">
-              {isFamily ? 'Master Protected' : 'Lifetime Unspent'}
+              {isFamily ? 'Master Protected' : `Bachat Rate: ${summary.savingsRate}%`}
             </span>
           </div>
         </div>

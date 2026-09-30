@@ -1036,8 +1036,9 @@ function calculateUserSummary(userId: string): FinancialSummary {
     }
   }
 
-  // Formula as requested by user: Income - Personal Expense + Reimbursements
-  const netSavings = totalIncome - personalExpense + pendingReimbursements;
+  // True Net Savings = Income - Personal Expense (or Cash Balance + Pending Reimbursements)
+  const cashBalance = totalIncome - totalExpense;
+  const netSavings = totalIncome - personalExpense;
   const savingsRate = totalIncome > 0 ? Math.max(0, Math.round((netSavings / totalIncome) * 100)) : 0;
   const expenseCats = new Set((store.categories || []).filter(c => c.type !== 'income').map(c => c.name.toLowerCase()));
   const monthlyBudget = (store.budgets || [])
