@@ -924,8 +924,15 @@ export const TransactionList: React.FC<TransactionListProps> = ({
                       ))}
                     </select>
 
-                    <span className="text-[10px] font-mono text-slate-400 shrink-0">
-                      {tx.paymentMethod || 'UPI'}
+                    <span
+                      className={`text-[10px] font-mono shrink-0 px-1.5 py-0.5 rounded ${
+                        tx.paymentMethod === 'UPI/Cash'
+                          ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                          : 'text-slate-400'
+                      }`}
+                      title={tx.paymentMethod === 'UPI/Cash' ? 'Mode not specified - click Edit to assign' : undefined}
+                    >
+                      {tx.paymentMethod || 'UPI/Cash'}
                     </span>
                   </div>
                 </div>

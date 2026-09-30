@@ -317,10 +317,11 @@ export const EditTransactionModal: React.FC<EditTransactionModalProps> = ({
                 className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-white focus:outline-hidden focus:border-indigo-500 cursor-pointer"
               >
                 <option value="UPI">UPI</option>
+                <option value="Cash">Cash</option>
+                <option value="UPI/Cash">UPI/Cash (Pending / Unassigned)</option>
                 <option value="Card">Card</option>
                 <option value="Net Banking">Net Banking</option>
                 <option value="Bank Transfer">Bank Transfer</option>
-                <option value="Cash">Cash</option>
                 <option value="Other">Other</option>
               </select>
             </div>

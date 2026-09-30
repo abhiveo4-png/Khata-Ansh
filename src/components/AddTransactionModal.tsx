@@ -12,7 +12,7 @@ interface AddTransactionModalProps {
 }
 
 const AMOUNT_PRESETS = [100, 200, 500, 1000, 2000, 5000];
-const PAYMENT_METHODS: PaymentMethod[] = ['UPI', 'Cash', 'Card', 'Net Banking', 'Bank Transfer', 'Other'];
+const PAYMENT_METHODS: PaymentMethod[] = ['UPI', 'Cash', 'Card', 'Net Banking', 'Bank Transfer', 'UPI/Cash', 'Other'];
 
 export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
   isOpen,

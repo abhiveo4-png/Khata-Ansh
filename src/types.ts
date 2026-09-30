@@ -1,6 +1,6 @@
 export type TransactionType = 'income' | 'expense';
 
-export type PaymentMethod = 'UPI' | 'Cash' | 'Card' | 'Net Banking' | 'Bank Transfer' | 'Other';
+export type PaymentMethod = 'UPI' | 'Cash' | 'Card' | 'Net Banking' | 'Bank Transfer' | 'UPI/Cash' | 'Other';
 
 export type AccountId =
   | 'ICICI CC 0000'

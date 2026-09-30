@@ -98,7 +98,7 @@ export interface UserProfile {
 }
 
 export type TransactionType = 'income' | 'expense';
-export type PaymentMethod = 'UPI' | 'Cash' | 'Card' | 'Net Banking' | 'Bank Transfer' | 'Other';
+export type PaymentMethod = 'UPI' | 'Cash' | 'Card' | 'Net Banking' | 'Bank Transfer' | 'UPI/Cash' | 'Other';
 
 export interface Transaction {
   id: string;
@@ -1105,7 +1105,18 @@ async function callGeminiCandidateModels(
 
 // ---------------- Payment Method Detection ----------------
 
-export function detectPaymentMethod(text: string): PaymentMethod {
+export function hasExplicitPaymentMethod(text: string): boolean {
+  const lower = text.toLowerCase();
+  return (
+    /\b(cash|nagad|rokda|in cash|by cash|card|credit card|debit card|visa|mastercard|amex|rupay|pos|bank|net banking|netbanking|bank transfer|neft|rtgs|imps|cheque|upi|gpay|google pay|phonepe|phone pe|paytm|bhim|cred|scan|qr|amazon pay)\b/i.test(lower) ||
+    lower.endsWith(' cash') ||
+    lower.startsWith('cash ') ||
+    lower.endsWith(' upi') ||
+    lower.startsWith('upi ')
+  );
+}
+
+export function detectPaymentMethod(text: string, isIncome: boolean = false): PaymentMethod {
   const lower = text.toLowerCase();
 
   // Cash detection
@@ -1132,8 +1143,13 @@ export function detectPaymentMethod(text: string): PaymentMethod {
     return 'UPI';
   }
 
-  // Default to UPI for general digital messages, or Cash if implied
-  return 'UPI';
+  // If no payment mode was specified in spend/expense message, default to 'UPI/Cash'
+  // (so user can reassign it later in edit modal or ledger)
+  if (!isIncome) {
+    return 'UPI/Cash';
+  }
+
+  return 'Bank Transfer';
 }
 
 // ---------------- Application Timezone (Default: Indian Standard Time - Asia/Kolkata) ----------------
@@ -1623,9 +1639,6 @@ function parseFallback(rawText: string, userCategories: CategoryDef[]): Array<{
   for (const seg of segments) {
     const segLower = seg.toLowerCase();
 
-    // Detect Payment Method for this segment
-    const paymentMethod = detectPaymentMethod(seg);
-
     // Extract custom or relative date
     const extractedDate = parseCustomDateString(seg);
 
@@ -1685,6 +1698,7 @@ function parseFallback(rawText: string, userCategories: CategoryDef[]): Array<{
       );
 
     const type: TransactionType = isIncome ? 'income' : 'expense';
+    const paymentMethod = detectPaymentMethod(seg, isIncome);
 
     // Clean description: remove amount, date tokens, time tokens, and common filler words
     let cleanDesc = seg
@@ -1777,7 +1791,7 @@ async function parseMessageWithGemini(
     return fallback.map(f => ({
       ...f,
       date: f.date || currentDate,
-      paymentMethod: f.paymentMethod || 'UPI',
+      paymentMethod: f.paymentMethod || (f.type === 'expense' ? 'UPI/Cash' : 'Bank Transfer'),
     }));
   }
 
@@ -1810,6 +1824,12 @@ CRITICAL RULES:
    - If user transfers money to wife ("transferred to wife", "savings to wife"), set isSavingsTransfer: true.
 6. Date & Time:
    - Parse exact ISO date "YYYY-MM-DD" and 24-hr time "HH:mm".
+7. Payment method detection:
+   - If user mentions cash/nagad/rokda -> "Cash".
+   - If user mentions upi/gpay/phonepe/paytm -> "UPI".
+   - If user mentions card/credit card/debit card -> "Card".
+   - If user mentions bank transfer/net banking -> "Bank Transfer".
+   - CRITICAL: For expense/spend transactions, if the user DID NOT specify any payment method (e.g. "100 dahi", "50 chai", "500 petrol", "200 auto"), paymentMethod MUST BE "UPI/Cash".
 
 User message:
 """
@@ -1830,7 +1850,7 @@ ${rawText}
             description: { type: Type.STRING },
             date: { type: Type.STRING },
             time: { type: Type.STRING },
-            paymentMethod: { type: Type.STRING, enum: ['UPI', 'Cash', 'Card', 'Net Banking', 'Bank Transfer', 'Other'] },
+            paymentMethod: { type: Type.STRING, enum: ['UPI', 'Cash', 'Card', 'Net Banking', 'Bank Transfer', 'UPI/Cash', 'Other'] },
             account: { type: Type.STRING },
             isReimbursement: { type: Type.BOOLEAN },
             isSavingsTransfer: { type: Type.BOOLEAN },
@@ -1844,14 +1864,21 @@ ${rawText}
 
     const parsedData = JSON.parse(result?.text || '[]');
     if (Array.isArray(parsedData) && parsedData.length > 0) {
-      return parsedData.map((item: any) => ({
-        ...item,
-        account: item.account || detectAccountFromText(rawText) || 'ICICI CC 0000',
-        isReimbursement: Boolean(item.isReimbursement || detectReimbursement(rawText)),
-        reimbursementStatus: (item.isReimbursement || detectReimbursement(rawText)) ? 'pending' : undefined,
-        isSavingsTransfer: Boolean(item.isSavingsTransfer || detectSavingsTransfer(rawText)),
-        isInvestment: Boolean(item.isInvestment || detectInvestment(rawText)),
-      }));
+      return parsedData.map((item: any) => {
+        let finalPm: PaymentMethod = item.paymentMethod || (item.type === 'expense' ? 'UPI/Cash' : 'Bank Transfer');
+        if (item.type === 'expense' && !hasExplicitPaymentMethod(rawText)) {
+          finalPm = 'UPI/Cash';
+        }
+        return {
+          ...item,
+          paymentMethod: finalPm,
+          account: item.account || detectAccountFromText(rawText) || 'ICICI CC 0000',
+          isReimbursement: Boolean(item.isReimbursement || detectReimbursement(rawText)),
+          reimbursementStatus: (item.isReimbursement || detectReimbursement(rawText)) ? 'pending' : undefined,
+          isSavingsTransfer: Boolean(item.isSavingsTransfer || detectSavingsTransfer(rawText)),
+          isInvestment: Boolean(item.isInvestment || detectInvestment(rawText)),
+        };
+      });
     }
   } catch (err) {
     console.error('Gemini parsing error, falling back:', err);
@@ -1860,7 +1887,7 @@ ${rawText}
   return fallback.map(f => ({
     ...f,
     date: f.date || currentDate,
-    paymentMethod: f.paymentMethod || 'UPI',
+    paymentMethod: f.paymentMethod || (f.type === 'expense' ? 'UPI/Cash' : 'Bank Transfer'),
   }));
 }
 
@@ -2617,7 +2644,7 @@ export function buildItemSpendingReportTelegramMessage(
 
     const memberTotalSpent = matchingExpenses.reduce((sum, t) => sum + (Number(t.amount) || 0), 0);
     const purchasesList = matchingExpenses.slice(0, 6).map((t, idx) => {
-      const pm = t.paymentMethod ? `[${t.paymentMethod}]` : '[UPI]';
+      const pm = t.paymentMethod ? `[${t.paymentMethod}]` : '[UPI/Cash]';
       const timeStr = t.time ? ` (${t.time})` : '';
       const emoji = getCategoryEmoji(t.category);
       return `<b>[#${idx + 1}]</b> 🔴 <b>₹${Number(t.amount).toLocaleString('en-IN')}</b> • <b>${t.description}</b> (${emoji} ${t.category}) ${pm}\n   📅 <i>${t.date}${timeStr}</i>`;
@@ -2645,7 +2672,7 @@ ${purchasesList}
   // Recent 5-6 purchases list
   const recentPurchases = matchingExpenses.slice(0, 6);
   const purchasesList = recentPurchases.map((t, idx) => {
-    const pm = t.paymentMethod ? `[${t.paymentMethod}]` : '[UPI]';
+    const pm = t.paymentMethod ? `[${t.paymentMethod}]` : '[UPI/Cash]';
     const timeStr = t.time ? ` (${t.time})` : '';
     const emoji = getCategoryEmoji(t.category);
     const byTag = t.telegramUser ? ` <i>(by ${t.telegramUser})</i>` : '';
@@ -4291,6 +4318,7 @@ Aap neeche diye gaye inline buttons par tap karein, keyboard buttons use karein 
 • <code>petrol me kitna gaya</code> ya <code>zomato ka total kharcha</code> - Natural language spending query
 • <code>/gullak</code> - Unspent category budget se bachi hui Gullak bachat
 • <code>/budget</code> - Kon si category me kitna kharcha hua aur kitna balance bacha
+• <code>/setbudget Food 5000</code> - Kisi bhi category ka naya monthly budget set karein
 • <code>/date 2 sep</code> ya <code>kal ka kharcha</code> - Kisi specific date ka hisaab-kitaab
 
 🗑️ <b>Delete karne ke commands:</b>
@@ -4307,6 +4335,7 @@ Aap neeche diye gaye inline buttons par tap karein, keyboard buttons use karein 
 /duplicates - Double-entry & duplicate check audit
 /accounts - Jude hue accounts dekhein, switch karein & unlink buttons
 /budget - Category-wise kharcha aur bacha budget
+/setbudget - Naya monthly budget set karein (jaise: <code>/setbudget Food 5000</code>)
 /date - Tareeq ka hisaab (jaise: <code>/date 2 sep</code> ya <code>kal</code>)
 /tips - Gemini AI se janein kaha faltu kharcha hua aur bachat tips
 /recent - Aakhri 5 transactions dekhein
@@ -4515,6 +4544,154 @@ Aap neeche diye gaye inline buttons par tap karein, keyboard buttons use karein 
           { text: '📅 Aaj Ka Hisab', callback_data: 'cmd_date_today' },
           { text: '🤖 AI Faltu Kharcha', callback_data: 'cmd_tips' },
         ],
+      ],
+    });
+    return;
+  }
+
+  // 6.35. Set Category Budget Command (/setbudget <category> <amount> or /setbudget)
+  const isSetBudget =
+    cleanCmd === '/setbudget' ||
+    cleanCmd === '/budgetset' ||
+    lowerText.startsWith('/setbudget') ||
+    lowerText.startsWith('set budget') ||
+    lowerText.startsWith('budget set');
+
+  if (isSetBudget) {
+    if (isFamilyMemberSender) {
+      await sendTelegramReply(
+        botToken,
+        chatId,
+        `🔒 <b>Permission Denied:</b> Sirf Khata Owner budget set ya modify kar sakte hain.`
+      );
+      return;
+    }
+
+    let rawArg = '';
+    if (lowerText.startsWith('/setbudget')) {
+      rawArg = rawText.replace(/^\/setbudget(@\w+)?/i, '').trim();
+    } else if (lowerText.startsWith('set budget')) {
+      rawArg = rawText.replace(/^set budget/i, '').trim();
+    } else if (lowerText.startsWith('budget set')) {
+      rawArg = rawText.replace(/^budget set/i, '').trim();
+    } else {
+      rawArg = commandArg;
+    }
+
+    const userStore = getUserData(userId);
+    syncBudgetsWithCategories(userStore);
+
+    if (!rawArg) {
+      const budgetLines = (userStore.budgets || []).map(b => {
+        const emoji = getCategoryEmoji(b.category);
+        return `• ${emoji} <b>${b.category}:</b> ₹${(Number(b.limit) || 0).toLocaleString('en-IN')}`;
+      }).join('\n');
+
+      const helpMsg = `🎯 <b>CATEGORY BUDGET KAISE SET KAREIN:</b>
+━━━━━━━━━━━━━━━━━━━━
+Aap kisi bhi category ka monthly budget set ya change kar sakte hain:
+
+📝 <b>Examples:</b>
+• <code>/setbudget Food 6000</code>
+• <code>/setbudget Groceries 8000</code>
+• <code>/setbudget Petrol 3000</code>
+• <code>/setbudget Bills 4000</code>
+
+📂 <b>Current Budget Limits:</b>
+${budgetLines || 'ℹ️ Koi budget set nahi hai.'}
+
+━━━━━━━━━━━━━━━━━━━━
+💡 <i>Yeh limits har mahine (jaise kal se naye month me) automatically apply rehti hain. Web Dashboard par jakar "🎯 Budgets & Limits" tab se bhi edit kar sakte hain!</i>`;
+
+      await sendTelegramReply(botToken, chatId, helpMsg, {
+        inline_keyboard: [
+          [{ text: '🎯 View Budgets', callback_data: 'cmd_budget' }, { text: '💰 Balance', callback_data: 'cmd_balance' }],
+        ],
+      });
+      return;
+    }
+
+    let amount = 0;
+    let categoryQuery = '';
+
+    const numMatch = rawArg.match(/\b\d+(?:\.\d+)?\b/);
+    if (numMatch) {
+      amount = Math.round(Number(numMatch[0]));
+      categoryQuery = rawArg.replace(numMatch[0], '').replace(/₹/g, '').trim();
+    }
+
+    if (amount <= 0 || !categoryQuery) {
+      await sendTelegramReply(
+        botToken,
+        chatId,
+        `⚠️ <b>Format Samajh Nahi Aaya:</b>\nKripya category aur amount dono likhein, jaise:\n<code>/setbudget Food 5000</code>\n<code>/setbudget Groceries 8000</code>`
+      );
+      return;
+    }
+
+    const cleanQ = categoryQuery.toLowerCase().trim();
+    let targetCat = userStore.categories.find(c => c.name.toLowerCase() === cleanQ);
+    if (!targetCat) {
+      targetCat = userStore.categories.find(c => 
+        c.name.toLowerCase().includes(cleanQ) || 
+        cleanQ.includes(c.name.toLowerCase())
+      );
+    }
+
+    if (!targetCat) {
+      if (cleanQ.includes('food') || cleanQ.includes('khana') || cleanQ.includes('dining')) {
+        targetCat = userStore.categories.find(c => c.name.toLowerCase().includes('food'));
+      } else if (cleanQ.includes('groc') || cleanQ.includes('sabzi') || cleanQ.includes('kirana')) {
+        targetCat = userStore.categories.find(c => c.name.toLowerCase().includes('grocer'));
+      } else if (cleanQ.includes('petrol') || cleanQ.includes('fuel') || cleanQ.includes('diesel') || cleanQ.includes('travel') || cleanQ.includes('transport')) {
+        targetCat = userStore.categories.find(c => c.name.toLowerCase().includes('transport') || c.name.toLowerCase().includes('fuel'));
+      } else if (cleanQ.includes('bill') || cleanQ.includes('bijli') || cleanQ.includes('wifi') || cleanQ.includes('utility')) {
+        targetCat = userStore.categories.find(c => c.name.toLowerCase().includes('bill'));
+      }
+    }
+
+    const catName = targetCat ? targetCat.name : (categoryQuery.charAt(0).toUpperCase() + categoryQuery.slice(1));
+    if (!targetCat) {
+      userStore.categories.push({
+        id: `cat_${Date.now()}`,
+        name: catName,
+        type: 'expense',
+        icon: 'Tag',
+        color: '#6366f1',
+        keywords: [catName.toLowerCase()],
+      });
+    }
+
+    if (!userStore.budgets) userStore.budgets = [];
+    const bEntry = userStore.budgets.find(b => b.category.toLowerCase() === catName.toLowerCase());
+    if (bEntry) {
+      bEntry.limit = amount;
+    } else {
+      userStore.budgets.push({
+        category: catName,
+        limit: amount,
+        spent: 0,
+        period: 'monthly',
+      });
+    }
+
+    syncBudgetsWithCategories(userStore);
+    saveUserData(userId, userStore);
+
+    const summary = calculateUserSummary(userId);
+    const emoji = getCategoryEmoji(catName);
+
+    const confirmMsg = `✅ <b>CATEGORY BUDGET UPDATE HO GAYA!</b> 🎯
+━━━━━━━━━━━━━━━━━━━━
+📂 <b>Category:</b> ${emoji} <b>${catName}</b>
+💰 <b>Nayi Monthly Limit:</b> <b>₹${amount.toLocaleString('en-IN')}</b>
+📊 <b>Kul Monthly Budget:</b> <b>₹${summary.monthlyBudget.toLocaleString('en-IN')}</b>
+
+💡 <i>Yeh budget agle mahine (kal se) aur aage ke sabhi months ke liye automatic apply ho gaya hai!</i>`;
+
+    await sendTelegramReply(botToken, chatId, confirmMsg, {
+      inline_keyboard: [
+        [{ text: '🎯 Sabhi Budgets Dekhein', callback_data: 'cmd_budget' }, { text: '💰 Balance', callback_data: 'cmd_balance' }],
       ],
     });
     return;
@@ -5686,12 +5863,16 @@ ${personNet > 0
       const itemTime = (item.time && /^\d{2}:\d{2}$/.test(item.time)) ? item.time : msgTimeInfo.time;
       const itemDate = (item.date && /^\d{4}-\d{2}-\d{2}$/.test(item.date)) ? item.date : msgTimeInfo.date;
 
+      const paymentLabel = item.paymentMethod === 'UPI/Cash'
+        ? '<b>UPI/Cash</b> <i>(Mode baad me assign kar sakte hain)</i>'
+        : (item.paymentMethod || 'UPI/Cash');
+
       if (isSenderOwner) {
         replyText = `${isInc ? '🟢 <b>INCOME ADD HO GAYI</b>' : '🔴 <b>KHARCHA RECORD HO GAYA</b>'}
 💰 <b>₹${item.amount.toLocaleString('en-IN')}</b>
 📁 <b>Category:</b> ${item.category}${isUncat ? ' <i>(Web par Category assign karein)</i>' : ''}
 📝 <b>Vivaran:</b> ${item.description}${memberTag}
-💳 <b>Payment:</b> ${item.paymentMethod || 'UPI'}
+💳 <b>Payment:</b> ${paymentLabel}
 📅 <b>Tareeq va Samay:</b> ${itemDate} • ${itemTime} (IST)
 
 ━━━━━━━━━━━━━━━━━━━━
@@ -5704,7 +5885,7 @@ ${isInc ? `📈 <b>Kul Income:</b> ₹${summary.totalIncome.toLocaleString('en-I
 💰 <b>₹${item.amount.toLocaleString('en-IN')}</b>
 📁 <b>Category:</b> ${item.category}${isUncat ? ' <i>(Web par Category assign karein)</i>' : ''}
 📝 <b>Vivaran:</b> ${item.description}${memberTag}
-💳 <b>Payment:</b> ${item.paymentMethod || 'UPI'}
+💳 <b>Payment:</b> ${paymentLabel}
 📅 <b>Tareeq va Samay:</b> ${itemDate} • ${itemTime} (IST)
 
 ━━━━━━━━━━━━━━━━━━━━
@@ -5717,7 +5898,7 @@ ${isInc ? `📈 <b>Kul Income:</b> ₹${summary.totalIncome.toLocaleString('en-I
       const itemsList = parsedList
         .map(p => {
           const tTime = (p.time && /^\d{2}:\d{2}$/.test(p.time)) ? p.time : msgTimeInfo.time;
-          return `• ${p.type === 'income' ? '🟢 +' : '🔴 -'}₹${p.amount.toLocaleString('en-IN')} ${p.description} (${p.category}) [${p.paymentMethod}] <i>(${tTime})</i>`;
+          return `• ${p.type === 'income' ? '🟢 +' : '🔴 -'}₹${p.amount.toLocaleString('en-IN')} ${p.description} (${p.category}) [${p.paymentMethod || 'UPI/Cash'}] <i>(${tTime})</i>`;
         })
         .join('\n');
 
@@ -9387,7 +9568,10 @@ async function startServer() {
 
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        hmr: process.env.DISABLE_HMR !== 'true',
+      },
       appType: 'spa',
     });
     app.use(vite.middlewares);
