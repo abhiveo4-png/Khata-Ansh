@@ -43,6 +43,9 @@ interface TransactionListProps {
   userRole?: UserRole;
   activeFamilyMemberName?: string;
   isPrivacyMode?: boolean;
+  selectedMonth?: string;
+  onSelectMonth?: (month: string) => void;
+  availableMonths?: string[];
   onDeleteTransaction: (id: string) => Promise<void>;
   onEditTransaction?: (tx: Transaction) => Promise<void>;
   onUpdateTransactionCategory?: (id: string, newCategory: string) => Promise<void>;
@@ -57,6 +60,9 @@ export const TransactionList: React.FC<TransactionListProps> = ({
   userRole = 'owner',
   activeFamilyMemberName,
   isPrivacyMode = false,
+  selectedMonth = 'all',
+  onSelectMonth,
+  availableMonths = [],
   onDeleteTransaction,
   onEditTransaction,
   onUpdateTransactionCategory,
@@ -187,6 +193,11 @@ export const TransactionList: React.FC<TransactionListProps> = ({
         if (fromDate && txDate < fromDate) return false;
         if (toDate && txDate > toDate) return false;
 
+        // Month filter (when selectedMonth is active and no custom date range is set)
+        if (selectedMonth && selectedMonth !== 'all' && !fromDate && !toDate) {
+          if (!txDate.startsWith(selectedMonth)) return false;
+        }
+
         // Search query
         if (searchQuery.trim()) {
           const q = searchQuery.toLowerCase();
@@ -217,7 +228,7 @@ export const TransactionList: React.FC<TransactionListProps> = ({
         }
         return 0;
       });
-  }, [transactions, searchQuery, selectedType, selectedCategory, selectedAccount, specialFilter, fromDate, toDate, sortBy]);
+  }, [transactions, searchQuery, selectedType, selectedCategory, selectedAccount, specialFilter, fromDate, toDate, sortBy, selectedMonth]);
 
   // Financial Sum Totals for the currently filtered transactions
   const summary = useMemo(() => {
@@ -359,11 +370,16 @@ export const TransactionList: React.FC<TransactionListProps> = ({
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
           <div>
             <div className="flex items-center space-x-2.5">
-              <h3 className="font-bold text-base text-white flex items-center space-x-2">
+              <h3 className="font-bold text-base text-white flex items-center space-x-2 flex-wrap">
                 <span>Kharcha & Kamai Ledger</span>
                 <span className="px-2.5 py-0.5 rounded-full bg-white/[0.08] text-slate-200 border border-white/[0.1] text-xs font-semibold backdrop-blur-md">
                   {filteredTransactions.length} of {transactions.length}
                 </span>
+                {selectedMonth && selectedMonth !== 'all' && (
+                  <span className="px-2.5 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 text-[11px] font-medium font-sans">
+                    📅 {selectedMonth}
+                  </span>
+                )}
               </h3>
             </div>
             <p className="text-xs text-slate-400 mt-0.5">

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { 
   FileText,
   FolderPlus,
@@ -136,6 +136,41 @@ export default function App() {
   const [appUrl, setAppUrl] = useState('');
   const [activeTab, setActiveTab] = useState<AppNavTab>('transactions');
   const [isAddTransactionOpen, setIsAddTransactionOpen] = useState(false);
+
+  // Month-First Navigation & Carryforward State (IST Synchronized)
+  const getCurrentIstMonth = () => {
+    const now = new Date();
+    const utc = now.getTime() + (now.getTimezoneOffset() * 60000);
+    const istNow = new Date(utc + (3600000 * 5.5));
+    return `${istNow.getFullYear()}-${String(istNow.getMonth() + 1).padStart(2, '0')}`;
+  };
+
+  const [selectedMonth, setSelectedMonth] = useState<string>(() => {
+    try {
+      return localStorage.getItem('teleexpense_selected_month') || getCurrentIstMonth();
+    } catch {
+      return getCurrentIstMonth();
+    }
+  });
+
+  const handleSelectMonth = (month: string) => {
+    setSelectedMonth(month);
+    try {
+      localStorage.setItem('teleexpense_selected_month', month);
+    } catch {}
+  };
+
+  const availableMonths = useMemo(() => {
+    const currentMonth = getCurrentIstMonth();
+    const set = new Set<string>();
+    set.add(currentMonth);
+    transactions.forEach(t => {
+      if (t.date && t.date.length >= 7) {
+        set.add(t.date.substring(0, 7));
+      }
+    });
+    return Array.from(set).sort().reverse();
+  }, [transactions]);
 
   // Modals state
   const [isBotSetupOpen, setIsBotSetupOpen] = useState(false);
@@ -725,9 +760,13 @@ export default function App() {
         <OverviewCards 
           summary={summary} 
           transactions={transactions}
+          budgets={budgets}
           userRole={userRole}
           activeFamilyMemberName={activeFamilyMemberName}
           isPrivacyMode={isPrivacyMode} 
+          selectedMonth={selectedMonth}
+          onSelectMonth={handleSelectMonth}
+          availableMonths={availableMonths}
           onOpenReimbursementSummary={handleOpenReimbursementSummary}
         />
 
@@ -880,6 +919,9 @@ export default function App() {
               userRole={userRole}
               activeFamilyMemberName={activeFamilyMemberName}
               isPrivacyMode={isPrivacyMode}
+              selectedMonth={selectedMonth}
+              onSelectMonth={handleSelectMonth}
+              availableMonths={availableMonths}
               onDeleteTransaction={handleDeleteTransaction}
               onEditTransaction={handleEditTransaction}
               onUpdateTransactionCategory={handleUpdateTransactionCategory}
@@ -898,6 +940,9 @@ export default function App() {
             userRole={userRole}
             activeFamilyMemberName={activeFamilyMemberName}
             isPrivacyMode={isPrivacyMode}
+            selectedMonth={selectedMonth}
+            onSelectMonth={handleSelectMonth}
+            availableMonths={availableMonths}
           />
         )}
 

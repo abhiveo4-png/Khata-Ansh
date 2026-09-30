@@ -37,6 +37,9 @@ interface AccountsLedgerViewProps {
   userRole?: UserRole;
   activeFamilyMemberName?: string;
   isPrivacyMode?: boolean;
+  selectedMonth?: string;
+  onSelectMonth?: (month: string) => void;
+  availableMonths?: string[];
 }
 
 export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
@@ -46,6 +49,9 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
   userRole = 'owner',
   activeFamilyMemberName,
   isPrivacyMode = false,
+  selectedMonth = 'all',
+  onSelectMonth,
+  availableMonths = [],
 }) => {
   const isFamily = userRole === 'family';
   const [selectedAccountId, setSelectedAccountId] = useState<AccountId | 'all'>('ICICI CC 0000');
