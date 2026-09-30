@@ -62,6 +62,9 @@ interface BudgetManagerProps {
   budgets: CategoryBudget[];
   transactions: Transaction[];
   categories: CategoryDef[];
+  selectedMonth?: string;
+  onSelectMonth?: (month: string) => void;
+  availableMonths?: string[];
   onUpdateBudgets: (newBudgets: CategoryBudget[]) => Promise<void>;
   onCategoriesUpdated?: (newCategories: CategoryDef[], newBudgets?: CategoryBudget[]) => void;
   onRefreshTransactions?: () => void;
@@ -72,6 +75,9 @@ export const BudgetManager: React.FC<BudgetManagerProps> = ({
   budgets,
   transactions,
   categories,
+  selectedMonth,
+  onSelectMonth,
+  availableMonths = [],
   onUpdateBudgets,
   onCategoriesUpdated,
   onRefreshTransactions,
@@ -98,6 +104,25 @@ export const BudgetManager: React.FC<BudgetManagerProps> = ({
   const [deletingCatName, setDeletingCatName] = useState<string | null>(null);
   const [budgetTab, setBudgetTab] = useState<'monthly' | 'daily'>('monthly');
 
+  // Indian Standard Time (IST) Month
+  const now = new Date();
+  const utc = now.getTime() + (now.getTimezoneOffset() * 60000);
+  const istNow = new Date(utc + (3600000 * 5.5));
+  const currentIstMonth = `${istNow.getFullYear()}-${String(istNow.getMonth() + 1).padStart(2, '0')}`;
+
+  const activeMonth = (selectedMonth && selectedMonth !== 'all') ? selectedMonth : currentIstMonth;
+
+  // Format month name label
+  const formatMonthName = (mStr: string) => {
+    try {
+      const [y, m] = mStr.split('-').map(Number);
+      const date = new Date(y, m - 1, 1);
+      return date.toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
+    } catch {
+      return mStr;
+    }
+  };
+
   // Focus single input when singleEditingCat changes
   useEffect(() => {
     if (singleEditingCat && singleInputRef.current) {
@@ -118,11 +143,13 @@ export const BudgetManager: React.FC<BudgetManagerProps> = ({
     setBulkInputValues(initialMap);
   }, [budgets, categories, isBulkEditing, singleEditingCat]);
 
-  // Calculate spent per category from current month transactions (excluding reimbursement & savings transfers)
+  // Calculate spent per category from CURRENT/ACTIVE MONTH transactions ONLY
   const spentMap: Record<string, number> = useMemo(() => {
     const map: Record<string, number> = {};
     transactions.forEach((tx) => {
+      const txMonth = (tx.date || '').substring(0, 7);
       if (
+        txMonth === activeMonth &&
         tx.type === 'expense' &&
         !tx.isReimbursement &&
         tx.category?.toLowerCase() !== 'reimbursement' &&
@@ -133,7 +160,7 @@ export const BudgetManager: React.FC<BudgetManagerProps> = ({
       }
     });
     return map;
-  }, [transactions]);
+  }, [transactions, activeMonth]);
 
   // Reimbursement claims statistics for special claim card
   const rimStats = useMemo(() => {

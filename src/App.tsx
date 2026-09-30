@@ -987,6 +987,9 @@ export default function App() {
             budgets={budgets}
             transactions={transactions}
             categories={categories}
+            selectedMonth={selectedMonth}
+            onSelectMonth={handleSelectMonth}
+            availableMonths={availableMonths}
             onUpdateBudgets={handleUpdateBudgets}
             onRefreshTransactions={fetchTransactions}
             onOpenReimbursementSummary={handleOpenReimbursementSummary}
