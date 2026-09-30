@@ -35,7 +35,8 @@ export const EditTransactionModal: React.FC<EditTransactionModalProps> = ({
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('UPI');
   const [account, setAccount] = useState<AccountId>('ICICI CC 0000');
   const [isReimbursement, setIsReimbursement] = useState(false);
-  const [reimbursementStatus, setReimbursementStatus] = useState<'pending' | 'settled'>('pending');
+  const [reimbursementStatus, setReimbursementStatus] = useState<'pending' | 'settled' | 'partial'>('pending');
+  const [reimbursementSettledAmount, setReimbursementSettledAmount] = useState<string>('');
   const [isSavingsTransfer, setIsSavingsTransfer] = useState(false);
   const [isInvestment, setIsInvestment] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -52,6 +53,11 @@ export const EditTransactionModal: React.FC<EditTransactionModalProps> = ({
       setAccount((transaction.account as AccountId) || 'ICICI CC 0000');
       setIsReimbursement(Boolean(transaction.isReimbursement));
       setReimbursementStatus(transaction.reimbursementStatus || 'pending');
+      setReimbursementSettledAmount(
+        transaction.reimbursementSettledAmount !== undefined
+          ? String(transaction.reimbursementSettledAmount)
+          : (transaction.reimbursementStatus === 'settled' ? String(transaction.amount || '') : '0')
+      );
       setIsSavingsTransfer(Boolean(transaction.isSavingsTransfer));
       setIsInvestment(Boolean(transaction.isInvestment));
       setError(null);
@@ -91,6 +97,7 @@ export const EditTransactionModal: React.FC<EditTransactionModalProps> = ({
         account,
         isReimbursement,
         reimbursementStatus: isReimbursement ? reimbursementStatus : undefined,
+        reimbursementSettledAmount: isReimbursement ? (Number(reimbursementSettledAmount) || 0) : undefined,
         isSavingsTransfer,
         isInvestment,
       };
@@ -241,31 +248,92 @@ export const EditTransactionModal: React.FC<EditTransactionModalProps> = ({
               </label>
 
               {isReimbursement && (
-                <div className="pt-2 border-t border-slate-800 flex items-center justify-between">
-                  <span className="text-slate-400 text-[11px]">Reimbursement Claim Status:</span>
-                  <div className="flex items-center gap-1">
-                    <button
-                      type="button"
-                      onClick={() => setReimbursementStatus('pending')}
-                      className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                        reimbursementStatus === 'pending'
-                          ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
-                          : 'text-slate-500'
-                      }`}
-                    >
-                      Pending Claim
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setReimbursementStatus('settled')}
-                      className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                        reimbursementStatus === 'settled'
-                          ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
-                          : 'text-slate-500'
-                      }`}
-                    >
-                      Settled / Paid
-                    </button>
+                <div className="pt-2 border-t border-slate-800 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-400 text-[11px]">Claim Status:</span>
+                    <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setReimbursementStatus('pending');
+                          setReimbursementSettledAmount('0');
+                        }}
+                        className={`px-2 py-0.5 rounded text-[10px] font-bold cursor-pointer ${
+                          reimbursementStatus === 'pending'
+                            ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
+                            : 'text-slate-500 hover:text-slate-300'
+                        }`}
+                      >
+                        Pending
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setReimbursementStatus('partial')}
+                        className={`px-2 py-0.5 rounded text-[10px] font-bold cursor-pointer ${
+                          reimbursementStatus === 'partial'
+                            ? 'bg-orange-500/20 text-orange-300 border border-orange-500/40'
+                            : 'text-slate-500 hover:text-slate-300'
+                        }`}
+                      >
+                        Partial
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setReimbursementStatus('settled');
+                          setReimbursementSettledAmount(String(amount || ''));
+                        }}
+                        className={`px-2 py-0.5 rounded text-[10px] font-bold cursor-pointer ${
+                          reimbursementStatus === 'settled'
+                            ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                            : 'text-slate-500 hover:text-slate-300'
+                        }`}
+                      >
+                        Settled
+                      </button>
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="flex items-center justify-between text-[11px] text-slate-400 mb-1">
+                      <span>Wapas Mila Hua Amount (₹):</span>
+                      <span className="font-mono text-cyan-300">
+                        Baki: ₹{Math.max(0, (Number(amount) || 0) - (Number(reimbursementSettledAmount) || 0)).toLocaleString('en-IN')}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="number"
+                        min="0"
+                        max={Number(amount) || 0}
+                        value={reimbursementSettledAmount}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setReimbursementSettledAmount(val);
+                          const num = Number(val) || 0;
+                          const total = Number(amount) || 0;
+                          if (num >= total && total > 0) {
+                            setReimbursementStatus('settled');
+                          } else if (num > 0) {
+                            setReimbursementStatus('partial');
+                          } else {
+                            setReimbursementStatus('pending');
+                          }
+                        }}
+                        placeholder="0"
+                        className="w-full px-3 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-xs text-white font-mono focus:outline-hidden focus:border-cyan-500"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setReimbursementSettledAmount(String(amount || ''));
+                          setReimbursementStatus('settled');
+                        }}
+                        className="px-2.5 py-1.5 bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border border-emerald-500/30 rounded-lg text-[10px] font-bold shrink-0 cursor-pointer"
+                      >
+                        Full
+                      </button>
+                    </div>
                   </div>
                 </div>
               )}

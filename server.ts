@@ -119,7 +119,8 @@ export interface Transaction {
   createdAt: string;
   tags?: string[];
   isReimbursement?: boolean;
-  reimbursementStatus?: 'pending' | 'settled';
+  reimbursementStatus?: 'pending' | 'settled' | 'partial';
+  reimbursementSettledAmount?: number;
   isSavingsTransfer?: boolean;
   isInvestment?: boolean;
 }
@@ -1010,10 +1011,15 @@ function calculateUserSummary(userId: string): FinancialSummary {
       totalExpense += amt;
       expenseCount++;
 
-      // Check if reimbursement
-      if (t.isReimbursement) {
-        if (t.reimbursementStatus !== 'settled') {
-          pendingReimbursements += amt;
+      // Check if reimbursement (exempt from budget and personal expense)
+      const isRim = Boolean(t.isReimbursement || t.category === 'Reimbursement');
+      if (isRim) {
+        const settledAmt = t.reimbursementStatus === 'settled'
+          ? amt
+          : Math.min(amt, Math.max(0, Number(t.reimbursementSettledAmount) || 0));
+        const remaining = Math.max(0, amt - settledAmt);
+        if (t.reimbursementStatus !== 'settled' && remaining > 0) {
+          pendingReimbursements += remaining;
         }
       } else if (t.isSavingsTransfer) {
         savingsTransfers += amt;
@@ -6812,19 +6818,26 @@ app.get('/api/transactions', (req, res) => {
 app.post('/api/transactions', (req, res) => {
   const user = getRequestUser(req);
   const store = getUserData(user.id);
-  const { type, amount, category, description, date, paymentMethod, account, tags, isReimbursement, reimbursementStatus, isSavingsTransfer, isInvestment } = req.body;
+  const { type, amount, category, description, date, paymentMethod, account, tags, isReimbursement, reimbursementStatus, reimbursementSettledAmount, isSavingsTransfer, isInvestment } = req.body;
 
   if (!amount || isNaN(Number(amount))) {
     return res.status(400).json({ error: 'Valid amount is required' });
   }
 
+  const isRim = Boolean(isReimbursement || category === 'Reimbursement');
   const nowInfo = getAppDateTime();
+  const txAmount = Math.abs(Number(amount));
+  const initSettledAmt = Number(reimbursementSettledAmount) || (reimbursementStatus === 'settled' ? txAmount : 0);
+  const finalRimStatus = isRim
+    ? (reimbursementStatus || (initSettledAmt >= txAmount ? 'settled' : (initSettledAmt > 0 ? 'partial' : 'pending')))
+    : undefined;
+
   const newTx: Transaction = {
     id: `tx_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
     userId: user.id,
     type: type === 'income' ? 'income' : 'expense',
-    amount: Math.abs(Number(amount)),
-    category: category || (type === 'income' ? 'Salary & Employment' : 'Uncategorized'),
+    amount: txAmount,
+    category: isRim ? 'Reimbursement' : (category || (type === 'income' ? 'Salary & Employment' : 'Uncategorized')),
     description: (description || 'Manual Entry').trim(),
     date: date || nowInfo.date,
     time: req.body.time || nowInfo.time,
@@ -6833,8 +6846,9 @@ app.post('/api/transactions', (req, res) => {
     source: 'manual',
     createdAt: nowInfo.iso,
     tags: Array.isArray(tags) ? tags : [],
-    isReimbursement: Boolean(isReimbursement),
-    reimbursementStatus: isReimbursement ? (reimbursementStatus || 'pending') : undefined,
+    isReimbursement: isRim,
+    reimbursementStatus: finalRimStatus,
+    reimbursementSettledAmount: isRim ? initSettledAmt : undefined,
     isSavingsTransfer: Boolean(isSavingsTransfer),
     isInvestment: Boolean(isInvestment),
   };
@@ -6895,7 +6909,7 @@ app.put('/api/transactions/:id', (req, res) => {
   const user = getRequestUser(req);
   const store = getUserData(user.id);
   const { id } = req.params;
-  const { type, amount, category, description, date, paymentMethod, account, tags, isReimbursement, reimbursementStatus, isSavingsTransfer, isInvestment } = req.body;
+  const { type, amount, category, description, date, paymentMethod, account, tags, isReimbursement, reimbursementStatus, reimbursementSettledAmount, isSavingsTransfer, isInvestment } = req.body;
 
   const tx = store.transactions.find(t => t.id === id);
   if (!tx) {
@@ -6912,11 +6926,106 @@ app.put('/api/transactions/:id', (req, res) => {
   if (tags) tx.tags = tags;
   if (isReimbursement !== undefined) tx.isReimbursement = Boolean(isReimbursement);
   if (reimbursementStatus !== undefined) tx.reimbursementStatus = reimbursementStatus;
+  if (reimbursementSettledAmount !== undefined) tx.reimbursementSettledAmount = Number(reimbursementSettledAmount) || 0;
   if (isSavingsTransfer !== undefined) tx.isSavingsTransfer = Boolean(isSavingsTransfer);
   if (isInvestment !== undefined) tx.isInvestment = Boolean(isInvestment);
 
+  // Auto-sync status if settled amount matches or exceeds
+  if (tx.isReimbursement || tx.category === 'Reimbursement') {
+    const totalAmt = Number(tx.amount) || 0;
+    const settled = Number(tx.reimbursementSettledAmount) || 0;
+    if (settled >= totalAmt && totalAmt > 0) {
+      tx.reimbursementStatus = 'settled';
+      tx.reimbursementSettledAmount = totalAmt;
+    } else if (settled > 0 && settled < totalAmt) {
+      tx.reimbursementStatus = 'partial';
+    }
+  }
+
   saveUserData(user.id, store);
   res.json({ success: true, transaction: tx, summary: calculateUserSummary(user.id) });
+});
+
+// Dedicated Reimbursement Settlement Endpoint (supports full or partial settle)
+app.post('/api/transactions/:id/settle-reimbursement', (req, res) => {
+  const user = getRequestUser(req);
+  const store = getUserData(user.id);
+  const { id } = req.params;
+  const { settledAmount, isFullSettle, notes } = req.body;
+
+  const tx = store.transactions.find(t => t.id === id);
+  if (!tx) {
+    return res.status(404).json({ error: 'Transaction not found' });
+  }
+
+  const totalAmt = Number(tx.amount) || 0;
+  tx.isReimbursement = true;
+  if (!tx.category || tx.category === 'Uncategorized') {
+    tx.category = 'Reimbursement';
+  }
+
+  if (isFullSettle || Number(settledAmount) >= totalAmt) {
+    tx.reimbursementStatus = 'settled';
+    tx.reimbursementSettledAmount = totalAmt;
+  } else {
+    const sAmt = Math.max(0, Number(settledAmount) || 0);
+    tx.reimbursementSettledAmount = sAmt;
+    if (sAmt === 0) {
+      tx.reimbursementStatus = 'pending';
+    } else if (sAmt >= totalAmt) {
+      tx.reimbursementStatus = 'settled';
+      tx.reimbursementSettledAmount = totalAmt;
+    } else {
+      tx.reimbursementStatus = 'partial';
+    }
+  }
+
+  if (notes && typeof notes === 'string' && notes.trim()) {
+    tx.tags = Array.isArray(tx.tags) ? tx.tags : [];
+    if (!tx.tags.includes(notes.trim())) {
+      tx.tags.push(notes.trim());
+    }
+  }
+
+  saveUserData(user.id, store);
+  res.json({
+    success: true,
+    transaction: tx,
+    remainingAmount: Math.max(0, totalAmt - (tx.reimbursementSettledAmount || 0)),
+    summary: calculateUserSummary(user.id),
+  });
+});
+
+// Settle All Pending / Partial Reimbursements in 1-Click
+app.post('/api/transactions/settle-all-reimbursements', (req, res) => {
+  const user = getRequestUser(req);
+  const store = getUserData(user.id);
+
+  let settledCount = 0;
+  let totalSettledAmount = 0;
+
+  for (const tx of store.transactions) {
+    if (tx.isReimbursement || tx.category === 'Reimbursement') {
+      if (tx.reimbursementStatus !== 'settled') {
+        const amt = Number(tx.amount) || 0;
+        const currentSettled = Number(tx.reimbursementSettledAmount) || 0;
+        totalSettledAmount += Math.max(0, amt - currentSettled);
+        tx.reimbursementStatus = 'settled';
+        tx.reimbursementSettledAmount = amt;
+        tx.isReimbursement = true;
+        settledCount++;
+      }
+    }
+  }
+
+  saveUserData(user.id, store);
+  res.json({
+    success: true,
+    settledCount,
+    totalSettledAmount,
+    summary: calculateUserSummary(user.id),
+    transactions: store.transactions,
+  });
 });
 
 // ---------------- EMIs, Savings Transfers & Investments Endpoints ----------------

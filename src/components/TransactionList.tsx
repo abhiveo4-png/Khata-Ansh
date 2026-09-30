@@ -48,6 +48,7 @@ interface TransactionListProps {
   onUpdateTransactionCategory?: (id: string, newCategory: string) => Promise<void>;
   onClearAll: () => Promise<void>;
   onRefresh?: () => Promise<void>;
+  onOpenReimbursementSummary?: (txId?: string) => void;
 }
 
 export const TransactionList: React.FC<TransactionListProps> = ({
@@ -61,6 +62,7 @@ export const TransactionList: React.FC<TransactionListProps> = ({
   onUpdateTransactionCategory,
   onClearAll,
   onRefresh,
+  onOpenReimbursementSummary,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedType, setSelectedType] = useState<'all' | TransactionType>('all');
@@ -176,7 +178,7 @@ export const TransactionList: React.FC<TransactionListProps> = ({
         }
 
         // Special filter
-        if (specialFilter === 'reimbursement' && !tx.isReimbursement) return false;
+        if (specialFilter === 'reimbursement' && !tx.isReimbursement && tx.category !== 'Reimbursement') return false;
         if (specialFilter === 'family_trip_pooja' && tx.category !== 'Family Trip & Pooja') return false;
         if (specialFilter === 'savings_transfer' && !tx.isSavingsTransfer) return false;
 
@@ -599,6 +601,16 @@ export const TransactionList: React.FC<TransactionListProps> = ({
               <option value="family_trip_pooja" className="bg-slate-900">🪔 Family Trip & Pooja</option>
               <option value="savings_transfer" className="bg-slate-900">💖 Savings to Wife</option>
             </select>
+            {specialFilter === 'reimbursement' && onOpenReimbursementSummary && (
+              <button
+                type="button"
+                onClick={() => onOpenReimbursementSummary()}
+                className="mt-1 w-full py-1 px-2 bg-cyan-950/80 hover:bg-cyan-900 border border-cyan-500/40 rounded-xl text-[11px] font-semibold text-cyan-300 transition-all cursor-pointer flex items-center justify-center gap-1 shadow-sm"
+              >
+                <Briefcase className="w-3 h-3 text-cyan-400" />
+                <span>Open Claims & Settle Hub</span>
+              </button>
+            )}
           </div>
 
           {/* Category Filter */}
@@ -863,19 +875,33 @@ export const TransactionList: React.FC<TransactionListProps> = ({
                     <div className="flex items-center space-x-2 flex-wrap gap-y-1">
                       <span className="font-semibold text-white truncate text-sm">{tx.description}</span>
                       
-                      {/* Reimbursement Badge with Clickable Status Toggle */}
-                      {tx.isReimbursement && (
+                      {/* Reimbursement Badge with Clickable Status & Settlement Launcher */}
+                      {(tx.isReimbursement || tx.category === 'Reimbursement') && (
                         <button
-                          onClick={() => handleToggleReimbursementStatus(tx)}
+                          onClick={() => {
+                            if (onOpenReimbursementSummary) {
+                              onOpenReimbursementSummary(tx.id);
+                            } else {
+                              handleToggleReimbursementStatus(tx);
+                            }
+                          }}
                           className={`inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full border cursor-pointer transition-all ${
                             tx.reimbursementStatus === 'settled'
-                              ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
-                              : 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+                              ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40 hover:bg-emerald-500/30'
+                              : tx.reimbursementStatus === 'partial'
+                              ? 'bg-orange-500/20 text-orange-300 border-orange-500/40 hover:bg-orange-500/30'
+                              : 'bg-amber-500/20 text-amber-300 border-amber-500/40 hover:bg-amber-500/30'
                           }`}
-                          title="Click to toggle Reimbursement Settled vs Pending"
+                          title="Click karein settlement modal kholne ya status change karne ke liye"
                         >
                           <Briefcase className="w-2.5 h-2.5" />
-                          <span>{tx.reimbursementStatus === 'settled' ? 'Rim Settled' : 'Rim Pending'}</span>
+                          <span>
+                            {tx.reimbursementStatus === 'settled'
+                              ? 'Rim Settled'
+                              : tx.reimbursementStatus === 'partial'
+                              ? `Partial (₹${(Number(tx.reimbursementSettledAmount) || 0).toLocaleString('en-IN')})`
+                              : 'Rim Pending'}
+                          </span>
                         </button>
                       )}
 

@@ -47,6 +47,7 @@ import { AiInsightsModal } from './components/AiInsightsModal';
 import { ExcelBackupRestoreModal } from './components/ExcelBackupRestoreModal';
 import { GullakView } from './components/GullakView';
 import { AddTransactionModal } from './components/AddTransactionModal';
+import { ReimbursementSummaryModal } from './components/ReimbursementSummaryModal';
 import { OfflineIndicator } from './components/OfflineIndicator';
 import { PWAInstallBanner } from './components/PWAInstallBanner';
 
@@ -140,7 +141,14 @@ export default function App() {
   const [isBotSetupOpen, setIsBotSetupOpen] = useState(false);
   const [isAiInsightsOpen, setIsAiInsightsOpen] = useState(false);
   const [isBackupModalOpen, setIsBackupModalOpen] = useState(false);
+  const [isReimbursementModalOpen, setIsReimbursementModalOpen] = useState(false);
+  const [selectedReimbursementTxId, setSelectedReimbursementTxId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+
+  const handleOpenReimbursementSummary = (txId?: string) => {
+    setSelectedReimbursementTxId(txId || null);
+    setIsReimbursementModalOpen(true);
+  };
 
   // Helper for localStorage caching
   const getCachedTransactions = (userId: string): Transaction[] => {
@@ -720,6 +728,7 @@ export default function App() {
           userRole={userRole}
           activeFamilyMemberName={activeFamilyMemberName}
           isPrivacyMode={isPrivacyMode} 
+          onOpenReimbursementSummary={handleOpenReimbursementSummary}
         />
 
         {/* Horizontal Navigation Tabs - Desktop only */}
@@ -876,6 +885,7 @@ export default function App() {
               onUpdateTransactionCategory={handleUpdateTransactionCategory}
               onClearAll={handleClearAll}
               onRefresh={fetchTransactions}
+              onOpenReimbursementSummary={handleOpenReimbursementSummary}
             />
           </div>
         )}
@@ -919,6 +929,7 @@ export default function App() {
               fetchBudgets();
               fetchTransactions();
             }}
+            onOpenReimbursementSummary={handleOpenReimbursementSummary}
           />
         )}
 
@@ -933,6 +944,7 @@ export default function App() {
             categories={categories}
             onUpdateBudgets={handleUpdateBudgets}
             onRefreshTransactions={fetchTransactions}
+            onOpenReimbursementSummary={handleOpenReimbursementSummary}
             onCategoriesUpdated={(newCats, newBudge) => {
               setCategories(newCats);
               if (newBudge) {
@@ -994,6 +1006,24 @@ export default function App() {
         onOpenBackupModal={() => setIsBackupModalOpen(true)}
         onExportCsv={handleExportCsv}
         onLogout={handleLogout}
+      />
+
+      <ReimbursementSummaryModal
+        isOpen={isReimbursementModalOpen}
+        onClose={() => {
+          setIsReimbursementModalOpen(false);
+          setSelectedReimbursementTxId(null);
+        }}
+        transactions={transactions}
+        onRefreshTransactions={() => {
+          fetchTransactions();
+          fetchBudgets();
+        }}
+        onEditTransaction={handleEditTransaction}
+        onOpenAddTransaction={(cat) => {
+          setIsAddTransactionOpen(true);
+        }}
+        selectedTxId={selectedReimbursementTxId}
       />
 
       <ExcelBackupRestoreModal

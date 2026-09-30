@@ -320,7 +320,13 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
             <label className="block text-slate-400 uppercase tracking-wider mb-1">CATEGORY CHUNIYE</label>
             <select
               value={category}
-              onChange={(e) => setCategory(e.target.value)}
+              onChange={(e) => {
+                const val = e.target.value;
+                setCategory(val);
+                if (val.toLowerCase() === 'reimbursement') {
+                  setIsReimbursement(true);
+                }
+              }}
               className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-700 rounded-xl text-xs text-cyan-300 focus:outline-hidden focus:border-cyan-400 cursor-pointer"
             >
               {filteredCategories.map((c) => (

@@ -65,6 +65,7 @@ interface BudgetManagerProps {
   onUpdateBudgets: (newBudgets: CategoryBudget[]) => Promise<void>;
   onCategoriesUpdated?: (newCategories: CategoryDef[], newBudgets?: CategoryBudget[]) => void;
   onRefreshTransactions?: () => void;
+  onOpenReimbursementSummary?: (txId?: string) => void;
 }
 
 export const BudgetManager: React.FC<BudgetManagerProps> = ({
@@ -74,6 +75,7 @@ export const BudgetManager: React.FC<BudgetManagerProps> = ({
   onUpdateBudgets,
   onCategoriesUpdated,
   onRefreshTransactions,
+  onOpenReimbursementSummary,
 }) => {
   // Global bulk editing mode
   const [isBulkEditing, setIsBulkEditing] = useState(false);
@@ -116,16 +118,46 @@ export const BudgetManager: React.FC<BudgetManagerProps> = ({
     setBulkInputValues(initialMap);
   }, [budgets, categories, isBulkEditing, singleEditingCat]);
 
-  // Calculate spent per category from current month transactions
+  // Calculate spent per category from current month transactions (excluding reimbursement & savings transfers)
   const spentMap: Record<string, number> = useMemo(() => {
     const map: Record<string, number> = {};
     transactions.forEach((tx) => {
-      if (tx.type === 'expense') {
+      if (
+        tx.type === 'expense' &&
+        !tx.isReimbursement &&
+        tx.category?.toLowerCase() !== 'reimbursement' &&
+        !tx.isSavingsTransfer
+      ) {
         const catName = tx.category || 'Uncategorized';
         map[catName.toLowerCase()] = (map[catName.toLowerCase()] || 0) + (Number(tx.amount) || 0);
       }
     });
     return map;
+  }, [transactions]);
+
+  // Reimbursement claims statistics for special claim card
+  const rimStats = useMemo(() => {
+    let totalClaimed = 0;
+    let totalSettled = 0;
+    let totalCount = 0;
+    transactions.forEach((t) => {
+      if (t.isReimbursement || t.category?.toLowerCase() === 'reimbursement') {
+        const amt = Number(t.amount) || 0;
+        totalClaimed += amt;
+        const settledAmt =
+          t.reimbursementStatus === 'settled'
+            ? amt
+            : Math.min(amt, Math.max(0, Number(t.reimbursementSettledAmount) || 0));
+        totalSettled += settledAmt;
+        totalCount++;
+      }
+    });
+    return {
+      totalClaimed,
+      totalSettled,
+      totalRemaining: Math.max(0, totalClaimed - totalSettled),
+      totalCount,
+    };
   }, [transactions]);
 
   // Master list of displayed budget items synced with categories
@@ -679,6 +711,7 @@ export const BudgetManager: React.FC<BudgetManagerProps> = ({
           const isNear = limit > 0 && percent >= 80 && !isOver;
 
           const isCardSingleEditing = singleEditingCat === b.category;
+          const isReimbursementCat = b.category.toLowerCase() === 'reimbursement';
 
           // Icon and Color styling
           const iconName = b.categoryDef?.icon || 'Tag';
@@ -689,7 +722,9 @@ export const BudgetManager: React.FC<BudgetManagerProps> = ({
             <div
               key={b.category}
               className={`p-4 rounded-2xl border transition-all duration-200 ${
-                isCardSingleEditing
+                isReimbursementCat
+                  ? 'bg-gradient-to-br from-[#0c1222]/95 via-cyan-950/20 to-[#0c1222]/95 border-cyan-500/40 shadow-xl shadow-cyan-950/30'
+                  : isCardSingleEditing
                   ? 'bg-slate-900 border-cyan-400 shadow-xl shadow-cyan-950/50 ring-1 ring-cyan-500/40'
                   : isOver
                   ? 'bg-rose-950/20 border-rose-500/40 shadow-lg shadow-rose-950/20'
@@ -711,25 +746,48 @@ export const BudgetManager: React.FC<BudgetManagerProps> = ({
                   >
                     <IconComp className="w-4 h-4" />
                   </div>
-                  <div className="min-w-0">
+                  <div 
+                    className={`min-w-0 ${isReimbursementCat ? 'cursor-pointer' : ''}`}
+                    onClick={() => {
+                      if (isReimbursementCat) onOpenReimbursementSummary?.();
+                    }}
+                  >
                     <h3 className="font-bold text-sm text-white font-display truncate" title={b.category}>
                       {b.category}
                     </h3>
                     <div className="flex items-center gap-1.5 mt-0.5">
-                      {b.categoryDef?.isCustom && (
-                        <span className="text-[9px] font-mono px-1.5 py-0.2 rounded-sm bg-indigo-950/70 border border-indigo-500/30 text-indigo-300">
-                          CUSTOM
+                      {isReimbursementCat ? (
+                        <span className="text-[9px] font-mono px-1.5 py-0.2 rounded-sm bg-cyan-950/90 border border-cyan-500/40 text-cyan-300 font-bold">
+                          BUDGET EXEMPTED
                         </span>
+                      ) : (
+                        <>
+                          {b.categoryDef?.isCustom && (
+                            <span className="text-[9px] font-mono px-1.5 py-0.2 rounded-sm bg-indigo-950/70 border border-indigo-500/30 text-indigo-300">
+                              CUSTOM
+                            </span>
+                          )}
+                          <span className="text-[9px] font-mono text-slate-400 capitalize">
+                            {b.categoryDef?.type || 'expense'}
+                          </span>
+                        </>
                       )}
-                      <span className="text-[9px] font-mono text-slate-400 capitalize">
-                        {b.categoryDef?.type || 'expense'}
-                      </span>
                     </div>
                   </div>
                 </div>
 
                 <div className="flex items-center space-x-1.5 shrink-0">
-                  {isOver ? (
+                  {isReimbursementCat ? (
+                    <button
+                      type="button"
+                      onClick={() => onOpenReimbursementSummary?.()}
+                      className="px-2 py-0.5 rounded-md bg-cyan-950/90 border border-cyan-500/40 text-cyan-300 text-[10px] font-mono font-bold flex items-center gap-1 cursor-pointer hover:bg-cyan-900/60"
+                      title="Reimbursement summary dekhein aur settle karein"
+                    >
+                      <Briefcase className="w-3 h-3" />
+                      CLAIMABLE
+                    </button>
+                  ) : isOver ? (
                     <span className="px-2 py-0.5 rounded-md bg-rose-950/90 border border-rose-500/50 text-rose-300 text-[10px] font-mono font-bold flex items-center gap-1 shrink-0">
                       <ShieldAlert className="w-3 h-3 text-rose-400" />
                       EXCEEDED
@@ -750,7 +808,7 @@ export const BudgetManager: React.FC<BudgetManagerProps> = ({
                   )}
 
                   {/* Delete category button */}
-                  {b.category.toLowerCase() !== 'uncategorized' && !isBulkEditing && !isCardSingleEditing && (
+                  {b.category.toLowerCase() !== 'uncategorized' && !isReimbursementCat && !isBulkEditing && !isCardSingleEditing && (
                     <button
                       onClick={() => handleDeleteCategory(b.category, b.categoryDef?.id)}
                       disabled={deletingCatName === b.category}
@@ -763,150 +821,186 @@ export const BudgetManager: React.FC<BudgetManagerProps> = ({
                 </div>
               </div>
 
-              {/* Amount and Limit Details */}
-              <div className="mt-4 flex items-baseline justify-between font-mono text-xs">
-                <div className="text-slate-400">
-                  SPENT: <span className="text-white font-bold">₹{spent.toLocaleString('en-IN')}</span>
+              {/* Special Reimbursement Claim Hub Card View */}
+              {isReimbursementCat ? (
+                <div className="mt-3.5 space-y-3">
+                  <div className="p-3 rounded-xl bg-slate-950/80 border border-cyan-500/20 text-xs space-y-2">
+                    <div className="text-[11px] text-cyan-200">
+                      Office / client kharche budget se minus nahi hote. Claim aane par yahan se settle karein:
+                    </div>
+                    <div className="grid grid-cols-3 gap-1.5 font-mono text-center">
+                      <div className="p-1.5 bg-slate-900/90 rounded-lg border border-slate-800">
+                        <div className="text-[9px] text-slate-400 font-sans">Kul Claim</div>
+                        <div className="font-bold text-white text-xs">₹{rimStats.totalClaimed.toLocaleString('en-IN')}</div>
+                      </div>
+                      <div className="p-1.5 bg-slate-900/90 rounded-lg border border-emerald-500/20">
+                        <div className="text-[9px] text-emerald-400 font-sans">Settled</div>
+                        <div className="font-bold text-emerald-300 text-xs">₹{rimStats.totalSettled.toLocaleString('en-IN')}</div>
+                      </div>
+                      <div className="p-1.5 bg-slate-900/90 rounded-lg border border-amber-500/20">
+                        <div className="text-[9px] text-amber-400 font-sans">Baki</div>
+                        <div className="font-bold text-amber-300 text-xs">₹{rimStats.totalRemaining.toLocaleString('en-IN')}</div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => onOpenReimbursementSummary?.()}
+                    className="w-full py-2 bg-cyan-600 hover:bg-cyan-500 text-white rounded-xl text-xs font-semibold transition-all cursor-pointer flex items-center justify-center gap-1.5 shadow-lg shadow-cyan-950"
+                  >
+                    <Briefcase className="w-3.5 h-3.5" />
+                    <span>Reimbursement Summary & Settle ({rimStats.totalCount} claims)</span>
+                  </button>
                 </div>
-
-                {/* Limit Section */}
-                {isBulkEditing ? (
-                  /* Bulk Editing Input */
-                  <div className="flex items-center space-x-1">
-                    <span className="text-cyan-400 text-xs">₹</span>
-                    <input
-                      type="text"
-                      inputMode="numeric"
-                      value={bulkInputValues[b.category] ?? String(b.limit)}
-                      placeholder="0"
-                      onChange={(e) => handleBulkInputChange(b.category, e.target.value)}
-                      className="w-24 px-2 py-1 bg-slate-950 border border-cyan-500/60 rounded-lg text-xs font-mono font-bold text-cyan-300 focus:outline-hidden focus:ring-1 focus:ring-cyan-400 text-right"
-                    />
-                  </div>
-                ) : isCardSingleEditing ? (
-                  /* Single Card Inline Editor */
-                  <div className="flex items-center space-x-1">
-                    <span className="text-cyan-400 text-xs font-bold">₹</span>
-                    <input
-                      ref={singleInputRef}
-                      type="text"
-                      inputMode="numeric"
-                      value={singleInputValue}
-                      placeholder="0"
-                      onChange={(e) => setSingleInputValue(e.target.value.replace(/[^0-9]/g, ''))}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') handleSaveSingleEdit(b.category);
-                        else if (e.key === 'Escape') handleCancelSingleEdit();
-                      }}
-                      className="w-24 px-2 py-1 bg-slate-950 border border-cyan-400 rounded-lg text-xs font-mono font-bold text-cyan-300 focus:outline-hidden ring-1 ring-cyan-400 text-right shadow-inner"
-                    />
-                  </div>
-                ) : (
-                  /* Normal View with Quick Pencil / Edit Trigger */
-                  <div className="flex items-center space-x-1.5">
-                    <div
-                      onClick={() => handleStartSingleEdit(b.category, b.limit)}
-                      className="group flex items-center space-x-1 cursor-pointer bg-slate-950/60 hover:bg-cyan-950/40 border border-slate-800 hover:border-cyan-500/40 px-2 py-0.5 rounded-lg transition-all"
-                      title="Is category ki monthly budget limit edit karein"
-                    >
-                      <span className="text-slate-400 text-[11px]">LIMIT:</span>
-                      <span className="text-cyan-400 font-bold">
-                        {limit > 0 ? `₹${limit.toLocaleString('en-IN')}` : '₹0'}
-                      </span>
-                      <Edit2 className="w-3 h-3 text-slate-500 group-hover:text-cyan-400 transition-colors ml-0.5" />
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              {/* Single Card Editing Action Panel & Quick Add Buttons */}
-              {isCardSingleEditing && (
-                <div className="mt-3 pt-2.5 border-t border-cyan-500/20 space-y-2">
-                  <div className="flex items-center justify-between gap-1">
-                    <div className="flex items-center space-x-1">
-                      <button
-                        type="button"
-                        onClick={() => handleSingleQuickAdd(500)}
-                        className="px-1.5 py-0.5 rounded bg-slate-950 border border-slate-800 hover:border-cyan-500/40 text-[10px] font-mono text-cyan-300"
-                      >
-                        +500
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleSingleQuickAdd(1000)}
-                        className="px-1.5 py-0.5 rounded bg-slate-950 border border-slate-800 hover:border-cyan-500/40 text-[10px] font-mono text-cyan-300"
-                      >
-                        +1k
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleSingleQuickAdd(5000)}
-                        className="px-1.5 py-0.5 rounded bg-slate-950 border border-slate-800 hover:border-cyan-500/40 text-[10px] font-mono text-cyan-300"
-                      >
-                        +5k
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleSingleQuickAdd(0)}
-                        className="px-1.5 py-0.5 rounded bg-slate-950 border border-slate-800 hover:border-rose-500/40 text-[10px] font-mono text-rose-300"
-                      >
-                        Clear
-                      </button>
+              ) : (
+                <>
+                  {/* Amount and Limit Details */}
+                  <div className="mt-4 flex items-baseline justify-between font-mono text-xs">
+                    <div className="text-slate-400">
+                      SPENT: <span className="text-white font-bold">₹{spent.toLocaleString('en-IN')}</span>
                     </div>
 
-                    <div className="flex items-center space-x-1">
-                      <button
-                        type="button"
-                        onClick={handleCancelSingleEdit}
-                        className="p-1 rounded-lg border border-slate-700 text-slate-400 hover:text-white hover:bg-slate-800 transition-all"
-                        title="Cancel"
-                      >
-                        <X className="w-3.5 h-3.5" />
-                      </button>
-                      <button
-                        type="button"
-                        disabled={isSavingSingle}
-                        onClick={() => handleSaveSingleEdit(b.category)}
-                        className="px-2.5 py-1 rounded-lg bg-cyan-500 hover:bg-cyan-400 text-slate-950 text-xs font-mono font-bold flex items-center space-x-1 shadow-md transition-all cursor-pointer"
-                        title="Save limit"
-                      >
-                        <Check className="w-3.5 h-3.5 stroke-[3]" />
-                        <span>{isSavingSingle ? '...' : 'SAVE'}</span>
-                      </button>
+                    {/* Limit Section */}
+                    {isBulkEditing ? (
+                      /* Bulk Editing Input */
+                      <div className="flex items-center space-x-1">
+                        <span className="text-cyan-400 text-xs">₹</span>
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          value={bulkInputValues[b.category] ?? String(b.limit)}
+                          placeholder="0"
+                          onChange={(e) => handleBulkInputChange(b.category, e.target.value)}
+                          className="w-24 px-2 py-1 bg-slate-950 border border-cyan-500/60 rounded-lg text-xs font-mono font-bold text-cyan-300 focus:outline-hidden focus:ring-1 focus:ring-cyan-400 text-right"
+                        />
+                      </div>
+                    ) : isCardSingleEditing ? (
+                      /* Single Card Inline Editor */
+                      <div className="flex items-center space-x-1">
+                        <span className="text-cyan-400 text-xs font-bold">₹</span>
+                        <input
+                          ref={singleInputRef}
+                          type="text"
+                          inputMode="numeric"
+                          value={singleInputValue}
+                          placeholder="0"
+                          onChange={(e) => setSingleInputValue(e.target.value.replace(/[^0-9]/g, ''))}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') handleSaveSingleEdit(b.category);
+                            else if (e.key === 'Escape') handleCancelSingleEdit();
+                          }}
+                          className="w-24 px-2 py-1 bg-slate-950 border border-cyan-400 rounded-lg text-xs font-mono font-bold text-cyan-300 focus:outline-hidden ring-1 ring-cyan-400 text-right shadow-inner"
+                        />
+                      </div>
+                    ) : (
+                      /* Normal View with Quick Pencil / Edit Trigger */
+                      <div className="flex items-center space-x-1.5">
+                        <div
+                          onClick={() => handleStartSingleEdit(b.category, b.limit)}
+                          className="group flex items-center space-x-1 cursor-pointer bg-slate-950/60 hover:bg-cyan-950/40 border border-slate-800 hover:border-cyan-500/40 px-2 py-0.5 rounded-lg transition-all"
+                          title="Is category ki monthly budget limit edit karein"
+                        >
+                          <span className="text-slate-400 text-[11px]">LIMIT:</span>
+                          <span className="text-cyan-400 font-bold">
+                            {limit > 0 ? `₹${limit.toLocaleString('en-IN')}` : '₹0'}
+                          </span>
+                          <Edit2 className="w-3 h-3 text-slate-500 group-hover:text-cyan-400 transition-colors ml-0.5" />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Single Card Editing Action Panel & Quick Add Buttons */}
+                  {isCardSingleEditing && (
+                    <div className="mt-3 pt-2.5 border-t border-cyan-500/20 space-y-2">
+                      <div className="flex items-center justify-between gap-1">
+                        <div className="flex items-center space-x-1">
+                          <button
+                            type="button"
+                            onClick={() => handleSingleQuickAdd(500)}
+                            className="px-1.5 py-0.5 rounded bg-slate-950 border border-slate-800 hover:border-cyan-500/40 text-[10px] font-mono text-cyan-300"
+                          >
+                            +500
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleSingleQuickAdd(1000)}
+                            className="px-1.5 py-0.5 rounded bg-slate-950 border border-slate-800 hover:border-cyan-500/40 text-[10px] font-mono text-cyan-300"
+                          >
+                            +1k
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleSingleQuickAdd(5000)}
+                            className="px-1.5 py-0.5 rounded bg-slate-950 border border-slate-800 hover:border-cyan-500/40 text-[10px] font-mono text-cyan-300"
+                          >
+                            +5k
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleSingleQuickAdd(0)}
+                            className="px-1.5 py-0.5 rounded bg-slate-950 border border-slate-800 hover:border-rose-500/40 text-[10px] font-mono text-rose-300"
+                          >
+                            Clear
+                          </button>
+                        </div>
+
+                        <div className="flex items-center space-x-1">
+                          <button
+                            type="button"
+                            onClick={handleCancelSingleEdit}
+                            className="p-1 rounded-lg border border-slate-700 text-slate-400 hover:text-white hover:bg-slate-800 transition-all"
+                            title="Cancel"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            disabled={isSavingSingle}
+                            onClick={() => handleSaveSingleEdit(b.category)}
+                            className="px-2.5 py-1 rounded-lg bg-cyan-500 hover:bg-cyan-400 text-slate-950 text-xs font-mono font-bold flex items-center space-x-1 shadow-md transition-all cursor-pointer"
+                            title="Save limit"
+                          >
+                            <Check className="w-3.5 h-3.5 stroke-[3]" />
+                            <span>{isSavingSingle ? '...' : 'SAVE'}</span>
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Progress Bar */}
+                  <div className="mt-3">
+                    <div className="w-full bg-slate-950 rounded-full h-2 overflow-hidden border border-slate-800">
+                      <div
+                        className={`h-full rounded-full transition-all duration-500 ${
+                          isOver
+                            ? 'bg-rose-500 shadow-sm shadow-rose-500'
+                            : percent > 80
+                            ? 'bg-amber-400 shadow-sm shadow-amber-400'
+                            : limit === 0
+                            ? 'bg-slate-700'
+                            : 'bg-cyan-400 shadow-sm shadow-cyan-400'
+                        }`}
+                        style={{ width: `${limit > 0 ? Math.min(100, percent) : 0}%` }}
+                      />
                     </div>
                   </div>
-                </div>
+
+                  {/* Sub status text */}
+                  <div className="mt-2 flex items-center justify-between text-[10px] font-mono text-slate-400">
+                    <span>{limit > 0 ? `${percent}% USED` : 'UNLIMITED'}</span>
+                    <span>
+                      {limit > 0
+                        ? limit >= spent
+                          ? `₹${(limit - spent).toLocaleString('en-IN')} REMAINING`
+                          : `₹${(spent - limit).toLocaleString('en-IN')} OVER BUDGET`
+                        : 'Kharche ki limit set karein'}
+                    </span>
+                  </div>
+                </>
               )}
-
-              {/* Progress Bar */}
-              <div className="mt-3">
-                <div className="w-full bg-slate-950 rounded-full h-2 overflow-hidden border border-slate-800">
-                  <div
-                    className={`h-full rounded-full transition-all duration-500 ${
-                      isOver
-                        ? 'bg-rose-500 shadow-sm shadow-rose-500'
-                        : percent > 80
-                        ? 'bg-amber-400 shadow-sm shadow-amber-400'
-                        : limit === 0
-                        ? 'bg-slate-700'
-                        : 'bg-cyan-400 shadow-sm shadow-cyan-400'
-                    }`}
-                    style={{ width: `${limit > 0 ? Math.min(100, percent) : 0}%` }}
-                  />
-                </div>
-              </div>
-
-              {/* Sub status text */}
-              <div className="mt-2 flex items-center justify-between text-[10px] font-mono text-slate-400">
-                <span>{limit > 0 ? `${percent}% USED` : 'UNLIMITED'}</span>
-                <span>
-                  {limit > 0
-                    ? limit >= spent
-                      ? `₹${(limit - spent).toLocaleString('en-IN')} REMAINING`
-                      : `₹${(spent - limit).toLocaleString('en-IN')} OVER BUDGET`
-                    : 'Kharche ki limit set karein'}
-                </span>
-              </div>
             </div>
           );
         })}

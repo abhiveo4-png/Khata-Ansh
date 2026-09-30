@@ -36,6 +36,7 @@ interface CategoryManagerProps {
   onCreateCategory?: (cat: Partial<CategoryDef>) => Promise<void>;
   onUpdateCategory?: (id: string, cat: Partial<CategoryDef>) => Promise<void>;
   onDeleteCategory?: (id: string) => Promise<void>;
+  onOpenReimbursementSummary?: () => void;
 }
 
 const AVAILABLE_COLORS = [
@@ -80,6 +81,7 @@ export const CategoryManager: React.FC<CategoryManagerProps> = ({
   onCreateCategory,
   onUpdateCategory,
   onDeleteCategory,
+  onOpenReimbursementSummary,
 }) => {
   const [filterType, setFilterType] = useState<'all' | 'expense' | 'income'>('all');
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -311,6 +313,18 @@ export const CategoryManager: React.FC<CategoryManagerProps> = ({
                     )}
                   </div>
                 </div>
+
+                {/* Reimbursement Claims Hub quick button */}
+                {c.name.toLowerCase() === 'reimbursement' && onOpenReimbursementSummary && (
+                  <button
+                    type="button"
+                    onClick={() => onOpenReimbursementSummary()}
+                    className="mt-3 w-full py-1.5 px-2 bg-cyan-600/20 hover:bg-cyan-600/30 text-cyan-300 border border-cyan-500/40 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-sm"
+                  >
+                    <Briefcase className="w-3.5 h-3.5 text-cyan-400" />
+                    <span>Claims Summary & Settle Hub</span>
+                  </button>
+                )}
               </div>
 
               {/* Actions Footer */}

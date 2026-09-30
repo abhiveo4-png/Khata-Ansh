@@ -20,6 +20,7 @@ interface OverviewCardsProps {
   userRole?: UserRole;
   activeFamilyMemberName?: string;
   isPrivacyMode?: boolean;
+  onOpenReimbursementSummary?: () => void;
 }
 
 export const OverviewCards: React.FC<OverviewCardsProps> = ({ 
@@ -27,7 +28,8 @@ export const OverviewCards: React.FC<OverviewCardsProps> = ({
   transactions = [],
   userRole = 'owner',
   activeFamilyMemberName,
-  isPrivacyMode = false 
+  isPrivacyMode = false,
+  onOpenReimbursementSummary,
 }) => {
   const isFamily = userRole === 'family';
 
@@ -79,7 +81,14 @@ export const OverviewCards: React.FC<OverviewCardsProps> = ({
             {isFamily ? 'Aapka Kharcha' : 'Personal Kharcha'} (₹{displayAmount(personalExpense, isFamily)})
           </span>
           <span>+</span>
-          <span className="text-cyan-400">Reimbursement (₹{displayAmount(pendingReimbursements)})</span>
+          <button
+            type="button"
+            onClick={() => onOpenReimbursementSummary?.()}
+            className="text-cyan-400 hover:text-cyan-300 hover:underline cursor-pointer transition-all"
+            title="Reimbursement summary and settlement hub kholein"
+          >
+            Reimbursement (₹{displayAmount(pendingReimbursements)})
+          </button>
           <span>=</span>
           <span className="font-extrabold text-white bg-indigo-500/20 px-2 py-0.5 rounded border border-indigo-500/30">
             Net Savings: ₹{displayAmount(netSavings)}
@@ -91,9 +100,14 @@ export const OverviewCards: React.FC<OverviewCardsProps> = ({
             Owner & Global balances masked
           </span>
         ) : pendingReimbursements > 0 && (
-          <span className="text-[11px] text-cyan-300 bg-cyan-950/60 px-2 py-0.5 rounded-md border border-cyan-500/30 font-sans">
-            💼 ₹{displayAmount(pendingReimbursements)} office rim pending
-          </span>
+          <button
+            type="button"
+            onClick={() => onOpenReimbursementSummary?.()}
+            className="text-[11px] text-cyan-300 bg-cyan-950/80 hover:bg-cyan-900/80 px-2.5 py-0.5 rounded-md border border-cyan-500/40 font-sans cursor-pointer transition-all flex items-center gap-1 shadow-xs"
+            title="Click karein settlement hub kholne ke liye"
+          >
+            <span>💼 ₹{displayAmount(pendingReimbursements)} office rim pending (Settle)</span>
+          </button>
         )}
       </div>
 
