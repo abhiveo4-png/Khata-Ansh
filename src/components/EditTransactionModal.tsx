@@ -2,15 +2,15 @@ import React, { useState, useEffect } from 'react';
 import { 
   X, 
   Calendar, 
-  Tag, 
   CreditCard, 
-  FileText, 
-  Banknote, 
+  Briefcase, 
+  HeartHandshake,
   Check, 
   ArrowUpRight, 
   ArrowDownRight 
 } from 'lucide-react';
-import { Transaction, CategoryDef, PaymentMethod, TransactionType } from '../types';
+import { Transaction, CategoryDef, PaymentMethod, TransactionType, AccountId } from '../types';
+import { ALL_ACCOUNTS } from '../utils/accounts';
 
 interface EditTransactionModalProps {
   isOpen: boolean;
@@ -33,6 +33,11 @@ export const EditTransactionModal: React.FC<EditTransactionModalProps> = ({
   const [category, setCategory] = useState('');
   const [date, setDate] = useState('');
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('UPI');
+  const [account, setAccount] = useState<AccountId>('ICICI CC 0000');
+  const [isReimbursement, setIsReimbursement] = useState(false);
+  const [reimbursementStatus, setReimbursementStatus] = useState<'pending' | 'settled'>('pending');
+  const [isSavingsTransfer, setIsSavingsTransfer] = useState(false);
+  const [isInvestment, setIsInvestment] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -44,6 +49,11 @@ export const EditTransactionModal: React.FC<EditTransactionModalProps> = ({
       setCategory(transaction.category || 'Uncategorized');
       setDate(transaction.date || new Date().toISOString().split('T')[0]);
       setPaymentMethod(transaction.paymentMethod || 'UPI');
+      setAccount((transaction.account as AccountId) || 'ICICI CC 0000');
+      setIsReimbursement(Boolean(transaction.isReimbursement));
+      setReimbursementStatus(transaction.reimbursementStatus || 'pending');
+      setIsSavingsTransfer(Boolean(transaction.isSavingsTransfer));
+      setIsInvestment(Boolean(transaction.isInvestment));
       setError(null);
     }
   }, [transaction]);
@@ -78,6 +88,11 @@ export const EditTransactionModal: React.FC<EditTransactionModalProps> = ({
         category: category || 'Uncategorized',
         date,
         paymentMethod,
+        account,
+        isReimbursement,
+        reimbursementStatus: isReimbursement ? reimbursementStatus : undefined,
+        isSavingsTransfer,
+        isInvestment,
       };
 
       await onSave(updated);
@@ -93,176 +108,241 @@ export const EditTransactionModal: React.FC<EditTransactionModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
-      <div className="bg-[#0f172a] border border-slate-700/80 rounded-2xl w-full max-w-lg shadow-2xl overflow-hidden">
+      <div className="bg-[#0f172a] border border-slate-700/80 rounded-2xl w-full max-w-lg shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-150">
         
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-slate-800 bg-slate-900/60">
           <div className="flex items-center space-x-3">
-            <div className="w-9 h-9 rounded-xl bg-indigo-600/20 border border-indigo-500/30 flex items-center justify-center text-indigo-400">
-              <Calendar className="w-5 h-5" />
+            <div className={`w-8 h-8 rounded-xl flex items-center justify-center ${
+              type === 'income' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-rose-500/20 text-rose-400'
+            }`}>
+              {type === 'income' ? <ArrowUpRight className="w-4 h-4" /> : <ArrowDownRight className="w-4 h-4" />}
             </div>
             <div>
-              <h3 className="text-sm font-bold text-white">Transaction & Tareeq Edit Karein</h3>
-              <p className="text-[11px] text-slate-400">Tareeq, rashi, category ya payment method update karein</p>
+              <h3 className="text-sm font-bold text-white">Transaction Badlein / Edit Karein</h3>
+              <p className="text-[11px] text-slate-400">Card, Account ya Reimbursement status change karein</p>
             </div>
           </div>
           <button
             onClick={onClose}
-            className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded-xl transition-colors cursor-pointer"
+            className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
           >
-            <X className="w-5 h-5" />
+            <X className="w-4 h-4" />
           </button>
         </div>
 
-        {/* Form */}
-        <form onSubmit={handleSubmit} className="p-6 space-y-4">
-          
-          {error && (
-            <div className="p-3 bg-rose-950/40 border border-rose-500/30 rounded-xl text-rose-300 text-xs">
-              {error}
-            </div>
-          )}
+        {error && (
+          <div className="mx-6 mt-4 p-3 rounded-xl bg-rose-500/10 border border-rose-500/20 text-xs text-rose-300">
+            {error}
+          </div>
+        )}
 
-          {/* Type Selector (Income vs Expense) */}
-          <div className="grid grid-cols-2 gap-2">
+        <form onSubmit={handleSubmit} className="p-6 space-y-4 text-xs font-mono">
+          {/* Type Toggle */}
+          <div className="grid grid-cols-2 p-1 bg-slate-950 border border-slate-800 rounded-xl">
             <button
               type="button"
               onClick={() => setType('expense')}
-              className={`flex items-center justify-center space-x-2 py-2 rounded-xl text-xs font-semibold border transition-all cursor-pointer ${
+              className={`py-2 rounded-lg font-bold transition-all cursor-pointer ${
                 type === 'expense'
-                  ? 'bg-rose-950/60 border-rose-500/50 text-rose-300 shadow-md shadow-rose-950/30'
-                  : 'bg-slate-900 border-slate-800 text-slate-400 hover:bg-slate-800/60'
+                  ? 'bg-rose-950 text-rose-300 border border-rose-500/40 shadow-xs'
+                  : 'text-slate-400 hover:text-white'
               }`}
             >
-              <ArrowDownRight className="w-4 h-4 text-rose-400" />
-              <span>🔴 Kharcha (Expense)</span>
+              🔴 KHARCHA (EXPENSE)
             </button>
             <button
               type="button"
               onClick={() => setType('income')}
-              className={`flex items-center justify-center space-x-2 py-2 rounded-xl text-xs font-semibold border transition-all cursor-pointer ${
+              className={`py-2 rounded-lg font-bold transition-all cursor-pointer ${
                 type === 'income'
-                  ? 'bg-emerald-950/60 border-emerald-500/50 text-emerald-300 shadow-md shadow-emerald-950/30'
-                  : 'bg-slate-900 border-slate-800 text-slate-400 hover:bg-slate-800/60'
+                  ? 'bg-emerald-950 text-emerald-300 border border-emerald-500/40 shadow-xs'
+                  : 'text-slate-400 hover:text-white'
               }`}
             >
-              <ArrowUpRight className="w-4 h-4 text-emerald-400" />
-              <span>🟢 Kamai (Income)</span>
+              🟢 KAMAI (INCOME)
             </button>
           </div>
 
-          {/* Description & Amount */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs font-medium text-slate-300 mb-1">
-                Vivaran (Description)
-              </label>
-              <input
-                type="text"
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                placeholder="e.g. Dahi, Petrol, Salary"
-                className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:border-indigo-500"
-                required
-              />
-            </div>
-
-            <div>
-              <label className="block text-xs font-medium text-slate-300 mb-1">
-                Rashi (Amount in ₹)
-              </label>
-              <input
-                type="number"
-                min="0.01"
-                step="any"
-                value={amount}
-                onChange={(e) => setAmount(e.target.value === '' ? '' : Number(e.target.value))}
-                placeholder="₹ 0.00"
-                className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-xl text-xs text-white font-semibold focus:outline-none focus:border-indigo-500"
-                required
-              />
-            </div>
+          {/* Amount */}
+          <div>
+            <label className="block text-slate-400 mb-1">RASHMI (₹)</label>
+            <input
+              type="number"
+              step="any"
+              required
+              value={amount}
+              onChange={(e) => setAmount(e.target.value === '' ? '' : Number(e.target.value))}
+              className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-white font-bold font-mono focus:outline-hidden focus:border-indigo-500"
+            />
           </div>
 
-          {/* Date Picker & Category */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs font-medium text-slate-300 mb-1 flex items-center gap-1">
-                <Calendar className="w-3.5 h-3.5 text-indigo-400" />
-                <span>Tareeq (Date)</span>
+          {/* Description */}
+          <div>
+            <label className="block text-slate-400 mb-1">VIVARAN / DESCRIPTION</label>
+            <input
+              type="text"
+              required
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-white focus:outline-hidden focus:border-indigo-500"
+            />
+          </div>
+
+          {/* Account / Card Selector */}
+          <div>
+            <label className="block text-slate-400 mb-1 flex items-center gap-1">
+              <CreditCard className="w-3.5 h-3.5 text-indigo-400" />
+              ASSIGN TO CARD / BANK ACCOUNT
+            </label>
+            <select
+              value={account}
+              onChange={(e) => setAccount(e.target.value as AccountId)}
+              className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-indigo-300 font-semibold focus:outline-hidden focus:border-indigo-500 cursor-pointer"
+            >
+              {ALL_ACCOUNTS.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.name} ({a.badge})
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Category */}
+          <div>
+            <label className="block text-slate-400 mb-1">CATEGORY</label>
+            <select
+              value={category}
+              onChange={(e) => setCategory(e.target.value)}
+              className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-white focus:outline-hidden focus:border-indigo-500 cursor-pointer"
+            >
+              {filteredCategories.map((c) => (
+                <option key={c.id} value={c.name}>
+                  {c.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Reimbursement & Savings Settings */}
+          {type === 'expense' && (
+            <div className="p-3 bg-slate-950/80 border border-slate-800 rounded-xl space-y-2.5">
+              <label className="flex items-center justify-between cursor-pointer">
+                <span className="font-bold text-cyan-300 flex items-center gap-1.5">
+                  <Briefcase className="w-3.5 h-3.5" />
+                  Office Reimbursement (Budget se minus nahi hoga)
+                </span>
+                <input
+                  type="checkbox"
+                  checked={isReimbursement}
+                  onChange={(e) => setIsReimbursement(e.target.checked)}
+                  className="w-4 h-4 rounded text-cyan-500 bg-slate-900 border-slate-700 cursor-pointer"
+                />
               </label>
+
+              {isReimbursement && (
+                <div className="pt-2 border-t border-slate-800 flex items-center justify-between">
+                  <span className="text-slate-400 text-[11px]">Reimbursement Claim Status:</span>
+                  <div className="flex items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={() => setReimbursementStatus('pending')}
+                      className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                        reimbursementStatus === 'pending'
+                          ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
+                          : 'text-slate-500'
+                      }`}
+                    >
+                      Pending Claim
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setReimbursementStatus('settled')}
+                      className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                        reimbursementStatus === 'settled'
+                          ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                          : 'text-slate-500'
+                      }`}
+                    >
+                      Settled / Paid
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              <label className="flex items-center justify-between cursor-pointer pt-2 border-t border-slate-800">
+                <span className="font-bold text-rose-300 flex items-center gap-1.5">
+                  <HeartHandshake className="w-3.5 h-3.5" />
+                  Savings Transfer to Wife
+                </span>
+                <input
+                  type="checkbox"
+                  checked={isSavingsTransfer}
+                  onChange={(e) => setIsSavingsTransfer(e.target.checked)}
+                  className="w-4 h-4 rounded text-rose-500 bg-slate-900 border-slate-700 cursor-pointer"
+                />
+              </label>
+
+              <label className="flex items-center justify-between cursor-pointer pt-2 border-t border-slate-800">
+                <span className="font-bold text-emerald-300 flex items-center gap-1.5">
+                  📈 RD, FD ya Investment Expense
+                </span>
+                <input
+                  type="checkbox"
+                  checked={isInvestment}
+                  onChange={(e) => setIsInvestment(e.target.checked)}
+                  className="w-4 h-4 rounded text-emerald-500 bg-slate-900 border-slate-700 cursor-pointer"
+                />
+              </label>
+            </div>
+          )}
+
+          {/* Date & Payment Method */}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-slate-400 mb-1">TAREEQ (DATE)</label>
               <input
                 type="date"
+                required
                 value={date}
                 onChange={(e) => setDate(e.target.value)}
-                className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:border-indigo-500"
-                required
+                className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-white focus:outline-hidden focus:border-indigo-500"
               />
             </div>
-
             <div>
-              <label className="block text-xs font-medium text-slate-300 mb-1 flex items-center gap-1">
-                <Tag className="w-3.5 h-3.5 text-indigo-400" />
-                <span>Category</span>
-              </label>
+              <label className="block text-slate-400 mb-1">PAYMENT METHOD</label>
               <select
-                value={category}
-                onChange={(e) => setCategory(e.target.value)}
-                className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:border-indigo-500"
+                value={paymentMethod}
+                onChange={(e) => setPaymentMethod(e.target.value as PaymentMethod)}
+                className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-white focus:outline-hidden focus:border-indigo-500 cursor-pointer"
               >
-                <option value="Uncategorized">Uncategorized</option>
-                {filteredCategories.map((c) => (
-                  <option key={c.id} value={c.name}>
-                    {c.name}
-                  </option>
-                ))}
+                <option value="UPI">UPI</option>
+                <option value="Card">Card</option>
+                <option value="Net Banking">Net Banking</option>
+                <option value="Bank Transfer">Bank Transfer</option>
+                <option value="Cash">Cash</option>
+                <option value="Other">Other</option>
               </select>
             </div>
           </div>
 
-          {/* Payment Method */}
-          <div>
-            <label className="block text-xs font-medium text-slate-300 mb-1.5 flex items-center gap-1">
-              <CreditCard className="w-3.5 h-3.5 text-indigo-400" />
-              <span>Payment Method</span>
-            </label>
-            <div className="grid grid-cols-3 sm:grid-cols-5 gap-1.5">
-              {(['UPI', 'Cash', 'Card', 'Bank Transfer', 'Net Banking'] as PaymentMethod[]).map((pm) => (
-                <button
-                  key={pm}
-                  type="button"
-                  onClick={() => setPaymentMethod(pm)}
-                  className={`px-2 py-1.5 rounded-lg text-[11px] font-medium border text-center transition-all cursor-pointer truncate ${
-                    paymentMethod === pm
-                      ? 'bg-indigo-600 text-white border-indigo-500 font-semibold shadow-sm'
-                      : 'bg-slate-900 text-slate-400 border-slate-800 hover:bg-slate-800/80'
-                  }`}
-                >
-                  {pm}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Action Buttons */}
-          <div className="flex items-center justify-end space-x-3 pt-4 border-t border-slate-800 mt-5">
+          {/* Buttons */}
+          <div className="pt-3 border-t border-slate-800 flex items-center justify-end gap-2">
             <button
               type="button"
               onClick={onClose}
-              className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-semibold transition-colors cursor-pointer"
+              className="px-4 py-2 rounded-xl border border-slate-700 text-slate-400 hover:text-white cursor-pointer"
             >
               Cancel
             </button>
             <button
               type="submit"
               disabled={isSaving}
-              className="inline-flex items-center space-x-2 px-5 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition-all shadow-lg shadow-indigo-600/20 cursor-pointer"
+              className="px-5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-bold rounded-xl shadow-md transition-colors cursor-pointer"
             >
-              <Check className="w-4 h-4" />
-              <span>{isSaving ? 'Updating...' : 'Save Changes'}</span>
+              {isSaving ? 'Save ho raha hai...' : 'Update Karein'}
             </button>
           </div>
-
         </form>
       </div>
     </div>

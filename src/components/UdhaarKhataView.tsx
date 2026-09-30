@@ -17,7 +17,8 @@ import {
   Pencil,
   Layers
 } from 'lucide-react';
-import { UdhaarRecord } from '../types';
+import { UdhaarRecord, AccountId } from '../types';
+import { ALL_ACCOUNTS, ACCOUNTS_CONFIG } from '../utils/accounts';
 
 interface UdhaarKhataViewProps {
   records?: UdhaarRecord[];
@@ -50,12 +51,14 @@ export const UdhaarKhataView: React.FC<UdhaarKhataViewProps> = ({
   const [editType, setEditType] = useState<'lent' | 'borrowed'>('lent');
   const [editDate, setEditDate] = useState('');
   const [editDescription, setEditDescription] = useState('');
+  const [editAccount, setEditAccount] = useState<AccountId>('Cash');
   const [isSavingRecord, setIsSavingRecord] = useState(false);
 
   // Form State
   const [personName, setPersonName] = useState('');
   const [amount, setAmount] = useState('');
   const [type, setType] = useState<'lent' | 'borrowed'>('lent');
+  const [account, setAccount] = useState<AccountId>('Cash');
   const [description, setDescription] = useState('');
   const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -140,6 +143,7 @@ export const UdhaarKhataView: React.FC<UdhaarKhataViewProps> = ({
     setEditType(item.type || 'lent');
     setEditDate(item.date || new Date().toISOString().split('T')[0]);
     setEditDescription(item.description || '');
+    setEditAccount((item.account as AccountId) || 'Cash');
   };
 
   const handleSaveRecord = async (e: React.FormEvent) => {
@@ -156,6 +160,7 @@ export const UdhaarKhataView: React.FC<UdhaarKhataViewProps> = ({
         type: editType,
         date: editDate || new Date().toISOString().split('T')[0],
         description: editDescription.trim() || undefined,
+        account: editAccount,
       });
       setEditingRecord(null);
     } catch (err) {
@@ -185,6 +190,7 @@ export const UdhaarKhataView: React.FC<UdhaarKhataViewProps> = ({
         personName: personName.trim(),
         amount: parseFloat(amount),
         type,
+        account,
         description: description.trim() || undefined,
         date: date || new Date().toISOString().split('T')[0],
         status: 'pending',
@@ -192,6 +198,7 @@ export const UdhaarKhataView: React.FC<UdhaarKhataViewProps> = ({
       setPersonName('');
       setAmount('');
       setDescription('');
+      setAccount('Cash');
       setIsAddModalOpen(false);
     } catch (err) {
       console.error('Error adding udhaar:', err);
@@ -569,10 +576,15 @@ export const UdhaarKhataView: React.FC<UdhaarKhataViewProps> = ({
                                   </span>
                                 )}
                               </div>
-                              <p className="text-[11px] text-slate-400 flex items-center gap-1 mt-1">
+                              <p className="text-[11px] text-slate-400 flex flex-wrap items-center gap-1.5 mt-1">
                                 <Calendar className="w-3 h-3 text-indigo-400" />
                                 <span className="font-medium text-slate-300">{item.date}</span>
                                 {item.time && <span>• {item.time}</span>}
+                                {item.account && (
+                                  <span className="text-[10px] px-1.5 py-0.5 rounded font-mono font-medium bg-slate-800/90 text-indigo-300 border border-indigo-500/20">
+                                    💳 {item.account}
+                                  </span>
+                                )}
                                 {item.description && <span className="text-slate-400 italic">({item.description})</span>}
                               </p>
                             </div>
@@ -673,10 +685,15 @@ export const UdhaarKhataView: React.FC<UdhaarKhataViewProps> = ({
                             </span>
                           )}
                         </h4>
-                        <p className="text-[11px] text-slate-400 flex items-center gap-1 mt-0.5">
+                        <p className="text-[11px] text-slate-400 flex flex-wrap items-center gap-1.5 mt-0.5">
                           <Clock className="w-3 h-3 text-slate-500" />
                           <span>{item.date}</span>
                           {item.time && <span>• {item.time}</span>}
+                          {item.account && (
+                            <span className="text-[10px] px-1.5 py-0.5 rounded font-mono font-medium bg-slate-800/90 text-indigo-300 border border-indigo-500/20">
+                              💳 {item.account}
+                            </span>
+                          )}
                         </p>
                       </div>
                     </div>
@@ -723,7 +740,7 @@ export const UdhaarKhataView: React.FC<UdhaarKhataViewProps> = ({
                       <span className="text-[11px] font-medium hidden sm:inline">Edit</span>
                     </button>
 
-                    {!itemIsSettled && isLent && (
+                    {!isSettled && isLent && (
                       <button
                         onClick={() => handleShareWhatsAppSingle(item)}
                         className="p-1.5 rounded-lg bg-emerald-950/60 hover:bg-emerald-900/80 text-emerald-400 border border-emerald-500/30 flex items-center space-x-1 cursor-pointer transition-colors"
@@ -733,7 +750,7 @@ export const UdhaarKhataView: React.FC<UdhaarKhataViewProps> = ({
                         <span className="text-[11px] hidden sm:inline">Remind</span>
                       </button>
                     )}
-                    {!itemIsSettled && onSettleRecord && (
+                    {!isSettled && onSettleRecord && (
                       <button
                         onClick={() => onSettleRecord(item.id)}
                         className="px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-medium flex items-center space-x-1 cursor-pointer transition-all active:scale-95 shadow-sm"
@@ -889,6 +906,24 @@ export const UdhaarKhataView: React.FC<UdhaarKhataViewProps> = ({
                 />
               </div>
 
+              {/* Account / Card / Cash Selector */}
+              <div>
+                <label className="block text-xs font-medium text-slate-300 mb-1">
+                  Kahan Se Diya / Liya (Account / Card / Cash)
+                </label>
+                <select
+                  value={editAccount}
+                  onChange={(e) => setEditAccount(e.target.value as AccountId)}
+                  className="w-full px-3 py-2 glass-input rounded-xl text-xs text-white focus:outline-none focus:border-indigo-400 bg-slate-900 cursor-pointer"
+                >
+                  {ALL_ACCOUNTS.map((acc) => (
+                    <option key={acc.id} value={acc.id} className="bg-slate-900 text-white">
+                      {acc.badge}: {acc.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
               <div className="flex items-center justify-end space-x-2 pt-2">
                 <button
                   type="button"
@@ -1010,6 +1045,24 @@ export const UdhaarKhataView: React.FC<UdhaarKhataViewProps> = ({
                   placeholder="e.g. Lunch bill split, petrol udhaar, emergency"
                   className="w-full px-3 py-2 glass-input rounded-xl text-xs text-white focus:outline-none focus:border-indigo-400"
                 />
+              </div>
+
+              {/* Account / Card / Cash Selector */}
+              <div>
+                <label className="block text-xs font-medium text-slate-300 mb-1">
+                  Kahan Se Diya / Liya (Account / Card / Cash)
+                </label>
+                <select
+                  value={account}
+                  onChange={(e) => setAccount(e.target.value as AccountId)}
+                  className="w-full px-3 py-2 glass-input rounded-xl text-xs text-white focus:outline-none focus:border-indigo-400 bg-slate-900 cursor-pointer"
+                >
+                  {ALL_ACCOUNTS.map((acc) => (
+                    <option key={acc.id} value={acc.id} className="bg-slate-900 text-white">
+                      {acc.badge}: {acc.name}
+                    </option>
+                  ))}
+                </select>
               </div>
 
               {/* Modal Buttons */}

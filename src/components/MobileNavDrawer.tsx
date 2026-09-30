@@ -17,17 +17,21 @@ import {
   ChevronRight,
   Send,
   HandCoins,
-  Fuel,
+  CreditCard,
+  Building2,
+  HeartHandshake,
   Eye,
   EyeOff
 } from 'lucide-react';
 import { UserProfile } from '../types';
 
+export type AppNavTab = 'transactions' | 'accounts' | 'wealth' | 'gullak' | 'categories' | 'analytics' | 'budgets';
+
 interface MobileNavDrawerProps {
   isOpen: boolean;
   onClose: () => void;
-  activeTab: 'transactions' | 'gullak' | 'investments' | 'categories' | 'analytics' | 'budgets' | 'udhaar' | 'fuel';
-  onSelectTab: (tab: 'transactions' | 'gullak' | 'investments' | 'categories' | 'analytics' | 'budgets' | 'udhaar' | 'fuel') => void;
+  activeTab: AppNavTab;
+  onSelectTab: (tab: AppNavTab) => void;
   transactionCount: number;
   categoryCount: number;
   surplusAmount: number;
@@ -103,21 +107,21 @@ export const MobileNavDrawer: React.FC<MobileNavDrawerProps> = ({
       iconColor: 'text-indigo-400',
     },
     {
-      id: 'udhaar' as const,
-      label: 'Udhaar / Khata Book',
-      sublabel: 'Lena Hai / Dena Hai',
-      icon: HandCoins,
-      badge: `${udhaarCount} khata`,
-      badgeColor: 'bg-emerald-950/80 text-emerald-300 border-emerald-500/30',
-      activeColor: 'bg-emerald-600/20 text-emerald-300 border-emerald-500/40',
-      iconColor: 'text-emerald-400',
+      id: 'accounts' as const,
+      label: 'Accounts & Cards Ledger',
+      sublabel: 'RuPay CC, CCs & Banks',
+      icon: CreditCard,
+      badge: '8 Accounts',
+      badgeColor: 'bg-sky-950/80 text-sky-300 border-sky-500/30',
+      activeColor: 'bg-sky-600/20 text-sky-300 border-sky-500/40',
+      iconColor: 'text-sky-400',
     },
     {
-      id: 'fuel' as const,
-      label: 'Fuel & Mileage Tracker',
-      sublabel: 'Odometer & Running Cost',
-      icon: Fuel,
-      badge: `${fuelLogCount} logs`,
+      id: 'wealth' as const,
+      label: 'Wealth & Khata',
+      sublabel: 'Investments, Wife A/c & Udhaar',
+      icon: Coins,
+      badge: 'Assets Hub',
       badgeColor: 'bg-cyan-950/80 text-cyan-300 border-cyan-500/30',
       activeColor: 'bg-cyan-600/20 text-cyan-300 border-cyan-500/40',
       iconColor: 'text-cyan-400',
@@ -131,16 +135,6 @@ export const MobileNavDrawer: React.FC<MobileNavDrawerProps> = ({
       badgeColor: 'bg-amber-950/80 text-amber-300 border-amber-500/30',
       activeColor: 'bg-amber-600/20 text-amber-300 border-amber-500/40',
       iconColor: 'text-amber-400',
-    },
-    {
-      id: 'investments' as const,
-      label: 'Investable Pool',
-      sublabel: 'Surplus & Allocation',
-      icon: Coins,
-      badge: isPrivacyMode ? '₹••••' : `₹${Math.max(0, surplusAmount).toLocaleString('en-IN')}`,
-      badgeColor: 'bg-cyan-950/80 text-cyan-300 border-cyan-500/30',
-      activeColor: 'bg-cyan-600/20 text-cyan-300 border-cyan-500/40',
-      iconColor: 'text-cyan-400',
     },
     {
       id: 'categories' as const,

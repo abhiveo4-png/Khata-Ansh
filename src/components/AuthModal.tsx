@@ -31,7 +31,7 @@ import {
   ShieldAlert,
   Clock
 } from 'lucide-react';
-import { UserProfile, LinkedMember, PendingMemberRequest } from '../types';
+import { UserProfile, LinkedMember, PendingMemberRequest, UserRole } from '../types';
 import { safeFetchJson, setAuthSession } from '../utils/api';
 
 interface AuthModalProps {
@@ -39,8 +39,8 @@ interface AuthModalProps {
   allUsers: UserProfile[];
   isOpen: boolean;
   onClose: () => void;
-  onSelectUser?: (user: UserProfile, token?: string) => void;
-  onLogin?: (user: UserProfile, token?: string) => void;
+  onSelectUser?: (user: UserProfile, token?: string, meta?: { role?: UserRole; isOwner?: boolean; memberName?: string; memberId?: string }) => void;
+  onLogin?: (user: UserProfile, token?: string, meta?: { role?: UserRole; isOwner?: boolean; memberName?: string; memberId?: string }) => void;
   onRegister?: (name: string, email: string, password?: string) => Promise<UserProfile | null>;
   onRefreshUsers: () => Promise<void>;
   onLogout?: () => void;
@@ -138,14 +138,18 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
   if (!isOpen) return null;
 
-  const handleSelect = (user: UserProfile, token?: string) => {
+  const handleSelect = (
+    user: UserProfile, 
+    token?: string,
+    meta?: { role?: UserRole; isOwner?: boolean; memberName?: string; memberId?: string }
+  ) => {
     if (token) {
-      setAuthSession(user.id, token);
+      setAuthSession(user.id, token, meta);
     }
     if (onSelectUser) {
-      onSelectUser(user, token);
+      onSelectUser(user, token, meta);
     } else if (onLogin) {
-      onLogin(user, token);
+      onLogin(user, token, meta);
     }
   };
 
@@ -304,26 +308,33 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     }
   };
 
-  // Secure Login with Email + Password/PIN
-  const handleLogin = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!loginEmail.trim()) {
-      setError('Please enter your email address');
-      return;
-    }
-    if (!loginPassword.trim()) {
-      setError('Please enter your password or Security PIN to unlock the vault');
+  // Secure Login with Email / Telegram ID / Username + Password/PIN
+  const handleLogin = async (e?: React.FormEvent, customIdentifier?: string, directMemberId?: string) => {
+    if (e) e.preventDefault();
+    const identifier = customIdentifier || loginEmail.trim();
+    if (!identifier) {
+      setError('Please enter your email address, Telegram ID, or Member Name');
       return;
     }
 
     setError('');
     setLoading(true);
     try {
-      const { data, error: apiErr } = await safeFetchJson<{ success?: boolean; user?: UserProfile; token?: string; error?: string }>('/api/auth/login', {
+      const { data, error: apiErr } = await safeFetchJson<{ 
+        success?: boolean; 
+        user?: UserProfile; 
+        token?: string; 
+        role?: UserRole;
+        isOwner?: boolean;
+        memberName?: string;
+        memberId?: string;
+        error?: string;
+      }>('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
-          email: loginEmail.trim(),
+          identifier,
+          memberId: directMemberId,
           password: loginPassword.trim() 
         }),
       });
@@ -333,13 +344,75 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         return;
       }
 
-      setPasswordSuccess(`Vault Unlocked: ${data.user.name}`);
-      handleSelect(data.user, data.token);
+      const role: UserRole = data.role || (data.isOwner ? 'owner' : 'family');
+      const isOwner = Boolean(data.isOwner || role === 'owner');
+      const memberName = data.memberName || (isOwner ? data.user.name : 'Family Member');
+
+      setPasswordSuccess(
+        isOwner 
+          ? `👑 Master Owner Vault Unlocked: ${data.user.name}` 
+          : `👨‍👩‍👧‍👦 Family Privacy View Active: ${memberName}`
+      );
+      handleSelect(data.user, data.token, {
+        role,
+        isOwner,
+        memberName,
+        memberId: data.memberId
+      });
       setTimeout(() => {
         onClose();
       }, 400);
     } catch (err: any) {
       setError(err?.message || 'Login failed');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleFamilyMemberDirectLogin = async (member: LinkedMember) => {
+    setError('');
+    setLoading(true);
+    try {
+      const { data, error: apiErr } = await safeFetchJson<{
+        success?: boolean;
+        user?: UserProfile;
+        token?: string;
+        role?: UserRole;
+        isOwner?: boolean;
+        memberName?: string;
+        memberId?: string;
+        error?: string;
+      }>('/api/auth/family-login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          memberId: member.id,
+          telegramChatId: member.telegramChatId,
+          memberName: member.customAlias || member.name,
+          masterUserId: currentUser?.id
+        }),
+      });
+
+      if (apiErr || data?.error || !data?.user) {
+        setError(data?.error || apiErr || 'Family member login failed');
+        return;
+      }
+
+      const role: UserRole = data.role || 'family';
+      const memberName = data.memberName || member.customAlias || member.name;
+
+      setPasswordSuccess(`👨‍👩‍👧‍👦 Logged In as ${memberName} (Family Privacy View)`);
+      handleSelect(data.user, data.token, {
+        role,
+        isOwner: Boolean(data.isOwner),
+        memberName,
+        memberId: data.memberId || member.id
+      });
+      setTimeout(() => {
+        onClose();
+      }, 400);
+    } catch (err: any) {
+      setError(err?.message || 'Family login failed');
     } finally {
       setLoading(false);
     }
@@ -1159,130 +1232,168 @@ export const AuthModal: React.FC<AuthModalProps> = ({
             </div>
           )}
 
-          {/* TAB 2: SECURE LOGIN WITH EMAIL & PASSWORD */}
+          {/* TAB 2: SECURE LOGIN WITH EMAIL, TELEGRAM ID OR DIRECT FAMILY MEMBER */}
           {activeTab === 'switch' && (
-            <form onSubmit={handleLogin} autoComplete="off" className="space-y-4">
-              <div className="bg-slate-900/80 p-5 rounded-2xl border border-slate-800 space-y-3.5">
-                <div className="flex items-center space-x-2">
-                  <Lock className="w-4 h-4 text-cyan-400" />
-                  <p className="text-xs font-bold text-white uppercase tracking-wider">
-                    {currentUser ? 'Switch or Login to Another Vault' : 'Unlock Private Expense Vault'}
+            <div className="space-y-4">
+              {/* Quick Family Member Login if members exist */}
+              {((currentUser?.linkedMembers && currentUser.linkedMembers.length > 0) || (allUsers.some(u => u.linkedMembers && u.linkedMembers.length > 0))) && (
+                <div className="bg-indigo-950/40 p-4 rounded-2xl border border-indigo-500/30 space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-indigo-200 flex items-center gap-1.5">
+                      <Users className="w-3.5 h-3.5 text-indigo-400" />
+                      👨‍👩‍👧‍👦 Family Member Direct Login (Privacy View)
+                    </span>
+                    <span className="text-[10px] text-indigo-300 font-mono bg-indigo-900/60 px-1.5 py-0.5 rounded border border-indigo-400/30">
+                      Auto-Masked
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-slate-300">
+                    Family members yahan se direct login karein. Aapko sirf aapke transactions ka amount dikhega, overall balances masked rahenge:
                   </p>
-                </div>
-
-                {currentUser && (
-                  <div className="bg-slate-950/90 border border-cyan-500/30 rounded-xl p-3 flex items-center justify-between">
-                    <div>
-                      <p className="text-[10px] text-cyan-400 font-bold">CURRENT ACTIVE VAULT</p>
-                      <p className="text-xs text-white font-bold">{currentUser.name} <span className="text-slate-400 font-normal font-mono">({currentUser.email})</span></p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        onLogout();
-                        setActiveTab('switch');
-                      }}
-                      className="px-2.5 py-1 bg-rose-950/60 hover:bg-rose-900 border border-rose-500/40 text-rose-300 rounded-lg text-[10px] transition-colors cursor-pointer"
-                    >
-                      Sign Out
-                    </button>
-                  </div>
-                )}
-
-                <p className="text-[11px] text-slate-400">
-                  Enter your registered email and Security Password / PIN to access your encrypted financial matrix:
-                </p>
-                
-                {passwordSuccess && (
-                  <div className="bg-emerald-950/80 border border-emerald-500/40 text-emerald-300 px-3.5 py-2.5 rounded-xl text-xs font-mono flex items-center space-x-2">
-                    <Check className="w-4 h-4 text-emerald-400 shrink-0" />
-                    <span>{passwordSuccess}</span>
-                  </div>
-                )}
-
-                {error && (
-                  <div className="bg-rose-950/80 border border-rose-500/40 text-rose-300 px-3.5 py-2.5 rounded-xl text-xs font-mono flex items-start space-x-2">
-                    <ShieldAlert className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
-                    <span>{error}</span>
-                  </div>
-                )}
-
-                <div className="space-y-3">
-                  <div>
-                    <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">
-                      Email Address *
-                    </label>
-                    <input
-                      type="email"
-                      required
-                      autoComplete="off"
-                      placeholder="e.g. abhiveo4@gmail.com"
-                      value={loginEmail}
-                      onChange={(e) => setLoginEmail(e.target.value)}
-                      className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-700 rounded-xl text-xs text-cyan-300 focus:border-cyan-400 outline-hidden"
-                    />
-                  </div>
-
-                  <div>
-                    <div className="flex items-center justify-between mb-1">
-                      <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">
-                        Master Password / Security PIN *
-                      </label>
+                  <div className="flex flex-wrap gap-2 pt-1">
+                    {(currentUser?.linkedMembers || allUsers.find(u => u.linkedMembers && u.linkedMembers.length > 0)?.linkedMembers || []).map((m) => (
                       <button
+                        key={m.id || m.telegramChatId}
                         type="button"
-                        onClick={() => setShowLoginPassword(!showLoginPassword)}
-                        className="text-[10px] text-cyan-400 hover:text-cyan-300 flex items-center space-x-1"
+                        onClick={() => handleFamilyMemberDirectLogin(m)}
+                        disabled={loading}
+                        className="px-3 py-2 bg-indigo-900/80 hover:bg-indigo-800 text-indigo-100 border border-indigo-400/40 rounded-xl text-xs font-semibold flex items-center gap-2 transition-all cursor-pointer shadow-sm active:scale-95"
                       >
-                        {showLoginPassword ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
-                        <span>{showLoginPassword ? 'Hide' : 'Show'}</span>
+                        <div className="w-5 h-5 rounded-md bg-indigo-500/30 flex items-center justify-center text-[10px] font-bold text-indigo-200">
+                          {m.name.charAt(0).toUpperCase()}
+                        </div>
+                        <span>{m.customAlias || m.name}</span>
+                        <span className="text-[10px] text-indigo-300 font-normal">
+                          ({m.role === 'owner' ? 'Owner' : 'Family'})
+                        </span>
                       </button>
-                    </div>
-                    <div className="relative">
-                      <input
-                        type={showLoginPassword ? 'text' : 'password'}
-                        required
-                        autoComplete="new-password"
-                        placeholder="Enter password or 4-6 digit PIN"
-                        value={loginPassword}
-                        onChange={(e) => setLoginPassword(e.target.value)}
-                        className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-700 rounded-xl text-xs text-white focus:border-cyan-400 outline-hidden tracking-wider"
-                      />
-                    </div>
-                    <p className="text-[10px] text-slate-500 mt-1">
-                      * If logging into an existing account for the first time, the password entered will set your master lock.
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <form onSubmit={handleLogin} autoComplete="off" className="space-y-4">
+                <div className="bg-slate-900/80 p-5 rounded-2xl border border-slate-800 space-y-3.5">
+                  <div className="flex items-center space-x-2">
+                    <Lock className="w-4 h-4 text-cyan-400" />
+                    <p className="text-xs font-bold text-white uppercase tracking-wider">
+                      {currentUser ? 'Switch / Login with Telegram ID or Email' : 'Unlock Private Expense Vault'}
                     </p>
                   </div>
 
+                  {currentUser && (
+                    <div className="bg-slate-950/90 border border-cyan-500/30 rounded-xl p-3 flex items-center justify-between">
+                      <div>
+                        <p className="text-[10px] text-cyan-400 font-bold">CURRENT ACTIVE VAULT</p>
+                        <p className="text-xs text-white font-bold">{currentUser.name} <span className="text-slate-400 font-normal font-mono">({currentUser.email})</span></p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onLogout?.();
+                          setActiveTab('switch');
+                        }}
+                        className="px-2.5 py-1 bg-rose-950/60 hover:bg-rose-900 border border-rose-500/40 text-rose-300 rounded-lg text-[10px] transition-colors cursor-pointer"
+                      >
+                        Sign Out
+                      </button>
+                    </div>
+                  )}
+
+                  <p className="text-[11px] text-slate-400">
+                    Apna Email address, Telegram Chat ID (jaise <code>838107368</code>), ya Telegram @Username darj karein. System automatically role pehchan lega:
+                  </p>
+                  
+                  {passwordSuccess && (
+                    <div className="bg-emerald-950/80 border border-emerald-500/40 text-emerald-300 px-3.5 py-2.5 rounded-xl text-xs font-mono flex items-center space-x-2">
+                      <Check className="w-4 h-4 text-emerald-400 shrink-0" />
+                      <span>{passwordSuccess}</span>
+                    </div>
+                  )}
+
+                  {error && (
+                    <div className="bg-rose-950/80 border border-rose-500/40 text-rose-300 px-3.5 py-2.5 rounded-xl text-xs font-mono flex items-start space-x-2">
+                      <ShieldAlert className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+                      <span>{error}</span>
+                    </div>
+                  )}
+
+                  <div className="space-y-3">
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">
+                        Email Address / Telegram Chat ID / Username *
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        autoComplete="off"
+                        placeholder="e.g. abhiveo4@gmail.com ya 838107368 ya @pooja"
+                        value={loginEmail}
+                        onChange={(e) => setLoginEmail(e.target.value)}
+                        className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-700 rounded-xl text-xs text-cyan-300 focus:border-cyan-400 outline-hidden"
+                      />
+                    </div>
+
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                          Master Password / Security PIN <span className="text-slate-500 font-normal">(Required for Owner)</span>
+                        </label>
+                        <button
+                          type="button"
+                          onClick={() => setShowLoginPassword(!showLoginPassword)}
+                          className="text-[10px] text-cyan-400 hover:text-cyan-300 flex items-center space-x-1"
+                        >
+                          {showLoginPassword ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
+                          <span>{showLoginPassword ? 'Hide' : 'Show'}</span>
+                        </button>
+                      </div>
+                      <div className="relative">
+                        <input
+                          type={showLoginPassword ? 'text' : 'password'}
+                          autoComplete="new-password"
+                          placeholder="Master Password / PIN (if Owner)"
+                          value={loginPassword}
+                          onChange={(e) => setLoginPassword(e.target.value)}
+                          className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-700 rounded-xl text-xs text-white focus:border-cyan-400 outline-hidden tracking-wider"
+                        />
+                      </div>
+                      <p className="text-[10px] text-slate-500 mt-1">
+                        * Owner account ke liye password zaroori hai. Family members bina password ya apne Telegram account se seedha login ho sakte hain.
+                      </p>
+                    </div>
+
+                    <button
+                      type="submit"
+                      disabled={loading || !loginEmail.trim()}
+                      className="w-full mt-2 py-3 bg-gradient-to-r from-cyan-500 to-indigo-600 hover:from-cyan-400 hover:to-indigo-500 text-slate-950 font-bold rounded-xl text-xs flex items-center justify-center space-x-2 transition-all cursor-pointer disabled:opacity-50 shadow-lg shadow-cyan-950/50"
+                    >
+                      {loading ? (
+                        <RefreshCw className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <>
+                          <Unlock className="w-4 h-4 stroke-[2.5]" />
+                          <span>LOGIN & RECOGNIZE ROLE</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </div>
+
+                <div className="pt-1 text-center">
                   <button
-                    type="submit"
-                    disabled={loading || !loginEmail.trim() || !loginPassword.trim()}
-                    className="w-full mt-2 py-3 bg-gradient-to-r from-cyan-500 to-indigo-600 hover:from-cyan-400 hover:to-indigo-500 text-slate-950 font-bold rounded-xl text-xs flex items-center justify-center space-x-2 transition-all cursor-pointer disabled:opacity-50 shadow-lg shadow-cyan-950/50"
+                    type="button"
+                    onClick={() => {
+                      setActiveTab('register');
+                      setError('');
+                    }}
+                    className="text-xs text-cyan-400 hover:text-cyan-300 hover:underline cursor-pointer"
                   >
-                    {loading ? (
-                      <RefreshCw className="w-4 h-4 animate-spin" />
-                    ) : (
-                      <>
-                        <Unlock className="w-4 h-4 stroke-[2.5]" />
-                        <span>UNLOCK PRIVATE VAULT</span>
-                      </>
-                    )}
+                    Don't have a secure vault yet? Register New Account
                   </button>
                 </div>
-              </div>
-
-              <div className="pt-1 text-center">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setActiveTab('register');
-                    setError('');
-                  }}
-                  className="text-xs text-cyan-400 hover:text-cyan-300 hover:underline cursor-pointer"
-                >
-                  Don't have a secure vault yet? Register New Account
-                </button>
-              </div>
-            </form>
+              </form>
+            </div>
           )}
 
           {/* TAB 3: REGISTER NEW USER WITH MASTER PASSWORD */}

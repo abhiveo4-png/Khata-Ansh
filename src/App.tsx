@@ -10,18 +10,35 @@ import {
   PiggyBank,
   Users,
   HandCoins,
-  Fuel
+  CreditCard,
+  Plus
 } from 'lucide-react';
-import { Transaction, FinancialSummary, BotConfig, CategoryBudget, UserProfile, CategoryDef, UdhaarRecord, FuelLog } from './types';
-import { safeFetchJson, setActiveUserId, setAuthSession, getActiveUserId } from './utils/api';
+import { 
+  Transaction, 
+  FinancialSummary, 
+  BotConfig, 
+  CategoryBudget, 
+  UserProfile, 
+  CategoryDef, 
+  UdhaarRecord, 
+  FuelLog, 
+  InvestmentRecord, 
+  SavingsTransfer, 
+  CardEmi, 
+  RestoreBackupResult,
+  UserRole
+} from './types';
+import { safeFetchJson, setActiveUserId, setAuthSession, getActiveUserId, clearAuthSession } from './utils/api';
 import { DEFAULT_CATEGORIES } from './utils/categories';
 import { Header } from './components/Header';
-import { MobileNavDrawer } from './components/MobileNavDrawer';
+import { MobileNavDrawer, AppNavTab } from './components/MobileNavDrawer';
 import { OverviewCards } from './components/OverviewCards';
 import { FuturisticHud } from './components/FuturisticHud';
 import { InvestableSurplusTracker } from './components/InvestableSurplusTracker';
 import { TelegramBotSetupModal } from './components/TelegramBotSetupModal';
 import { TransactionList } from './components/TransactionList';
+import { AccountsLedgerView } from './components/AccountsLedgerView';
+import { WealthKhataHub } from './components/WealthKhataHub';
 import { AnalyticsView } from './components/AnalyticsView';
 import { BudgetManager } from './components/BudgetManager';
 import { CategoryManager } from './components/CategoryManager';
@@ -29,8 +46,7 @@ import { AuthModal } from './components/AuthModal';
 import { AiInsightsModal } from './components/AiInsightsModal';
 import { ExcelBackupRestoreModal } from './components/ExcelBackupRestoreModal';
 import { GullakView } from './components/GullakView';
-import { UdhaarKhataView } from './components/UdhaarKhataView';
-import { FuelMileageView } from './components/FuelMileageView';
+import { AddTransactionModal } from './components/AddTransactionModal';
 import { OfflineIndicator } from './components/OfflineIndicator';
 import { PWAInstallBanner } from './components/PWAInstallBanner';
 
@@ -51,6 +67,38 @@ export default function App() {
     }
   });
 
+  // User Role State: 'owner' (Master Unlocked) vs 'family' (Family Member Privacy)
+  const [userRole, setUserRole] = useState<UserRole>(() => {
+    try {
+      return (localStorage.getItem('teleexpense_user_role') as UserRole) || 'owner';
+    } catch {
+      return 'owner';
+    }
+  });
+
+  const handleToggleUserRole = (role: UserRole) => {
+    setUserRole(role);
+    try {
+      localStorage.setItem('teleexpense_user_role', role);
+    } catch {}
+  };
+
+  // Active Family Member Name (for viewing personal transactions in Family View)
+  const [activeFamilyMemberName, setActiveFamilyMemberName] = useState<string>(() => {
+    try {
+      return localStorage.getItem('teleexpense_family_member_name') || 'Pooja';
+    } catch {
+      return 'Pooja';
+    }
+  });
+
+  const handleSelectFamilyMember = (name: string) => {
+    setActiveFamilyMemberName(name);
+    try {
+      localStorage.setItem('teleexpense_family_member_name', name);
+    } catch {}
+  };
+
   const togglePrivacyMode = () => {
     setIsPrivacyMode(prev => {
       const next = !prev;
@@ -66,6 +114,9 @@ export default function App() {
   const [categories, setCategories] = useState<CategoryDef[]>(DEFAULT_CATEGORIES);
   const [udhaars, setUdhaars] = useState<UdhaarRecord[]>([]);
   const [fuelLogs, setFuelLogs] = useState<FuelLog[]>([]);
+  const [investments, setInvestments] = useState<InvestmentRecord[]>([]);
+  const [savingsTransfers, setSavingsTransfers] = useState<SavingsTransfer[]>([]);
+  const [cardEmis, setCardEmis] = useState<CardEmi[]>([]);
   const [summary, setSummary] = useState<FinancialSummary>({
     totalIncome: 0,
     totalExpense: 0,
@@ -82,7 +133,8 @@ export default function App() {
   const [botConfig, setBotConfig] = useState<BotConfig | null>(null);
   const [webhookUrl, setWebhookUrl] = useState('');
   const [appUrl, setAppUrl] = useState('');
-  const [activeTab, setActiveTab] = useState<'transactions' | 'gullak' | 'investments' | 'categories' | 'analytics' | 'budgets' | 'udhaar' | 'fuel'>('transactions');
+  const [activeTab, setActiveTab] = useState<AppNavTab>('transactions');
+  const [isAddTransactionOpen, setIsAddTransactionOpen] = useState(false);
 
   // Modals state
   const [isBotSetupOpen, setIsBotSetupOpen] = useState(false);
@@ -144,11 +196,35 @@ export default function App() {
     }
   }, []);
 
-  // Fetch Fuel logs
+  // Fetch Fuel & Mileage logs
   const fetchFuelLogs = useCallback(async () => {
-    const { data } = await safeFetchJson<{ logs?: FuelLog[]; fuelLogs?: FuelLog[] }>('/api/fuel');
-    if (data?.logs || data?.fuelLogs) {
-      setFuelLogs(data.logs || data.fuelLogs || []);
+    const { data } = await safeFetchJson<{ fuelLogs?: FuelLog[] }>('/api/fuel');
+    if (data?.fuelLogs) {
+      setFuelLogs(data.fuelLogs);
+    }
+  }, []);
+
+  // Fetch Investments
+  const fetchInvestments = useCallback(async () => {
+    const { data } = await safeFetchJson<{ investments?: InvestmentRecord[] }>('/api/investments');
+    if (data?.investments) {
+      setInvestments(data.investments);
+    }
+  }, []);
+
+  // Fetch Savings Transfers
+  const fetchSavingsTransfers = useCallback(async () => {
+    const { data } = await safeFetchJson<{ savingsTransfers?: SavingsTransfer[] }>('/api/savings-transfers');
+    if (data?.savingsTransfers) {
+      setSavingsTransfers(data.savingsTransfers);
+    }
+  }, []);
+
+  // Fetch Card EMIs
+  const fetchCardEmis = useCallback(async () => {
+    const { data } = await safeFetchJson<{ emis?: CardEmi[] }>('/api/emis');
+    if (data?.emis) {
+      setCardEmis(data.emis);
     }
   }, []);
 
@@ -185,19 +261,50 @@ export default function App() {
     }
   }, []);
 
-  // Switch / Login User handler
-  const handleSelectUser = async (user: UserProfile, token?: string) => {
+  // Switch / Login User handler with automatic role detection
+  const handleSelectUser = async (
+    user: UserProfile, 
+    token?: string,
+    meta?: { role?: UserRole; isOwner?: boolean; memberName?: string; memberId?: string }
+  ) => {
     setCurrentUser(user);
-    setAuthSession(user.id, token);
-    await Promise.all([fetchTransactions(), fetchCategories(), fetchBudgets(), fetchBotConfig(), fetchUdhaars(), fetchFuelLogs()]);
+    const resolvedRole: UserRole = meta?.role || (meta?.isOwner ? 'owner' : (user.email === 'abhiveo4@gmail.com' ? 'owner' : 'owner'));
+    setUserRole(resolvedRole);
+    if (meta?.memberName) {
+      setActiveFamilyMemberName(meta.memberName);
+    }
+    setAuthSession(user.id, token, {
+      role: resolvedRole,
+      isOwner: meta?.isOwner ?? (resolvedRole === 'owner'),
+      memberName: meta?.memberName,
+      memberId: meta?.memberId
+    });
+    await Promise.all([
+      fetchTransactions(), 
+      fetchCategories(), 
+      fetchBudgets(), 
+      fetchBotConfig(), 
+      fetchUdhaars(),
+      fetchFuelLogs(),
+      fetchInvestments(),
+      fetchSavingsTransfers(),
+      fetchCardEmis()
+    ]);
   };
 
   // Logout handler
   const handleLogout = () => {
-    setAuthSession('');
+    clearAuthSession();
     setCurrentUser(null);
+    setUserRole('owner');
+    setActiveFamilyMemberName('');
     setTransactions([]);
     setBudgets([]);
+    setUdhaars([]);
+    setFuelLogs([]);
+    setInvestments([]);
+    setSavingsTransfers([]);
+    setCardEmis([]);
     setAuthModalInitialTab('switch');
     setIsAuthModalOpen(true);
   };
@@ -235,6 +342,9 @@ export default function App() {
           fetchBotConfig(),
           fetchUdhaars(),
           fetchFuelLogs(),
+          fetchInvestments(),
+          fetchSavingsTransfers(),
+          fetchCardEmis(),
         ]);
         await Promise.all([
           fetchTransactions(),
@@ -247,7 +357,18 @@ export default function App() {
       }
     };
     initApp();
-  }, [fetchUsers, fetchCategories, fetchBotConfig, fetchUdhaars, fetchFuelLogs, fetchTransactions, fetchBudgets]);
+  }, [
+    fetchUsers, 
+    fetchCategories, 
+    fetchBotConfig, 
+    fetchUdhaars, 
+    fetchTransactions, 
+    fetchBudgets, 
+    fetchFuelLogs, 
+    fetchInvestments, 
+    fetchSavingsTransfers, 
+    fetchCardEmis
+  ]);
 
   // Ultra-Low-Bandwidth Smart Sync Engine:
   // Instead of polling 4 large endpoints every 4s (which burned ~4GB/day!),
@@ -274,7 +395,6 @@ export default function App() {
             await Promise.all([
               fetchTransactions(),
               fetchUdhaars(),
-              fetchFuelLogs(),
             ]);
           }
         }
@@ -300,7 +420,7 @@ export default function App() {
       clearInterval(interval);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  }, [fetchTransactions, fetchUdhaars, fetchFuelLogs]);
+  }, [fetchTransactions, fetchUdhaars]);
 
   // Handlers for transactions
   const handleAddTransaction = async (txData: Partial<Transaction>) => {
@@ -448,32 +568,23 @@ export default function App() {
     }
   };
 
-  // Fuel Handlers
-  const handleAddFuelLog = async (newLog: Omit<FuelLog, 'id' | 'createdAt'>) => {
-    const { data } = await safeFetchJson<{ success?: boolean; log?: FuelLog; fuelLogs?: FuelLog[]; summary?: FinancialSummary }>('/api/fuel', {
-      method: 'POST',
+  // Update Transaction Handler (Inline account switch / edit)
+  const handleUpdateTransaction = async (id: string, updates: Partial<Transaction>) => {
+    const { data } = await safeFetchJson<{ transaction?: Transaction; summary?: FinancialSummary }>(`/api/transactions/${id}`, {
+      method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(newLog),
+      body: JSON.stringify(updates),
     });
-    if (data?.fuelLogs) {
-      setFuelLogs(data.fuelLogs);
-    } else {
-      await fetchFuelLogs();
-    }
-    if (data?.summary) {
-      setSummary(data.summary);
-    }
-    await fetchTransactions();
-  };
-
-  const handleDeleteFuelLog = async (id: string) => {
-    const { data } = await safeFetchJson<{ success?: boolean; fuelLogs?: FuelLog[] }>(`/api/fuel/${id}`, {
-      method: 'DELETE',
-    });
-    if (data?.fuelLogs) {
-      setFuelLogs(data.fuelLogs);
-    } else {
-      await fetchFuelLogs();
+    if (data?.transaction) {
+      setTransactions((prev) => {
+        const next = prev.map((t) => (t.id === id ? data.transaction! : t));
+        const activeUid = currentUser?.id || getActiveUserId() || 'user_ansh';
+        setCachedTransactions(activeUid, next);
+        return next;
+      });
+      if (data.summary) {
+        setSummary(data.summary);
+      }
     }
   };
 
@@ -513,6 +624,8 @@ export default function App() {
       <Header
         botConfig={botConfig}
         currentUser={currentUser}
+        userRole={userRole}
+        activeFamilyMemberName={activeFamilyMemberName}
         onOpenMobileDrawer={() => setIsMobileNavOpen(true)}
         onOpenUserModal={() => setIsAuthModalOpen(true)}
         onOpenBotSetup={() => setIsBotSetupOpen(true)}
@@ -601,9 +714,15 @@ export default function App() {
         )}
 
         {/* Summary Cards */}
-        <OverviewCards summary={summary} isPrivacyMode={isPrivacyMode} />
+        <OverviewCards 
+          summary={summary} 
+          transactions={transactions}
+          userRole={userRole}
+          activeFamilyMemberName={activeFamilyMemberName}
+          isPrivacyMode={isPrivacyMode} 
+        />
 
-        {/* Horizontal Navigation Tabs - Desktop only (On mobile, accessible exclusively via the 3-bar drawer) */}
+        {/* Horizontal Navigation Tabs - Desktop only */}
         <div className="hidden md:flex items-center justify-between p-1.5 rounded-2xl bg-slate-900/50 border border-white/[0.08] backdrop-blur-xl gap-2 shadow-lg shadow-black/20">
           <div className="flex items-center space-x-1.5 overflow-x-auto no-scrollbar scroll-smooth py-0.5">
             
@@ -620,43 +739,43 @@ export default function App() {
             </button>
 
             <button
-              onClick={() => setActiveTab('udhaar')}
+              onClick={() => setActiveTab('accounts')}
               className={`px-3.5 py-2 text-xs sm:text-sm font-semibold rounded-xl flex items-center space-x-2 transition-all shrink-0 cursor-pointer ${
-                activeTab === 'udhaar'
-                  ? 'bg-emerald-600/90 text-white shadow-md shadow-emerald-600/30 border border-emerald-400/30'
+                activeTab === 'accounts'
+                  ? 'bg-sky-600/90 text-white shadow-md shadow-sky-600/30 border border-sky-400/30'
                   : 'text-slate-400 hover:text-slate-200 hover:bg-white/[0.05]'
               }`}
             >
-              <HandCoins className={`w-4 h-4 ${activeTab === 'udhaar' ? 'text-white' : 'text-emerald-400'}`} />
+              <CreditCard className={`w-4 h-4 ${activeTab === 'accounts' ? 'text-white' : 'text-sky-400'}`} />
               <span className="flex items-center gap-1.5">
-                Udhaar / Khata Book
+                Accounts & Cards Ledger
                 <span className={`text-[10px] font-mono px-1.5 py-0.2 rounded-md ${
-                  activeTab === 'udhaar' 
-                    ? 'bg-emerald-950/60 text-emerald-200 border border-emerald-300/40'
-                    : 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30'
+                  activeTab === 'accounts'
+                    ? 'bg-sky-950/60 text-sky-200 border border-sky-300/40'
+                    : 'bg-sky-500/15 text-sky-300 border border-sky-500/30'
                 }`}>
-                  {udhaars.filter(u => u.status === 'pending').length} Active
+                  8 Accounts
                 </span>
               </span>
             </button>
 
             <button
-              onClick={() => setActiveTab('fuel')}
+              onClick={() => setActiveTab('wealth')}
               className={`px-3.5 py-2 text-xs sm:text-sm font-semibold rounded-xl flex items-center space-x-2 transition-all shrink-0 cursor-pointer ${
-                activeTab === 'fuel'
-                  ? 'bg-amber-600/90 text-white shadow-md shadow-amber-600/30 border border-amber-400/30'
+                activeTab === 'wealth'
+                  ? 'bg-cyan-600/90 text-white shadow-md shadow-cyan-600/30 border border-cyan-400/30'
                   : 'text-slate-400 hover:text-slate-200 hover:bg-white/[0.05]'
               }`}
             >
-              <Fuel className={`w-4 h-4 ${activeTab === 'fuel' ? 'text-white' : 'text-amber-400'}`} />
+              <Coins className={`w-4 h-4 ${activeTab === 'wealth' ? 'text-white' : 'text-cyan-400'}`} />
               <span className="flex items-center gap-1.5">
-                Fuel & Mileage
+                Wealth & Khata
                 <span className={`text-[10px] font-mono px-1.5 py-0.2 rounded-md ${
-                  activeTab === 'fuel'
-                    ? 'bg-amber-950/60 text-amber-200 border border-amber-300/40'
-                    : 'bg-amber-500/15 text-amber-300 border border-amber-500/30'
+                  activeTab === 'wealth'
+                    ? 'bg-cyan-950/60 text-cyan-200 border border-cyan-300/40'
+                    : 'bg-cyan-500/15 text-cyan-300 border border-cyan-500/30'
                 }`}>
-                  {fuelLogs.length} Logs
+                  Investments / Savings / Udhaar
                 </span>
               </span>
             </button>
@@ -683,24 +802,15 @@ export default function App() {
             </button>
 
             <button
-              onClick={() => setActiveTab('investments')}
+              onClick={() => setActiveTab('budgets')}
               className={`px-3.5 py-2 text-xs sm:text-sm font-semibold rounded-xl flex items-center space-x-2 transition-all shrink-0 cursor-pointer ${
-                activeTab === 'investments'
-                  ? 'bg-cyan-600/90 text-white shadow-md shadow-cyan-600/30 border border-cyan-400/30'
+                activeTab === 'budgets'
+                  ? 'bg-indigo-600/90 text-white shadow-md shadow-indigo-600/30 border border-indigo-400/30'
                   : 'text-slate-400 hover:text-slate-200 hover:bg-white/[0.05]'
               }`}
             >
-              <Coins className={`w-4 h-4 ${activeTab === 'investments' ? 'text-white' : 'text-cyan-400'}`} />
-              <span className="flex items-center gap-1.5">
-                Investable Pool
-                <span className={`text-[10px] font-mono px-1.5 py-0.2 rounded-md ${
-                  activeTab === 'investments'
-                    ? 'bg-cyan-950/60 text-cyan-200 border border-cyan-300/40'
-                    : 'bg-cyan-500/15 text-cyan-300 border border-cyan-500/30'
-                }`}>
-                  ₹{Math.max(0, summary.totalIncome - summary.totalExpense).toLocaleString('en-IN')}
-                </span>
-              </span>
+              <Target className={`w-4 h-4 ${activeTab === 'budgets' ? 'text-white' : 'text-indigo-400'}`} />
+              <span>Budgets</span>
             </button>
 
             <button
@@ -726,28 +836,23 @@ export default function App() {
               <PieChart className={`w-4 h-4 ${activeTab === 'analytics' ? 'text-white' : 'text-purple-400'}`} />
               <span>Analytics</span>
             </button>
-
-            <button
-              onClick={() => setActiveTab('budgets')}
-              className={`px-3.5 py-2 text-xs sm:text-sm font-semibold rounded-xl flex items-center space-x-2 transition-all shrink-0 cursor-pointer ${
-                activeTab === 'budgets'
-                  ? 'bg-indigo-600/90 text-white shadow-md shadow-indigo-600/30 border border-indigo-400/30'
-                  : 'text-slate-400 hover:text-slate-200 hover:bg-white/[0.05]'
-              }`}
-            >
-              <Target className={`w-4 h-4 ${activeTab === 'budgets' ? 'text-white' : 'text-indigo-400'}`} />
-              <span>Budgets</span>
-            </button>
           </div>
 
           <div className="flex items-center space-x-2 shrink-0 pr-1">
+            <button
+              onClick={() => setIsAddTransactionOpen(true)}
+              className="px-3.5 py-2 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-xs flex items-center space-x-1.5 transition-all cursor-pointer shadow-md active:scale-95"
+            >
+              <Plus className="w-3.5 h-3.5 stroke-[3]" />
+              <span>+ Naya Kharcha</span>
+            </button>
+
             <button
               onClick={() => {
                 fetchTransactions();
                 fetchCategories();
                 fetchBudgets();
                 fetchUdhaars();
-                fetchFuelLogs();
               }}
               title="Refresh ledger"
               className="p-2 rounded-xl border border-white/[0.08] bg-white/[0.05] text-slate-300 hover:text-white hover:bg-white/[0.1] transition-all cursor-pointer shadow-xs active:scale-95"
@@ -763,31 +868,38 @@ export default function App() {
             <TransactionList
               transactions={transactions}
               categories={categories}
+              userRole={userRole}
+              activeFamilyMemberName={activeFamilyMemberName}
+              isPrivacyMode={isPrivacyMode}
               onDeleteTransaction={handleDeleteTransaction}
               onEditTransaction={handleEditTransaction}
               onUpdateTransactionCategory={handleUpdateTransactionCategory}
               onClearAll={handleClearAll}
+              onRefresh={fetchTransactions}
             />
           </div>
         )}
 
-        {activeTab === 'udhaar' && (
-          <UdhaarKhataView
-            records={udhaars}
+        {activeTab === 'accounts' && (
+          <AccountsLedgerView
+            transactions={transactions}
+            onUpdateTransaction={handleUpdateTransaction}
+            onRefreshTransactions={fetchTransactions}
+            userRole={userRole}
+            activeFamilyMemberName={activeFamilyMemberName}
             isPrivacyMode={isPrivacyMode}
-            onAddRecord={handleAddUdhaar}
-            onSettleRecord={handleSettleUdhaar}
-            onDeleteRecord={handleDeleteUdhaar}
-            onUpdateRecord={handleUpdateUdhaar}
           />
         )}
 
-        {activeTab === 'fuel' && (
-          <FuelMileageView
-            logs={fuelLogs}
+        {activeTab === 'wealth' && (
+          <WealthKhataHub
+            udhaars={udhaars}
             isPrivacyMode={isPrivacyMode}
-            onAddLog={handleAddFuelLog}
-            onDeleteLog={handleDeleteFuelLog}
+            onAddUdhaar={handleAddUdhaar}
+            onSettleUdhaar={handleSettleUdhaar}
+            onDeleteUdhaar={handleDeleteUdhaar}
+            onUpdateUdhaar={handleUpdateUdhaar}
+            onRefreshTransactions={fetchTransactions}
           />
         )}
 
@@ -796,13 +908,6 @@ export default function App() {
             authToken={localStorage.getItem('teleexpense_auth_token') || localStorage.getItem('auth_token')}
             currentUser={currentUser}
             onUserUpdate={(updatedUser) => setCurrentUser(updatedUser)}
-          />
-        )}
-
-        {activeTab === 'investments' && (
-          <InvestableSurplusTracker
-            summary={summary}
-            transactions={transactions}
           />
         )}
 
@@ -899,17 +1004,27 @@ export default function App() {
         currentUser={currentUser}
         udhaars={udhaars}
         fuelLogs={fuelLogs}
-        onRestoreSuccess={(data) => {
+        investments={investments}
+        savingsTransfers={savingsTransfers}
+        cardEmis={cardEmis}
+        onRestoreSuccess={(data: RestoreBackupResult) => {
           if (data.transactions) setTransactions(data.transactions);
           if (data.categories) setCategories(data.categories);
           if (data.budgets) setBudgets(data.budgets);
           if (data.summary) setSummary(data.summary);
           if (data.udhaars) setUdhaars(data.udhaars);
           if (data.fuelLogs) setFuelLogs(data.fuelLogs);
+          if (data.investments) setInvestments(data.investments);
+          if (data.savingsTransfers) setSavingsTransfers(data.savingsTransfers);
+          if (data.cardEmis) setCardEmis(data.cardEmis);
           fetchBudgets();
           fetchTransactions();
           fetchUdhaars();
           fetchFuelLogs();
+          fetchInvestments();
+          fetchSavingsTransfers();
+          fetchCardEmis();
+          fetchUsers();
         }}
       />
 

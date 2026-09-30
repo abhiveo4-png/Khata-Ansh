@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { 
   Bot, 
   Sparkles, 
@@ -12,13 +12,21 @@ import {
   Copy,
   Wallet,
   FileSpreadsheet,
-  Menu
+  Menu,
+  Shield,
+  ShieldAlert,
+  Users,
+  Eye,
+  EyeOff,
+  Crown
 } from 'lucide-react';
-import { BotConfig, UserProfile } from '../types';
+import { BotConfig, UserProfile, UserRole } from '../types';
 
 interface HeaderProps {
   currentUser: UserProfile | null;
   botConfig: BotConfig | null;
+  userRole?: UserRole;
+  activeFamilyMemberName?: string;
   onOpenMobileDrawer?: () => void;
   onOpenUserModal: () => void;
   onOpenBotSetup: () => void;
@@ -31,6 +39,8 @@ interface HeaderProps {
 export const Header: React.FC<HeaderProps> = ({
   currentUser,
   botConfig,
+  userRole = 'owner',
+  activeFamilyMemberName,
   onOpenMobileDrawer,
   onOpenUserModal,
   onOpenBotSetup,
@@ -46,6 +56,8 @@ export const Header: React.FC<HeaderProps> = ({
   );
 
   const isBotAdmin = currentUser?.email?.trim().toLowerCase() === 'abhiveo4@gmail.com';
+  const members = currentUser?.linkedMembers || [];
+  const isOwner = userRole === 'owner';
 
   return (
     <header className="bg-slate-950/80 border-b border-white/[0.08] backdrop-blur-2xl sticky top-0 z-30 shadow-xl shadow-black/30">
@@ -91,8 +103,20 @@ export const Header: React.FC<HeaderProps> = ({
               </div>
             </div>
 
-            {/* Mobile Profile Trigger */}
+            {/* Mobile Profile Trigger & Recognized Role Badge */}
             <div className="flex items-center space-x-2 md:hidden">
+              <div
+                className={`px-2.5 py-1 rounded-xl text-[11px] font-bold border flex items-center gap-1.5 shadow-xs ${
+                  isOwner
+                    ? 'bg-amber-500/15 text-amber-300 border-amber-500/30'
+                    : 'bg-indigo-500/20 text-indigo-300 border-indigo-500/40'
+                }`}
+                title={isOwner ? 'Owner Account (Master View)' : `Family Account: ${activeFamilyMemberName || 'Member'} (Privacy View)`}
+              >
+                {isOwner ? <Crown className="w-3.5 h-3.5 text-amber-400" /> : <Shield className="w-3.5 h-3.5 text-indigo-400" />}
+                <span>{isOwner ? 'Owner' : (activeFamilyMemberName || 'Family')}</span>
+              </div>
+
               <button
                 onClick={onOpenUserModal}
                 className="flex items-center space-x-1.5 px-3 py-1.5 rounded-xl text-xs bg-white/[0.06] hover:bg-white/[0.1] text-slate-200 border border-white/[0.1] cursor-pointer backdrop-blur-md transition-all active:scale-95 shadow-sm"
@@ -103,9 +127,40 @@ export const Header: React.FC<HeaderProps> = ({
             </div>
           </div>
 
-          {/* Desktop Controls & Action Matrix (Hidden on Mobile view) */}
+          {/* Desktop Controls & Action Matrix */}
           <div className="hidden md:flex items-center flex-wrap gap-2">
             
+            {/* Automatic Account Role Status Badge */}
+            <div className="inline-flex items-center">
+              <div
+                className={`inline-flex items-center px-3 py-1.5 rounded-xl text-xs font-semibold border backdrop-blur-md shadow-xs gap-1.5 ${
+                  isOwner
+                    ? 'bg-amber-500/15 text-amber-200 border-amber-500/30'
+                    : 'bg-indigo-500/20 text-indigo-200 border-indigo-500/40'
+                }`}
+                title={
+                  isOwner
+                    ? '👑 Owner Account Logged In: Master financial vault unmasked.'
+                    : `👨‍👩‍👧‍👦 Logged In as Family Member (${activeFamilyMemberName || 'Member'}): Privacy mode automatically applied. Only your personal expenses visible.`
+                }
+              >
+                {isOwner ? (
+                  <>
+                    <Crown className="w-3.5 h-3.5 text-amber-400" />
+                    <span>👑 Owner (Master View)</span>
+                  </>
+                ) : (
+                  <>
+                    <Shield className="w-3.5 h-3.5 text-indigo-400" />
+                    <span>👨‍👩‍👧‍👦 {activeFamilyMemberName || 'Family'} (Privacy View)</span>
+                    <span className="text-[10px] bg-indigo-950/80 px-1.5 py-0.2 rounded border border-indigo-400/30 text-indigo-300">
+                      🔒 Masked
+                    </span>
+                  </>
+                )}
+              </div>
+            </div>
+
             {/* Current User Account & Link Code Badge */}
             {currentUser ? (
               <div className="inline-flex items-center rounded-xl bg-slate-900/70 border border-white/[0.1] p-0.5 backdrop-blur-md shadow-sm">
@@ -199,11 +254,10 @@ export const Header: React.FC<HeaderProps> = ({
               title="Quick CSV download"
               className="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-300 hover:text-white text-xs transition-colors cursor-pointer"
             >
-              <Download className="w-3.5 h-3.5 text-emerald-400" />
-              <span>Export CSV</span>
+              <Download className="w-3.5 h-3.5" />
+              <span>CSV</span>
             </button>
           </div>
-
         </div>
       </div>
     </header>

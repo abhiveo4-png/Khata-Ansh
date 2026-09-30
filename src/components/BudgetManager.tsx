@@ -30,10 +30,12 @@ import {
   HelpCircle,
   Sparkles,
   RotateCcw,
+  Sliders,
 } from 'lucide-react';
 import { CategoryBudget, Transaction, CategoryDef } from '../types';
 import { safeFetchJson } from '../utils/api';
 import { ExcelBudgetImportModal } from './ExcelBudgetImportModal';
+import { DailyItemLimitsView } from './DailyItemLimitsView';
 
 const ICON_MAP: Record<string, React.ElementType> = {
   Utensils,
@@ -92,6 +94,7 @@ export const BudgetManager: React.FC<BudgetManagerProps> = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'exceeded' | 'warning' | 'safe' | 'unallocated'>('all');
   const [deletingCatName, setDeletingCatName] = useState<string | null>(null);
+  const [budgetTab, setBudgetTab] = useState<'monthly' | 'daily'>('monthly');
 
   // Focus single input when singleEditingCat changes
   useEffect(() => {
@@ -414,25 +417,70 @@ export const BudgetManager: React.FC<BudgetManagerProps> = ({
         </div>
       )}
 
-      {/* Top Banner & Budget Controls */}
-      <div className="bg-[#0c1222]/85 rounded-2xl border border-slate-800 backdrop-blur-xl p-5 sm:p-6 shadow-2xl shadow-black/50">
-        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 pb-5 border-b border-slate-800">
-          <div>
-            <div className="flex items-center space-x-2.5">
-              <div className="w-8 h-8 rounded-xl bg-cyan-950/80 border border-cyan-500/40 text-cyan-400 flex items-center justify-center">
-                <Target className="w-4 h-4" />
+      {/* View Mode Switcher: Monthly Category Budgets vs Daily Item Limits */}
+      <div className="flex items-center gap-2 p-1.5 bg-[#0c1222]/90 border border-slate-800 rounded-2xl">
+        <button
+          id="budget-tab-monthly-btn"
+          onClick={() => setBudgetTab('monthly')}
+          className={`flex-1 py-2.5 px-4 rounded-xl text-xs sm:text-sm font-semibold transition-all flex items-center justify-center gap-2 cursor-pointer ${
+            budgetTab === 'monthly'
+              ? 'bg-cyan-500 text-slate-950 font-bold shadow-lg shadow-cyan-950/50'
+              : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+          }`}
+        >
+          <Target className="w-4 h-4" />
+          <span>📊 Monthly Category Budgets</span>
+        </button>
+        <button
+          id="budget-tab-daily-btn"
+          onClick={() => setBudgetTab('daily')}
+          className={`flex-1 py-2.5 px-4 rounded-xl text-xs sm:text-sm font-semibold transition-all flex items-center justify-center gap-2 cursor-pointer ${
+            budgetTab === 'daily'
+              ? 'bg-gradient-to-r from-amber-500 to-orange-500 text-white font-bold shadow-lg shadow-amber-950/50'
+              : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+          }`}
+        >
+          <Sliders className="w-4 h-4" />
+          <span>🎯 Daily Item Limits (Saman Quota)</span>
+          <span className="hidden sm:inline text-[10px] bg-amber-400/20 text-amber-300 px-2 py-0.5 rounded-full border border-amber-500/30">
+            Sutta, Chai, Petrol
+          </span>
+        </button>
+      </div>
+
+      {budgetTab === 'daily' ? (
+        <DailyItemLimitsView
+          transactions={transactions}
+          categories={categories}
+          onRefreshTransactions={onRefreshTransactions}
+        />
+      ) : (
+        <>
+          {/* Top Banner & Budget Controls */}
+          <div className="bg-[#0c1222]/85 rounded-2xl border border-slate-800 backdrop-blur-xl p-5 sm:p-6 shadow-2xl shadow-black/50">
+            <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 pb-5 border-b border-slate-800">
+              <div>
+                <div className="flex items-center space-x-2.5">
+                  <div className="w-8 h-8 rounded-xl bg-cyan-950/80 border border-cyan-500/40 text-cyan-400 flex items-center justify-center">
+                    <Target className="w-4 h-4" />
+                  </div>
+                  <h2 className="font-bold text-base sm:text-lg text-white font-display">
+                    MONTHLY BUDGET & ALLOCATION
+                  </h2>
+                  <span className="text-[10px] font-mono font-bold px-2.5 py-0.5 rounded-full bg-cyan-950/80 border border-cyan-500/40 text-cyan-300">
+                    {displayBudgets.length} CATEGORIES
+                  </span>
+                </div>
+                <p className="text-xs font-mono text-slate-400 mt-1">
+                  Har category ke card par <b>Pencil Icon ✏️</b> dabayein ya upar <b>"LIMITS EDIT KAREIN"</b> se sabhi limits badlein.
+                  <button
+                    onClick={() => setBudgetTab('daily')}
+                    className="ml-2 text-amber-400 hover:text-amber-300 underline font-sans font-semibold inline-flex items-center gap-1 cursor-pointer"
+                  >
+                    <span>Rozana kisi saman (sutta/chai) ka quota set karna hai? Daily Limits Kholein →</span>
+                  </button>
+                </p>
               </div>
-              <h2 className="font-bold text-base sm:text-lg text-white font-display">
-                MONTHLY BUDGET & ALLOCATION
-              </h2>
-              <span className="text-[10px] font-mono font-bold px-2.5 py-0.5 rounded-full bg-cyan-950/80 border border-cyan-500/40 text-cyan-300">
-                {displayBudgets.length} CATEGORIES
-              </span>
-            </div>
-            <p className="text-xs font-mono text-slate-400 mt-1">
-              Har category ke card par <b>Pencil Icon ✏️</b> dabayein ya upar <b>"LIMITS EDIT KAREIN"</b> se sabhi limits badlein.
-            </p>
-          </div>
 
           <div className="flex flex-wrap items-center gap-2">
             {/* Excel Import Button */}
@@ -868,6 +916,8 @@ export const BudgetManager: React.FC<BudgetManagerProps> = ({
         <div className="p-8 text-center bg-[#0c1222]/50 border border-slate-800 rounded-2xl">
           <p className="text-sm font-mono text-slate-400">Koi category match nahi hui.</p>
         </div>
+      )}
+        </>
       )}
 
       {/* Excel Budget Import Modal */}

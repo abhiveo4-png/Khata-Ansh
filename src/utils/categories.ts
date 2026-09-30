@@ -93,6 +93,26 @@ export const DEFAULT_CATEGORIES: CategoryDef[] = [
     keywords: ['fees', 'course', 'books', 'kitab', 'udemy', 'college', 'school', 'tuition', 'coaching', 'subscription', 'exam', 'certifications', 'padhai'],
   },
   {
+    id: 'family_trip_pooja',
+    name: 'Family Trip & Pooja',
+    type: 'expense',
+    icon: 'Sparkles',
+    color: '#F59E0B', // Amber
+    bgLight: 'bg-amber-50 text-amber-700 border-amber-200',
+    keywords: ['pooja', 'puja', 'trip', 'family trip', 'mandir', 'prasad', 'pandit', 'samagri', 'havan', 'yatra', 'darshan', 'holiday', 'vacation', 'temple', 'religious', 'ganga', 'kedarnath', 'tirupati'],
+    description: 'Family travel, holidays & religious rituals / pooja samagri',
+  },
+  {
+    id: 'reimbursement',
+    name: 'Reimbursement',
+    type: 'expense',
+    icon: 'Briefcase',
+    color: '#06B6D4', // Cyan
+    bgLight: 'bg-cyan-50 text-cyan-700 border-cyan-200',
+    keywords: ['rim', 'reimburse', 'reimbursement', 'office claim', 'client trip', 'reimbursable', 'claim'],
+    description: 'Office or business claimable expenses (does not eat personal monthly budget)',
+  },
+  {
     id: 'other_expense',
     name: 'Other Expense',
     type: 'expense',

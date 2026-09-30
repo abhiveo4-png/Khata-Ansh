@@ -27,10 +27,25 @@ import {
   ArrowLeftRight,
   Fuel,
   PiggyBank,
-  Users
+  Users,
+  Coins,
+  TrendingUp,
+  HeartHandshake,
+  CreditCard
 } from 'lucide-react';
 import { safeFetchJson } from '../utils/api';
-import { Transaction, CategoryDef, CategoryBudget, FinancialSummary, UdhaarRecord, FuelLog } from '../types';
+import { 
+  Transaction, 
+  CategoryDef, 
+  CategoryBudget, 
+  FinancialSummary, 
+  UdhaarRecord, 
+  FuelLog, 
+  InvestmentRecord, 
+  SavingsTransfer, 
+  CardEmi, 
+  RestoreBackupResult 
+} from '../types';
 import * as XLSX from 'xlsx';
 
 interface StorageStatus {
@@ -53,18 +68,10 @@ interface ExcelBackupRestoreModalProps {
   currentUser: { name: string; id: string; telegramUsername?: string; telegramChatId?: string; linkCode?: string; linkedMembers?: any[] } | null;
   udhaars?: UdhaarRecord[];
   fuelLogs?: FuelLog[];
-  onRestoreSuccess: (result: {
-    transactions: Transaction[];
-    categories: CategoryDef[];
-    budgets: CategoryBudget[];
-    summary: FinancialSummary;
-    restoredCount: number;
-    categoriesCreated: number;
-    udhaarsCount?: number;
-    fuelLogsCount?: number;
-    udhaars?: UdhaarRecord[];
-    fuelLogs?: FuelLog[];
-  }) => void;
+  investments?: InvestmentRecord[];
+  savingsTransfers?: SavingsTransfer[];
+  cardEmis?: CardEmi[];
+  onRestoreSuccess: (result: RestoreBackupResult) => void;
 }
 
 export const ExcelBackupRestoreModal: React.FC<ExcelBackupRestoreModalProps> = ({
@@ -75,6 +82,9 @@ export const ExcelBackupRestoreModal: React.FC<ExcelBackupRestoreModalProps> = (
   currentUser,
   udhaars = [],
   fuelLogs = [],
+  investments = [],
+  savingsTransfers = [],
+  cardEmis = [],
   onRestoreSuccess,
 }) => {
   const [activeTab, setActiveTab] = useState<'export' | 'restore' | 'storage'>('export');
@@ -84,8 +94,11 @@ export const ExcelBackupRestoreModal: React.FC<ExcelBackupRestoreModalProps> = (
   const [parsedCatRows, setParsedCatRows] = useState<any[]>([]);
   const [parsedUdhaarRows, setParsedUdhaarRows] = useState<any[]>([]);
   const [parsedFuelRows, setParsedFuelRows] = useState<any[]>([]);
+  const [parsedInvRows, setParsedInvRows] = useState<any[]>([]);
+  const [parsedSavRows, setParsedSavRows] = useState<any[]>([]);
+  const [parsedEmiRows, setParsedEmiRows] = useState<any[]>([]);
   const [isSnapshotDetected, setIsSnapshotDetected] = useState<boolean>(false);
-  const [previewTab, setPreviewTab] = useState<'transactions' | 'udhaars' | 'fuel'>('transactions');
+  const [previewTab, setPreviewTab] = useState<'transactions' | 'udhaars' | 'fuel' | 'investments' | 'savings' | 'emis'>('transactions');
   const [detectedSheets, setDetectedSheets] = useState<string[]>([]);
   const [replaceExisting, setReplaceExisting] = useState<boolean>(false);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -173,6 +186,9 @@ export const ExcelBackupRestoreModal: React.FC<ExcelBackupRestoreModalProps> = (
       let catRows: any[] = [];
       let udhaarRows: any[] = [];
       let fuelRows: any[] = [];
+      let invRows: any[] = [];
+      let savRows: any[] = [];
+      let emiRows: any[] = [];
       let foundSnapshot = false;
 
       // 1. Check for High-Fidelity JSON snapshot sheet
@@ -188,6 +204,9 @@ export const ExcelBackupRestoreModal: React.FC<ExcelBackupRestoreModalProps> = (
               if (Array.isArray(fullData.categories)) catRows = fullData.categories;
               if (Array.isArray(fullData.udhaars)) udhaarRows = fullData.udhaars;
               if (Array.isArray(fullData.fuelLogs)) fuelRows = fullData.fuelLogs;
+              if (Array.isArray(fullData.investments)) invRows = fullData.investments;
+              if (Array.isArray(fullData.savingsTransfers)) savRows = fullData.savingsTransfers;
+              if (Array.isArray(fullData.cardEmis)) emiRows = fullData.cardEmis;
               foundSnapshot = true;
               setIsSnapshotDetected(true);
             } catch (err) {
@@ -211,6 +230,12 @@ export const ExcelBackupRestoreModal: React.FC<ExcelBackupRestoreModalProps> = (
             udhaarRows = rows;
           } else if (lowerName.includes('fuel') || lowerName.includes('mileage') || lowerName.includes('vehicle') || lowerName.includes('petrol')) {
             fuelRows = rows;
+          } else if (lowerName.includes('investment') || lowerName.includes('portfolio') || lowerName.includes('rd') || lowerName.includes('fd') || lowerName.includes('mutual')) {
+            invRows = rows;
+          } else if (lowerName.includes('saving') || lowerName.includes('transfer') || lowerName.includes('wife')) {
+            savRows = rows;
+          } else if (lowerName.includes('emi') || lowerName.includes('card emi') || lowerName.includes('loan')) {
+            emiRows = rows;
           }
         }
 
@@ -220,12 +245,23 @@ export const ExcelBackupRestoreModal: React.FC<ExcelBackupRestoreModalProps> = (
         }
       }
 
-      if (txRows.length === 0 && catRows.length === 0 && udhaarRows.length === 0 && fuelRows.length === 0) {
+      if (
+        txRows.length === 0 && 
+        catRows.length === 0 && 
+        udhaarRows.length === 0 && 
+        fuelRows.length === 0 &&
+        invRows.length === 0 &&
+        savRows.length === 0 &&
+        emiRows.length === 0
+      ) {
         setError('Uploaded file khali hai ya koi valid records nahi mile.');
         setParsedRows([]);
         setParsedCatRows([]);
         setParsedUdhaarRows([]);
         setParsedFuelRows([]);
+        setParsedInvRows([]);
+        setParsedSavRows([]);
+        setParsedEmiRows([]);
         return;
       }
 
@@ -233,6 +269,9 @@ export const ExcelBackupRestoreModal: React.FC<ExcelBackupRestoreModalProps> = (
       setParsedCatRows(catRows);
       setParsedUdhaarRows(udhaarRows);
       setParsedFuelRows(fuelRows);
+      setParsedInvRows(invRows);
+      setParsedSavRows(savRows);
+      setParsedEmiRows(emiRows);
     } catch (err: any) {
       console.error('File parsing error', err);
       setError(`File padhne me error: ${err.message || 'Invalid Excel/CSV format'}`);
@@ -240,6 +279,9 @@ export const ExcelBackupRestoreModal: React.FC<ExcelBackupRestoreModalProps> = (
       setParsedCatRows([]);
       setParsedUdhaarRows([]);
       setParsedFuelRows([]);
+      setParsedInvRows([]);
+      setParsedSavRows([]);
+      setParsedEmiRows([]);
       setFileBase64(null);
     }
   };
@@ -260,7 +302,16 @@ export const ExcelBackupRestoreModal: React.FC<ExcelBackupRestoreModalProps> = (
 
   // Trigger restore API
   const handleRestore = async () => {
-    if (parsedRows.length === 0 && parsedCatRows.length === 0 && parsedUdhaarRows.length === 0 && parsedFuelRows.length === 0 && !fileBase64) {
+    if (
+      parsedRows.length === 0 && 
+      parsedCatRows.length === 0 && 
+      parsedUdhaarRows.length === 0 && 
+      parsedFuelRows.length === 0 && 
+      parsedInvRows.length === 0 &&
+      parsedSavRows.length === 0 &&
+      parsedEmiRows.length === 0 &&
+      !fileBase64
+    ) {
       setError('Pehle ek valid Excel (.xlsx) ya CSV backup file chuniye.');
       return;
     }
@@ -270,20 +321,7 @@ export const ExcelBackupRestoreModal: React.FC<ExcelBackupRestoreModalProps> = (
     setSuccessMessage(null);
 
     try {
-      const { data, error: apiErr } = await safeFetchJson<{
-        success: boolean;
-        message: string;
-        restoredCount: number;
-        categoriesCreated: number;
-        udhaarsCount?: number;
-        fuelLogsCount?: number;
-        transactions: Transaction[];
-        categories: CategoryDef[];
-        budgets: CategoryBudget[];
-        udhaars?: UdhaarRecord[];
-        fuelLogs?: FuelLog[];
-        summary: FinancialSummary;
-      }>('/api/transactions/restore-backup', {
+      const { data, error: apiErr } = await safeFetchJson<RestoreBackupResult>('/api/transactions/restore-backup', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -291,6 +329,9 @@ export const ExcelBackupRestoreModal: React.FC<ExcelBackupRestoreModalProps> = (
           categoriesRows: parsedCatRows,
           udhaarRows: parsedUdhaarRows,
           fuelRows: parsedFuelRows,
+          investmentsRows: parsedInvRows,
+          savingsRows: parsedSavRows,
+          emisRows: parsedEmiRows,
           fileBase64: fileBase64,
           replaceExisting,
         }),
@@ -384,11 +425,11 @@ export const ExcelBackupRestoreModal: React.FC<ExcelBackupRestoreModalProps> = (
               <h2 className="text-base sm:text-lg font-bold text-white font-display flex items-center gap-2">
                 EXCEL BACKUP & RESTORE
                 <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-cyan-950 border border-cyan-500/40 text-cyan-300">
-                  ALL-IN-ONE
+                  ALL-IN-ONE 10-MODULE
                 </span>
               </h2>
               <p className="text-xs text-slate-400 font-mono mt-0.5">
-                Puri transaction list, categories, monthly budgets aur khate ka backup 1-click me download ya restore karein.
+                Transactions, Categories, Udhaar Khata, Fuel, Investments, Transfers, EMIs aur Family Khate ka complete backup.
               </p>
             </div>
           </div>
@@ -469,13 +510,13 @@ export const ExcelBackupRestoreModal: React.FC<ExcelBackupRestoreModalProps> = (
                 <div className="flex items-start justify-between gap-3">
                   <div className="space-y-1">
                     <span className="text-[10px] font-bold text-cyan-400 uppercase tracking-wider bg-cyan-950/80 px-2 py-0.5 rounded-full border border-cyan-500/40">
-                      RECOMMENDED • COMPLETE ACCOUNT ARCHIVE
+                      RECOMMENDED • COMPLETE 10-SHEET ARCHIVE
                     </span>
                     <h3 className="text-sm sm:text-base font-bold text-white mt-1">
                       1-Click Complete Account Excel Backup (.xlsx)
                     </h3>
                     <p className="text-xs text-slate-300 leading-relaxed">
-                      Ek hi multi-sheet Excel file me aapke khate ka pura data download ho jayega: <b>Transactions</b>, <b>Custom Categories</b>, <b>Monthly Budgets</b>, <b>Udhaar Khata (Lent & Borrow)</b>, <b>Fuel & Mileage Tracker</b>, <b>Gullak Savings</b>, aur <b>Linked Telegram Family Members</b>.
+                      Ek hi multi-sheet Excel file me aapke khate ka complete data download ho jayega: <b>Transactions</b>, <b>Categories & Budgets</b>, <b>Udhaar Khata (Diya / Liya)</b>, <b>Fuel & Mileage Logs</b>, <b>Investments Portfolio (RD/FD/MF)</b>, <b>Savings Transfers</b>, <b>Credit Card EMIs</b>, <b>Gullak Savings</b>, aur <b>Linked Telegram Family Members</b>.
                     </p>
                   </div>
                   <div className="w-12 h-12 rounded-2xl bg-emerald-950/80 border border-emerald-500/60 flex items-center justify-center text-emerald-400 shrink-0 shadow-lg">
@@ -483,41 +524,59 @@ export const ExcelBackupRestoreModal: React.FC<ExcelBackupRestoreModalProps> = (
                   </div>
                 </div>
 
-                {/* Account Summary Stats in Backup (6 modules) */}
+                {/* Account Summary Stats in Backup (9 modules) */}
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-xs pt-1 border-t border-slate-800">
                   <div className="p-2.5 rounded-xl bg-slate-950/80 border border-slate-800/80">
-                    <span className="text-[10px] text-slate-400 block flex items-center gap-1">
+                    <span className="text-[10px] text-slate-400 flex items-center gap-1">
                       <FileSpreadsheet className="w-3 h-3 text-cyan-400" /> TRANSACTIONS
                     </span>
                     <span className="font-bold text-white mt-0.5 block text-sm">{transactions.length} Records</span>
                   </div>
                   <div className="p-2.5 rounded-xl bg-slate-950/80 border border-slate-800/80">
-                    <span className="text-[10px] text-slate-400 block flex items-center gap-1">
+                    <span className="text-[10px] text-slate-400 flex items-center gap-1">
                       <Tag className="w-3 h-3 text-indigo-400" /> CATEGORIES
                     </span>
                     <span className="font-bold text-cyan-300 mt-0.5 block text-sm">{categories.length} Categories</span>
                   </div>
                   <div className="p-2.5 rounded-xl bg-slate-950/80 border border-slate-800/80">
-                    <span className="text-[10px] text-slate-400 block flex items-center gap-1">
+                    <span className="text-[10px] text-slate-400 flex items-center gap-1">
                       <ArrowLeftRight className="w-3 h-3 text-amber-400" /> UDHAAR KHATA
                     </span>
                     <span className="font-bold text-amber-300 mt-0.5 block text-sm">{udhaars.length} Records</span>
                   </div>
                   <div className="p-2.5 rounded-xl bg-slate-950/80 border border-slate-800/80">
-                    <span className="text-[10px] text-slate-400 block flex items-center gap-1">
+                    <span className="text-[10px] text-slate-400 flex items-center gap-1">
                       <Fuel className="w-3 h-3 text-emerald-400" /> FUEL & MILEAGE
                     </span>
                     <span className="font-bold text-emerald-300 mt-0.5 block text-sm">{fuelLogs.length} Logs</span>
                   </div>
                   <div className="p-2.5 rounded-xl bg-slate-950/80 border border-slate-800/80">
-                    <span className="text-[10px] text-slate-400 block flex items-center gap-1">
-                      <PiggyBank className="w-3 h-3 text-pink-400" /> GULLAK SAVINGS
+                    <span className="text-[10px] text-slate-400 flex items-center gap-1">
+                      <TrendingUp className="w-3 h-3 text-blue-400" /> INVESTMENTS (RD/FD)
                     </span>
-                    <span className="font-bold text-pink-300 mt-0.5 block text-sm">Active Piggy Bank</span>
+                    <span className="font-bold text-blue-300 mt-0.5 block text-sm">{investments.length} Plans</span>
                   </div>
                   <div className="p-2.5 rounded-xl bg-slate-950/80 border border-slate-800/80">
-                    <span className="text-[10px] text-slate-400 block flex items-center gap-1">
-                      <Users className="w-3 h-3 text-purple-400" /> KHATA & MEMBERS
+                    <span className="text-[10px] text-slate-400 flex items-center gap-1">
+                      <HeartHandshake className="w-3 h-3 text-rose-400" /> SAVINGS TRANSFERS
+                    </span>
+                    <span className="font-bold text-rose-300 mt-0.5 block text-sm">{savingsTransfers.length} Transfers</span>
+                  </div>
+                  <div className="p-2.5 rounded-xl bg-slate-950/80 border border-slate-800/80">
+                    <span className="text-[10px] text-slate-400 flex items-center gap-1">
+                      <CreditCard className="w-3 h-3 text-orange-400" /> CARD EMIs
+                    </span>
+                    <span className="font-bold text-orange-300 mt-0.5 block text-sm">{cardEmis.length} EMIs</span>
+                  </div>
+                  <div className="p-2.5 rounded-xl bg-slate-950/80 border border-slate-800/80">
+                    <span className="text-[10px] text-slate-400 flex items-center gap-1">
+                      <PiggyBank className="w-3 h-3 text-pink-400" /> GULLAK SAVINGS
+                    </span>
+                    <span className="font-bold text-pink-300 mt-0.5 block text-sm">Active Pot</span>
+                  </div>
+                  <div className="p-2.5 rounded-xl bg-slate-950/80 border border-slate-800/80">
+                    <span className="text-[10px] text-slate-400 flex items-center gap-1">
+                      <Users className="w-3 h-3 text-purple-400" /> FAMILY MEMBERS
                     </span>
                     <span className="font-bold text-purple-300 mt-0.5 block truncate text-xs">{currentUser?.name || 'Main User'} ({currentUser?.linkedMembers?.length || 1})</span>
                   </div>
@@ -529,7 +588,7 @@ export const ExcelBackupRestoreModal: React.FC<ExcelBackupRestoreModalProps> = (
                   className="w-full py-3.5 px-4 rounded-xl bg-gradient-to-r from-emerald-500 via-teal-500 to-cyan-500 hover:from-emerald-400 hover:to-cyan-400 text-slate-950 font-bold text-xs sm:text-sm flex items-center justify-center space-x-2.5 transition-all cursor-pointer shadow-lg shadow-emerald-950/60 group"
                 >
                   <Download className="w-5 h-5 stroke-[2.5] group-hover:translate-y-0.5 transition-transform" />
-                  <span>DOWNLOAD FULL 7-SHEET EXCEL BACKUP (.XLSX)</span>
+                  <span>DOWNLOAD FULL 10-SHEET EXCEL BACKUP (.XLSX)</span>
                 </button>
               </div>
 
@@ -565,7 +624,7 @@ export const ExcelBackupRestoreModal: React.FC<ExcelBackupRestoreModalProps> = (
               <div className="p-3.5 rounded-2xl bg-cyan-950/30 border border-cyan-500/30 flex items-start space-x-3 text-xs text-slate-300">
                 <Info className="w-4 h-4 text-cyan-400 shrink-0 mt-0.5" />
                 <p className="leading-relaxed">
-                  Aap TeleExpense se download kiye gaye Excel (.xlsx) ya CSV file ko yahan upload karein. Isme <b>Transactions</b>, <b>Udhaar Khata</b>, <b>Fuel & Mileage Logs</b>, <b>Categories</b> aur <b>Budgets</b> sab automatic detect ho kar restore ho jayenge.
+                  Aap TeleExpense se download kiye gaye Excel (.xlsx) ya CSV file ko yahan upload karein. Isme <b>Transactions</b>, <b>Udhaar Khata</b>, <b>Fuel & Mileage</b>, <b>Investments</b>, <b>Transfers</b>, <b>Card EMIs</b>, <b>Categories</b> aur <b>Budgets</b> sab automatic detect ho kar restore ho jayenge.
                 </p>
               </div>
 
@@ -604,7 +663,7 @@ export const ExcelBackupRestoreModal: React.FC<ExcelBackupRestoreModalProps> = (
                       {file.name}
                     </span>
                     <span className="text-[11px] text-slate-400 mt-1 block">
-                      {parsedRows.length} transactions {parsedUdhaarRows.length > 0 ? `• ${parsedUdhaarRows.length} udhaar` : ''} {parsedFuelRows.length > 0 ? `• ${parsedFuelRows.length} fuel logs` : ''} mili hain • Click karke doosri file chuniye
+                      {parsedRows.length} transactions • {parsedUdhaarRows.length} udhaars • {parsedFuelRows.length} fuel logs • {parsedInvRows.length} investments • {parsedSavRows.length} transfers • {parsedEmiRows.length} EMIs
                     </span>
                   </div>
                 ) : (
@@ -613,7 +672,7 @@ export const ExcelBackupRestoreModal: React.FC<ExcelBackupRestoreModalProps> = (
                       Excel (.xlsx) ya CSV Backup File Yahan Upload Karein
                     </span>
                     <span className="text-[11px] text-slate-400 mt-1 block">
-                      Supports complete TeleExpense backups with Transactions, Udhaar, Fuel, Categories & Settings
+                      Supports complete TeleExpense 10-Sheet backups with Transactions, Udhaar, Fuel, Investments, EMIs, Categories & Settings
                     </span>
                   </div>
                 )}
@@ -628,7 +687,7 @@ export const ExcelBackupRestoreModal: React.FC<ExcelBackupRestoreModalProps> = (
                     </span>
                     {isSnapshotDetected && (
                       <span className="px-2 py-0.5 rounded-full text-[9px] font-bold bg-emerald-950 text-emerald-300 border border-emerald-500/50 flex items-center gap-1">
-                        <Sparkles className="w-3 h-3" /> All-in-One High-Fidelity Snapshot
+                        <Sparkles className="w-3 h-3" /> All-in-One High-Fidelity Snapshot (v4.0)
                       </span>
                     )}
                   </div>
@@ -653,6 +712,24 @@ export const ExcelBackupRestoreModal: React.FC<ExcelBackupRestoreModalProps> = (
                       <span className="px-2.5 py-1 rounded-lg bg-emerald-950/80 border border-emerald-500/40 text-emerald-300 flex items-center gap-1.5">
                         <Fuel className="w-3.5 h-3.5" />
                         <b>{parsedFuelRows.length}</b> Fuel Logs
+                      </span>
+                    )}
+                    {parsedInvRows.length > 0 && (
+                      <span className="px-2.5 py-1 rounded-lg bg-blue-950/80 border border-blue-500/40 text-blue-300 flex items-center gap-1.5">
+                        <TrendingUp className="w-3.5 h-3.5" />
+                        <b>{parsedInvRows.length}</b> Investments
+                      </span>
+                    )}
+                    {parsedSavRows.length > 0 && (
+                      <span className="px-2.5 py-1 rounded-lg bg-rose-950/80 border border-rose-500/40 text-rose-300 flex items-center gap-1.5">
+                        <HeartHandshake className="w-3.5 h-3.5" />
+                        <b>{parsedSavRows.length}</b> Transfers
+                      </span>
+                    )}
+                    {parsedEmiRows.length > 0 && (
+                      <span className="px-2.5 py-1 rounded-lg bg-orange-950/80 border border-orange-500/40 text-orange-300 flex items-center gap-1.5">
+                        <CreditCard className="w-3.5 h-3.5" />
+                        <b>{parsedEmiRows.length}</b> EMIs
                       </span>
                     )}
                     {detectedSheets.length > 1 && (
@@ -686,7 +763,7 @@ export const ExcelBackupRestoreModal: React.FC<ExcelBackupRestoreModalProps> = (
                       <span className="text-xs font-bold">Mojuda Data me Jodein (Append)</span>
                     </div>
                     <p className="text-[10px] text-slate-400 mt-1">
-                      Purane transactions safe rahenge, naye records add ho jayenge.
+                      Purane records safe rahenge, naye records merge ho jayenge.
                     </p>
                   </button>
 
@@ -704,20 +781,20 @@ export const ExcelBackupRestoreModal: React.FC<ExcelBackupRestoreModalProps> = (
                       <span className="text-xs font-bold">Fresh Restore (Replace All)</span>
                     </div>
                     <p className="text-[10px] text-slate-400 mt-1">
-                      Pehle purane records clear karke backup wala pura data load karega.
+                      Pehle purane records clear karke backup ka fresh data load karega.
                     </p>
                   </button>
                 </div>
               </div>
 
-              {/* Parsed Preview Table with Tabs */}
-              {(parsedRows.length > 0 || parsedUdhaarRows.length > 0 || parsedFuelRows.length > 0) && (
+              {/* Parsed Preview Table with Multi-Tabs */}
+              {(parsedRows.length > 0 || parsedUdhaarRows.length > 0 || parsedFuelRows.length > 0 || parsedInvRows.length > 0 || parsedSavRows.length > 0 || parsedEmiRows.length > 0) && (
                 <div className="space-y-2">
                   <div className="flex items-center justify-between text-xs text-slate-400 flex-wrap gap-2">
-                    <div className="flex items-center space-x-2">
+                    <div className="flex items-center space-x-1.5 overflow-x-auto pb-1 max-w-full">
                       <button
                         onClick={() => setPreviewTab('transactions')}
-                        className={`px-2.5 py-1 rounded-lg text-[10px] font-bold transition-all cursor-pointer ${
+                        className={`px-2.5 py-1 rounded-lg text-[10px] font-bold transition-all cursor-pointer shrink-0 ${
                           previewTab === 'transactions' ? 'bg-cyan-950 text-cyan-300 border border-cyan-500/50' : 'text-slate-400 hover:text-white'
                         }`}
                       >
@@ -726,7 +803,7 @@ export const ExcelBackupRestoreModal: React.FC<ExcelBackupRestoreModalProps> = (
                       {parsedUdhaarRows.length > 0 && (
                         <button
                           onClick={() => setPreviewTab('udhaars')}
-                          className={`px-2.5 py-1 rounded-lg text-[10px] font-bold transition-all cursor-pointer ${
+                          className={`px-2.5 py-1 rounded-lg text-[10px] font-bold transition-all cursor-pointer shrink-0 ${
                             previewTab === 'udhaars' ? 'bg-amber-950 text-amber-300 border border-amber-500/50' : 'text-slate-400 hover:text-white'
                           }`}
                         >
@@ -736,11 +813,41 @@ export const ExcelBackupRestoreModal: React.FC<ExcelBackupRestoreModalProps> = (
                       {parsedFuelRows.length > 0 && (
                         <button
                           onClick={() => setPreviewTab('fuel')}
-                          className={`px-2.5 py-1 rounded-lg text-[10px] font-bold transition-all cursor-pointer ${
+                          className={`px-2.5 py-1 rounded-lg text-[10px] font-bold transition-all cursor-pointer shrink-0 ${
                             previewTab === 'fuel' ? 'bg-emerald-950 text-emerald-300 border border-emerald-500/50' : 'text-slate-400 hover:text-white'
                           }`}
                         >
-                          Fuel Logs ({parsedFuelRows.length})
+                          Fuel ({parsedFuelRows.length})
+                        </button>
+                      )}
+                      {parsedInvRows.length > 0 && (
+                        <button
+                          onClick={() => setPreviewTab('investments')}
+                          className={`px-2.5 py-1 rounded-lg text-[10px] font-bold transition-all cursor-pointer shrink-0 ${
+                            previewTab === 'investments' ? 'bg-blue-950 text-blue-300 border border-blue-500/50' : 'text-slate-400 hover:text-white'
+                          }`}
+                        >
+                          Investments ({parsedInvRows.length})
+                        </button>
+                      )}
+                      {parsedSavRows.length > 0 && (
+                        <button
+                          onClick={() => setPreviewTab('savings')}
+                          className={`px-2.5 py-1 rounded-lg text-[10px] font-bold transition-all cursor-pointer shrink-0 ${
+                            previewTab === 'savings' ? 'bg-rose-950 text-rose-300 border border-rose-500/50' : 'text-slate-400 hover:text-white'
+                          }`}
+                        >
+                          Transfers ({parsedSavRows.length})
+                        </button>
+                      )}
+                      {parsedEmiRows.length > 0 && (
+                        <button
+                          onClick={() => setPreviewTab('emis')}
+                          className={`px-2.5 py-1 rounded-lg text-[10px] font-bold transition-all cursor-pointer shrink-0 ${
+                            previewTab === 'emis' ? 'bg-orange-950 text-orange-300 border border-orange-500/50' : 'text-slate-400 hover:text-white'
+                          }`}
+                        >
+                          EMIs ({parsedEmiRows.length})
                         </button>
                       )}
                     </div>
@@ -872,8 +979,138 @@ export const ExcelBackupRestoreModal: React.FC<ExcelBackupRestoreModalProps> = (
                       </table>
                     </div>
                   )}
+
+                  {previewTab === 'investments' && parsedInvRows.length > 0 && (
+                    <div className="max-h-44 overflow-y-auto rounded-xl border border-slate-800 bg-slate-950/90 text-[11px]">
+                      <table className="w-full text-left">
+                        <thead className="bg-slate-900/90 text-slate-400 sticky top-0 border-b border-slate-800 text-[10px]">
+                          <tr>
+                            <th className="p-2">Tareeq</th>
+                            <th className="p-2">Type</th>
+                            <th className="p-2">Plan Name</th>
+                            <th className="p-2">Amount</th>
+                            <th className="p-2">Account</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-900 text-slate-300">
+                          {parsedInvRows.slice(0, 4).map((row, idx) => {
+                            const date = row.Date || row.date || '—';
+                            const type = String(row.Type || row.type || 'RD').toUpperCase();
+                            const name = row['Investment Name'] || row.name || row.plan || '—';
+                            const amount = row['Amount (INR)'] || row.amount || '0';
+                            const account = row.Account || row.account || 'IC Bank';
+
+                            return (
+                              <tr key={idx} className="hover:bg-slate-900/50">
+                                <td className="p-2 whitespace-nowrap text-slate-400">{String(date)}</td>
+                                <td className="p-2 whitespace-nowrap">
+                                  <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-blue-950 text-blue-300 border border-blue-500/30">
+                                    {type}
+                                  </span>
+                                </td>
+                                <td className="p-2 font-bold text-white whitespace-nowrap">{String(name)}</td>
+                                <td className="p-2 font-bold text-blue-400 whitespace-nowrap">₹{amount}</td>
+                                <td className="p-2 text-slate-300 whitespace-nowrap">{String(account)}</td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+
+                  {previewTab === 'savings' && parsedSavRows.length > 0 && (
+                    <div className="max-h-44 overflow-y-auto rounded-xl border border-slate-800 bg-slate-950/90 text-[11px]">
+                      <table className="w-full text-left">
+                        <thead className="bg-slate-900/90 text-slate-400 sticky top-0 border-b border-slate-800 text-[10px]">
+                          <tr>
+                            <th className="p-2">Tareeq</th>
+                            <th className="p-2">Recipient</th>
+                            <th className="p-2">Amount</th>
+                            <th className="p-2">From Account</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-900 text-slate-300">
+                          {parsedSavRows.slice(0, 4).map((row, idx) => {
+                            const date = row.Date || row.date || '—';
+                            const recipient = row.Recipient || row.recipient || "Wife's Account";
+                            const amount = row['Amount (INR)'] || row.amount || '0';
+                            const fromAcc = row['From Account'] || row.fromAccount || 'AX Bank';
+
+                            return (
+                              <tr key={idx} className="hover:bg-slate-900/50">
+                                <td className="p-2 whitespace-nowrap text-slate-400">{String(date)}</td>
+                                <td className="p-2 font-bold text-white whitespace-nowrap">{String(recipient)}</td>
+                                <td className="p-2 font-bold text-rose-400 whitespace-nowrap">₹{amount}</td>
+                                <td className="p-2 text-slate-300 whitespace-nowrap">{String(fromAcc)}</td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+
+                  {previewTab === 'emis' && parsedEmiRows.length > 0 && (
+                    <div className="max-h-44 overflow-y-auto rounded-xl border border-slate-800 bg-slate-950/90 text-[11px]">
+                      <table className="w-full text-left">
+                        <thead className="bg-slate-900/90 text-slate-400 sticky top-0 border-b border-slate-800 text-[10px]">
+                          <tr>
+                            <th className="p-2">Card</th>
+                            <th className="p-2">EMI Title</th>
+                            <th className="p-2">Monthly Amt</th>
+                            <th className="p-2">Tenure</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-900 text-slate-300">
+                          {parsedEmiRows.slice(0, 4).map((row, idx) => {
+                            const cardId = row['Card ID'] || row.cardId || 'SBI CC 5733';
+                            const title = row['EMI Title'] || row.title || 'EMI';
+                            const amount = row['Monthly Amount (INR)'] || row.monthlyAmount || '0';
+                            const tenure = `${row['Paid Months'] || row.paidMonths || 0}/${row['Total Months'] || row.totalMonths || 12} Mos`;
+
+                            return (
+                              <tr key={idx} className="hover:bg-slate-900/50">
+                                <td className="p-2 text-cyan-300 whitespace-nowrap">{String(cardId)}</td>
+                                <td className="p-2 font-bold text-white whitespace-nowrap">{String(title)}</td>
+                                <td className="p-2 font-bold text-orange-400 whitespace-nowrap">₹{amount}/mo</td>
+                                <td className="p-2 text-slate-300 whitespace-nowrap">{tenure}</td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
                 </div>
               )}
+
+              {/* Action Buttons */}
+              <div className="flex gap-3 pt-2">
+                <button
+                  onClick={onClose}
+                  className="flex-1 py-3 px-4 rounded-xl border border-slate-700 bg-slate-900 hover:bg-slate-800 text-slate-300 text-xs font-bold transition-all cursor-pointer"
+                >
+                  CANCEL
+                </button>
+                <button
+                  onClick={handleRestore}
+                  disabled={isProcessing || (!file && parsedRows.length === 0 && parsedUdhaarRows.length === 0 && parsedFuelRows.length === 0 && parsedInvRows.length === 0 && parsedSavRows.length === 0 && parsedEmiRows.length === 0)}
+                  className="flex-1 py-3 px-4 rounded-xl bg-gradient-to-r from-cyan-500 to-indigo-600 hover:from-cyan-400 hover:to-indigo-500 text-white text-xs font-bold transition-all cursor-pointer shadow-lg shadow-cyan-950/50 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center space-x-2"
+                >
+                  {isProcessing ? (
+                    <>
+                      <RefreshCw className="w-4 h-4 animate-spin" />
+                      <span>RESTORING 10-MODULE BACKUP...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Upload className="w-4 h-4" />
+                      <span>CONFIRM & RESTORE COMPLETE DATA</span>
+                    </>
+                  )}
+                </button>
+              </div>
 
             </div>
           )}
@@ -907,7 +1144,7 @@ export const ExcelBackupRestoreModal: React.FC<ExcelBackupRestoreModalProps> = (
                       <p className="text-[10px] text-slate-400">
                         {storageStatus?.isPostgresConnected
                           ? 'Data Render container restart hone par bhi 100% safe aur permanent rahega.'
-                          : 'Render Free Tier restart par local disk wipe ho jati hai. Neeche diye steps se PostgreSQL connect karein!'}
+                          : 'Render free tier container restart hone par disk reset ho sakti hai.'}
                       </p>
                     </div>
                   </div>
@@ -915,178 +1152,105 @@ export const ExcelBackupRestoreModal: React.FC<ExcelBackupRestoreModalProps> = (
                   <button
                     onClick={fetchStorageStatus}
                     disabled={isLoadingStorage}
-                    className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs flex items-center space-x-1.5 transition-all cursor-pointer"
+                    className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs flex items-center space-x-1 cursor-pointer"
                   >
                     <RefreshCw className={`w-3.5 h-3.5 ${isLoadingStorage ? 'animate-spin' : ''}`} />
-                    <span className="text-[10px]">REFRESH</span>
+                    <span>Refresh</span>
                   </button>
                 </div>
 
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-2 border-t border-slate-800/80 text-xs">
-                  <div className="p-2 rounded-xl bg-slate-950 border border-slate-800">
-                    <span className="text-[9px] text-slate-400 block">DB CONNECTED</span>
-                    <span className={`font-bold mt-0.5 block ${storageStatus?.isPostgresConnected ? 'text-emerald-400' : 'text-amber-400'}`}>
-                      {storageStatus?.isPostgresConnected ? 'YES (Active)' : 'NO (Using Disk)'}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-2 border-t border-slate-800/80 text-[11px]">
+                  <div className="p-2 rounded-lg bg-slate-950/60">
+                    <span className="text-[9px] text-slate-400 block">DB Connected</span>
+                    <span className={`font-bold ${storageStatus?.isPostgresConnected ? 'text-emerald-400' : 'text-amber-400'}`}>
+                      {storageStatus?.isPostgresConnected ? 'CONNECTED' : 'DISCONNECTED'}
                     </span>
                   </div>
-                  <div className="p-2 rounded-xl bg-slate-950 border border-slate-800">
-                    <span className="text-[9px] text-slate-400 block">DATA DIRECTORY</span>
-                    <span className="font-bold text-cyan-300 mt-0.5 block truncate text-[10px]">
-                      {storageStatus?.dataDir || '.data'}
-                    </span>
+                  <div className="p-2 rounded-lg bg-slate-950/60">
+                    <span className="text-[9px] text-slate-400 block">Total Users</span>
+                    <span className="font-bold text-white">{storageStatus?.usersCount || 1} Registered</span>
                   </div>
-                  <div className="p-2 rounded-xl bg-slate-950 border border-slate-800">
-                    <span className="text-[9px] text-slate-400 block">TOTAL USERS</span>
-                    <span className="font-bold text-white mt-0.5 block">{storageStatus?.usersCount || 1} Accounts</span>
+                  <div className="p-2 rounded-lg bg-slate-950/60">
+                    <span className="text-[9px] text-slate-400 block">Active Ledger</span>
+                    <span className="font-bold text-cyan-300">{storageStatus?.totalTransactions || transactions.length} Txs</span>
                   </div>
-                  <div className="p-2 rounded-xl bg-slate-950 border border-slate-800">
-                    <span className="text-[9px] text-slate-400 block">TOTAL TXS</span>
-                    <span className="font-bold text-white mt-0.5 block">{storageStatus?.totalTransactions || transactions.length} Records</span>
+                  <div className="p-2 rounded-lg bg-slate-950/60">
+                    <span className="text-[9px] text-slate-400 block">Storage Path</span>
+                    <span className="font-bold text-slate-300 truncate block">{storageStatus?.isCustomDataDir ? 'Persistent Mount' : '.data (Local)'}</span>
                   </div>
                 </div>
               </div>
 
-              {/* Step by Step Guide: Method 1 - Neon.tech */}
-              <div className="p-4 rounded-2xl bg-gradient-to-br from-slate-900 to-cyan-950/40 border border-cyan-500/40 space-y-3">
-                <div className="flex items-center justify-between flex-wrap gap-2">
-                  <div className="flex items-center space-x-2">
-                    <span className="w-5 h-5 rounded-full bg-emerald-500 text-slate-950 flex items-center justify-center text-[11px] font-bold">1</span>
-                    <h4 className="font-bold text-white text-xs">
-                      RECOMMENDED: NEON.TECH (LIFETIME FREE • NO 30-DAY EXPIRY)
-                    </h4>
+              {/* PostgreSQL Sync Button if connected */}
+              {storageStatus?.isPostgresConnected && (
+                <div className="p-3.5 rounded-2xl bg-emerald-950/30 border border-emerald-500/30 flex items-center justify-between gap-3">
+                  <div className="space-y-0.5">
+                    <h5 className="text-xs font-bold text-emerald-300 flex items-center gap-1.5">
+                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" /> PostgreSQL Sync Active
+                    </h5>
+                    <p className="text-[10px] text-slate-400">
+                      Har transaction, udhaar, fuel, category aur budget live PostgreSQL me auto-save hota hai.
+                    </p>
                   </div>
-                  <span className="text-[10px] text-emerald-300 bg-emerald-950/80 border border-emerald-500/50 px-2 py-0.5 rounded-full font-bold">
-                    PERMANENT FREE TIER
-                  </span>
+                  <button
+                    onClick={handleSyncToPostgres}
+                    disabled={isSyncingDb}
+                    className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold text-xs shrink-0 flex items-center space-x-1.5 cursor-pointer disabled:opacity-50"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${isSyncingDb ? 'animate-spin' : ''}`} />
+                    <span>Sync Now</span>
+                  </button>
+                </div>
+              )}
+
+              {/* Setup Guide for Render PostgreSQL */}
+              <div className="p-4 rounded-2xl bg-slate-950/90 border border-slate-800 space-y-3">
+                <div className="flex items-center space-x-2 text-xs font-bold text-cyan-400">
+                  <Sparkles className="w-4 h-4" />
+                  <span>RENDER PAR PERMANENT POSTGRESQL KAISE JODEIN:</span>
                 </div>
 
-                <p className="text-[11px] text-slate-300 leading-relaxed">
-                  Render ka apna free PostgreSQL 30 days me expire ho jata hai. Isliye <b>Neon (<a href="https://neon.tech" target="_blank" rel="noreferrer" className="text-cyan-400 underline font-semibold inline-flex items-center gap-0.5">neon.tech <ExternalLink className="w-3 h-3" /></a>)</b> sabse best aur permanent solution hai (0.5GB Free Forever, No Credit Card needed).
-                </p>
-
-                <div className="space-y-2 text-xs text-slate-300 leading-relaxed">
-                  <div className="p-2.5 rounded-xl bg-slate-950/80 border border-slate-800/80 flex items-start space-x-2">
-                    <span className="text-emerald-400 font-bold shrink-0">Step 1:</span>
+                <div className="space-y-2 text-[11px] text-slate-300">
+                  <div className="flex items-start space-x-2">
+                    <span className="w-5 h-5 rounded-full bg-cyan-950 text-cyan-300 border border-cyan-500/40 flex items-center justify-center text-[10px] font-bold shrink-0 mt-0.5">1</span>
                     <p>
-                      <a href="https://neon.tech" target="_blank" rel="noreferrer" className="text-cyan-400 font-bold underline inline-flex items-center gap-0.5">Neon.tech <ExternalLink className="w-3 h-3" /></a> par jayein aur GitHub / Google se Free Account create karein.
+                      Render Dashboard (<a href="https://dashboard.render.com" target="_blank" rel="noreferrer" className="text-cyan-400 underline inline-flex items-center gap-0.5">dashboard.render.com <ExternalLink className="w-3 h-3" /></a>) par jaakar <b>New +</b> button dabayein aur <b>PostgreSQL</b> select karein (Free tier choose karein).
                     </p>
                   </div>
 
-                  <div className="p-2.5 rounded-xl bg-slate-950/80 border border-slate-800/80 flex items-start space-x-2">
-                    <span className="text-emerald-400 font-bold shrink-0">Step 2:</span>
+                  <div className="flex items-start space-x-2">
+                    <span className="w-5 h-5 rounded-full bg-cyan-950 text-cyan-300 border border-cyan-500/40 flex items-center justify-center text-[10px] font-bold shrink-0 mt-0.5">2</span>
                     <p>
-                      Dashboard par <b>"Create Project"</b> (name: <code>teleexpense</code>) karein. Screen par <b>"Connection Details"</b> me <code>postgres://...</code> URL copy karein.
+                      Database banne ke baad uski <b>Internal Database URL</b> (ya External URL) copy karein.
                     </p>
                   </div>
 
-                  <div className="p-2.5 rounded-xl bg-slate-950/80 border border-slate-800/80 flex items-start space-x-2">
-                    <span className="text-emerald-400 font-bold shrink-0">Step 3:</span>
-                    <div className="flex-1">
-                      <p>
-                        Render me apni Web Service ke <b>Environment</b> tab me jayein aur ye Variable add karein:
-                      </p>
-                      <div className="mt-2 p-2 rounded-lg bg-slate-900 border border-slate-700 flex items-center justify-between gap-2">
-                        <code className="text-emerald-400 text-[11px] font-mono select-all">
-                          DATABASE_URL = postgres://user:password@ep-xyz.neon.tech/neondb?sslmode=require
-                        </code>
-                        <button
-                          onClick={() => handleCopy('DATABASE_URL', 'db_url')}
-                          className="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-[10px] flex items-center gap-1 cursor-pointer shrink-0"
-                        >
-                          {copiedKey === 'db_url' ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
-                          {copiedKey === 'db_url' ? 'COPIED' : 'COPY KEY'}
-                        </button>
-                      </div>
-                    </div>
+                  <div className="flex items-start space-x-2">
+                    <span className="w-5 h-5 rounded-full bg-cyan-950 text-cyan-300 border border-cyan-500/40 flex items-center justify-center text-[10px] font-bold shrink-0 mt-0.5">3</span>
+                    <p>
+                      Apne Web Service ke <b>Environment</b> tab me <b>DATABASE_URL</b> variable add karke paste karein aur Save karein.
+                    </p>
                   </div>
                 </div>
 
-                {storageStatus?.isPostgresConfigured && (
-                  <div className="pt-2">
-                    <button
-                      onClick={handleSyncToPostgres}
-                      disabled={isSyncingDb}
-                      className="w-full py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold text-xs flex items-center justify-center space-x-2 transition-all cursor-pointer shadow-lg shadow-emerald-950/50"
-                    >
-                      {isSyncingDb ? (
-                        <>
-                          <RefreshCw className="w-4 h-4 animate-spin" />
-                          <span>DATABASE ME SYNC HO RHA HAI...</span>
-                        </>
-                      ) : (
-                        <>
-                          <Database className="w-4 h-4" />
-                          <span>ABHI KA SARA DATA NEON/POSTGRESQL ME SYNC KAREIN</span>
-                        </>
-                      )}
-                    </button>
+                {/* Quick Copy Env Var Box */}
+                <div className="p-3 rounded-xl bg-slate-900 border border-slate-700/80 flex items-center justify-between">
+                  <div className="font-mono text-xs text-indigo-300">
+                    <span className="text-slate-400">Environment Variable Name:</span> <b>DATABASE_URL</b>
                   </div>
-                )}
+                  <button
+                    onClick={() => handleCopy('DATABASE_URL', 'env_name')}
+                    className="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-[10px] flex items-center space-x-1 cursor-pointer"
+                  >
+                    {copiedKey === 'env_name' ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+                    <span>{copiedKey === 'env_name' ? 'Copied' : 'Copy'}</span>
+                  </button>
+                </div>
               </div>
 
             </div>
           )}
 
-        </div>
-
-        {/* Modal Footer */}
-        <div className="p-4 sm:p-5 border-t border-slate-800 bg-slate-950/90 flex items-center justify-between gap-3">
-          <button
-            onClick={onClose}
-            className="px-4 py-2.5 rounded-xl border border-slate-800 text-xs font-mono text-slate-400 hover:text-white hover:bg-slate-900 transition-all cursor-pointer"
-          >
-            BAND KAREIN
-          </button>
-
-          {activeTab === 'export' && (
-            <button
-              onClick={() => handleDownloadBackup('xlsx')}
-              className="px-5 py-2.5 rounded-xl text-xs font-mono font-bold bg-gradient-to-r from-emerald-500 to-cyan-500 hover:from-emerald-400 hover:to-cyan-400 text-slate-950 shadow-lg shadow-emerald-950/50 flex items-center space-x-2 transition-all cursor-pointer"
-            >
-              <Download className="w-4 h-4 stroke-[2.5]" />
-              <span>DOWNLOAD EXCEL BACKUP</span>
-            </button>
-          )}
-
-          {activeTab === 'restore' && (
-            <button
-              onClick={handleRestore}
-              disabled={isProcessing || (parsedRows.length === 0 && parsedCatRows.length === 0 && parsedUdhaarRows.length === 0 && parsedFuelRows.length === 0 && !fileBase64)}
-              className={`px-5 py-2.5 rounded-xl text-xs font-mono font-bold flex items-center space-x-2 shadow-lg transition-all cursor-pointer ${
-                (parsedRows.length > 0 || parsedCatRows.length > 0 || parsedUdhaarRows.length > 0 || parsedFuelRows.length > 0 || fileBase64) && !isProcessing
-                  ? 'bg-cyan-500 hover:bg-cyan-400 text-slate-950 shadow-cyan-950/50'
-                  : 'bg-slate-800 text-slate-500 cursor-not-allowed'
-              }`}
-            >
-              {isProcessing ? (
-                <>
-                  <RefreshCw className="w-4 h-4 animate-spin" />
-                  <span>RESTORING SAB KUCHH...</span>
-                </>
-              ) : (
-                <>
-                  <Upload className="w-4 h-4 stroke-[2.5]" />
-                  <span>
-                    {parsedRows.length > 0 || parsedUdhaarRows.length > 0 || parsedFuelRows.length > 0
-                      ? `RESTORE SAB KUCHH (${parsedRows.length + parsedUdhaarRows.length + parsedFuelRows.length} RECORDS)`
-                      : fileBase64
-                      ? 'RESTORE EXCEL BACKUP'
-                      : 'FILE CHUNIYE'}
-                  </span>
-                </>
-              )}
-            </button>
-          )}
-
-          {activeTab === 'storage' && (
-            <button
-              onClick={() => setActiveTab('export')}
-              className="px-4 py-2.5 rounded-xl bg-cyan-950 border border-cyan-500/50 text-cyan-300 text-xs font-mono font-bold hover:bg-cyan-900/60 transition-all cursor-pointer flex items-center gap-1.5"
-            >
-              <Download className="w-3.5 h-3.5" />
-              <span>BACKUP DOWNLOAD PAR JAYEIN</span>
-            </button>
-          )}
         </div>
 
       </div>

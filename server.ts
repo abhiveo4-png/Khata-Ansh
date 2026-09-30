@@ -72,6 +72,8 @@ export interface LinkedMember {
   linkedAt: string;
 }
 
+export type UserRole = 'owner' | 'family';
+
 export interface PendingMemberRequest {
   id: string; // e.g. "req_123456789"
   chatId: string;
@@ -108,6 +110,7 @@ export interface Transaction {
   date: string; // YYYY-MM-DD
   time?: string;
   paymentMethod?: PaymentMethod;
+  account?: string;
   source: 'telegram' | 'manual' | 'simulator' | 'import';
   telegramChatId?: string;
   telegramMessageId?: number;
@@ -115,6 +118,49 @@ export interface Transaction {
   rawMessage?: string;
   createdAt: string;
   tags?: string[];
+  isReimbursement?: boolean;
+  reimbursementStatus?: 'pending' | 'settled';
+  isSavingsTransfer?: boolean;
+  isInvestment?: boolean;
+}
+
+export interface CardEmi {
+  id: string;
+  userId: string;
+  cardId: string;
+  title: string;
+  monthlyAmount: number;
+  totalMonths: number;
+  paidMonths: number;
+  dueDay: number;
+  startDate: string;
+  notes?: string;
+  createdAt: string;
+}
+
+export interface SavingsTransfer {
+  id: string;
+  userId: string;
+  amount: number;
+  date: string;
+  recipient: string;
+  fromAccount: string;
+  notes?: string;
+  createdAt: string;
+}
+
+export interface InvestmentRecord {
+  id: string;
+  userId: string;
+  type: 'RD' | 'FD' | 'Mutual Fund' | 'Gold' | 'PPF' | 'Other';
+  name: string;
+  amount: number;
+  account: string;
+  date: string;
+  maturityDate?: string;
+  interestRate?: number;
+  notes?: string;
+  createdAt: string;
 }
 
 export interface CategoryDef {
@@ -171,6 +217,10 @@ export interface BotConfig {
 export interface FinancialSummary {
   totalIncome: number;
   totalExpense: number;
+  personalExpense?: number;
+  pendingReimbursements?: number;
+  savingsTransfers?: number;
+  investmentsTotal?: number;
   netSavings: number;
   savingsRate: number;
   transactionCount: number;
@@ -191,6 +241,7 @@ export interface UdhaarRecord {
   date: string; // YYYY-MM-DD
   time?: string;
   status: 'pending' | 'settled';
+  account?: string;
   settledAt?: string;
   createdAt: string;
 }
@@ -312,6 +363,26 @@ export const DEFAULT_CATEGORIES: CategoryDef[] = [
     color: '#6366F1',
     bgLight: 'bg-indigo-50 text-indigo-700 border-indigo-200',
     keywords: ['fees', 'course', 'books', 'udemy', 'college', 'school', 'tuition', 'coaching', 'subscription', 'exam', 'certifications'],
+    isDefault: true,
+  },
+  {
+    id: 'family_trip_pooja',
+    name: 'Family Trip & Pooja',
+    type: 'expense',
+    icon: 'Sparkles',
+    color: '#F59E0B',
+    bgLight: 'bg-amber-50 text-amber-700 border-amber-200',
+    keywords: ['pooja', 'puja', 'trip', 'family trip', 'mandir', 'prasad', 'pandit', 'samagri', 'havan', 'yatra', 'darshan', 'holiday', 'vacation', 'temple', 'religious', 'ganga', 'kedarnath', 'tirupati'],
+    isDefault: true,
+  },
+  {
+    id: 'reimbursement',
+    name: 'Reimbursement',
+    type: 'expense',
+    icon: 'Briefcase',
+    color: '#06B6D4',
+    bgLight: 'bg-cyan-50 text-cyan-700 border-cyan-200',
+    keywords: ['rim', 'reimburse', 'reimbursement', 'office claim', 'client trip', 'claim'],
     isDefault: true,
   },
   {
@@ -490,6 +561,9 @@ interface UserDataStore {
   budgets: CategoryBudget[];
   categories: CategoryDef[];
   udhaars?: UdhaarRecord[];
+  cardEmis?: CardEmi[];
+  savingsTransfers?: SavingsTransfer[];
+  investments?: InvestmentRecord[];
   fuelLogs?: FuelLog[];
   dataVersion?: number;
 }
@@ -915,6 +989,10 @@ function calculateUserSummary(userId: string): FinancialSummary {
 
   let totalIncome = 0;
   let totalExpense = 0;
+  let personalExpense = 0;
+  let pendingReimbursements = 0;
+  let savingsTransfers = 0;
+  let investmentsTotal = 0;
   let incomeCount = 0;
   let expenseCount = 0;
   let monthlySpent = 0;
@@ -931,13 +1009,29 @@ function calculateUserSummary(userId: string): FinancialSummary {
     } else {
       totalExpense += amt;
       expenseCount++;
-      if (t.date && t.date.startsWith(currentMonthPrefix)) {
-        monthlySpent += amt;
+
+      // Check if reimbursement
+      if (t.isReimbursement) {
+        if (t.reimbursementStatus !== 'settled') {
+          pendingReimbursements += amt;
+        }
+      } else if (t.isSavingsTransfer) {
+        savingsTransfers += amt;
+      } else {
+        // True personal expense that consumes budget
+        personalExpense += amt;
+        if (t.isInvestment) {
+          investmentsTotal += amt;
+        }
+        if (t.date && t.date.startsWith(currentMonthPrefix)) {
+          monthlySpent += amt;
+        }
       }
     }
   }
 
-  const netSavings = totalIncome - totalExpense;
+  // Formula as requested by user: Income - Personal Expense + Reimbursements
+  const netSavings = totalIncome - personalExpense + pendingReimbursements;
   const savingsRate = totalIncome > 0 ? Math.max(0, Math.round((netSavings / totalIncome) * 100)) : 0;
   const expenseCats = new Set((store.categories || []).filter(c => c.type !== 'income').map(c => c.name.toLowerCase()));
   const monthlyBudget = (store.budgets || [])
@@ -950,6 +1044,10 @@ function calculateUserSummary(userId: string): FinancialSummary {
   return {
     totalIncome,
     totalExpense,
+    personalExpense,
+    pendingReimbursements,
+    savingsTransfers,
+    investmentsTotal,
     netSavings,
     savingsRate,
     transactionCount: txList.length,
@@ -1437,6 +1535,57 @@ export function extractCustomTimeString(text: string): string | undefined {
   return undefined;
 }
 
+function detectAccountFromText(text: string): string | undefined {
+  if (!text) return undefined;
+  const lower = text.toLowerCase();
+  if (lower.includes('0000') || lower.includes('rupay') || (lower.includes('icic') && lower.includes('cc')) || lower.includes('icici cc') || lower.includes('icici card')) return 'ICICI CC 0000';
+  if (lower.includes('5733') || (lower.includes('sbi') && lower.includes('5733'))) return 'SBI CC 5733';
+  if (lower.includes('6526') || (lower.includes('sbi') && lower.includes('6526'))) return 'SBI CC 6526';
+  if (lower.includes('8210') || ((lower.includes('ax') || lower.includes('axis')) && lower.includes('8210'))) return 'AX CC 8210';
+  if (lower.includes('5376') || ((lower.includes('ax') || lower.includes('axis')) && lower.includes('5376'))) return 'AX CC 5376';
+  if (lower.includes('sbi cc') || lower.includes('sbi card')) return 'SBI CC 5733';
+  if (lower.includes('axis cc') || lower.includes('ax cc') || lower.includes('axis card')) return 'AX CC 8210';
+  if ((lower.includes('icici') && !lower.includes('cc') && !lower.includes('card')) || lower.includes('ic bank') || lower.includes('icici bank')) return 'IC Bank';
+  if ((lower.includes('axis') && !lower.includes('cc') && !lower.includes('card')) || lower.includes('ax bank') || lower.includes('axis bank')) return 'AX Bank';
+  if (lower.includes('cash') || lower.includes('nagad') || lower.includes('rokda') || lower.includes('haath me')) return 'Cash';
+  return undefined;
+}
+
+function detectReimbursement(text: string): boolean {
+  if (!text) return false;
+  const lower = text.toLowerCase();
+  const rimPattern = /\b(rim|reimburse|reimbursement|office claim|client trip|reimbursable|claim)\b/i;
+  return rimPattern.test(lower);
+}
+
+function detectSavingsTransfer(text: string): boolean {
+  if (!text) return false;
+  const lower = text.toLowerCase();
+  return (
+    lower.includes('wife') ||
+    lower.includes('patni') ||
+    lower.includes('savings transfer') ||
+    lower.includes('transfer to wife') ||
+    lower.includes('bachat wife')
+  );
+}
+
+function detectInvestment(text: string): boolean {
+  if (!text) return false;
+  const lower = text.toLowerCase();
+  const invPattern = /\b(rd|fd|fixed deposit|recurring deposit|mutual fund|sip|gold|ppf|nps|investment|invest)\b/i;
+  return invPattern.test(lower);
+}
+
+function detectFamilyTripPooja(text: string): boolean {
+  if (!text) return false;
+  const lower = text.toLowerCase();
+  if (detectReimbursement(text)) return false;
+  const poojaPattern = /\b(pooja|puja|prasad|pandit|mandir|samagri|havan|yatra|darshan|family trip|holiday|tour|vacation)\b/i;
+  const endsWithTripOrPooja = /(?:pooja|puja|trip)$/i.test(text.trim());
+  return poojaPattern.test(lower) || endsWithTripOrPooja;
+}
+
 // ---------------- Fallback Rule-based parser ----------------
 
 function parseFallback(rawText: string, userCategories: CategoryDef[]): Array<{
@@ -1447,6 +1596,11 @@ function parseFallback(rawText: string, userCategories: CategoryDef[]): Array<{
   date?: string;
   time?: string;
   paymentMethod?: PaymentMethod;
+  account?: string;
+  isReimbursement?: boolean;
+  reimbursementStatus?: 'pending' | 'settled';
+  isSavingsTransfer?: boolean;
+  isInvestment?: boolean;
 }> {
   const results: Array<{
     type: TransactionType;
@@ -1456,6 +1610,11 @@ function parseFallback(rawText: string, userCategories: CategoryDef[]): Array<{
     date?: string;
     time?: string;
     paymentMethod?: PaymentMethod;
+    account?: string;
+    isReimbursement?: boolean;
+    reimbursementStatus?: 'pending' | 'settled';
+    isSavingsTransfer?: boolean;
+    isInvestment?: boolean;
   }> = [];
 
   const text = rawText.trim();
@@ -1490,20 +1649,40 @@ function parseFallback(rawText: string, userCategories: CategoryDef[]): Array<{
 
     if (isNaN(amount) || amount <= 0) continue;
 
+    // Detect Account / Card / Cash
+    const detectedAccount = detectAccountFromText(seg) || 'ICICI CC 0000';
+
+    // Detect Reimbursement (Point 1: Rim, reimburse, claim)
+    const isReimbursement = /\b(rim|reimburse|reimbursement|office claim|client trip|reimbursable|claim)\b/i.test(seg);
+
+    // Detect Savings Transfer to Wife (Point 5)
+    const isSavingsTransfer = /\b(wife|patni|savings transfer|transfer to wife|bachat wife)\b/i.test(seg);
+
+    // Detect Investment (RD, FD, Mutual Fund)
+    const isInvestment = /\b(rd|fd|recurring deposit|fixed deposit|mutual fund|sip|gold|ppf|investment|invest)\b/i.test(seg);
+
+    // Detect Family Trip & Pooja (Point 4: ends with or contains pooja/trip)
+    const isFamilyTripPooja = !isReimbursement && (
+      /\b(pooja|puja|prasad|pandit|mandir|samagri|havan|yatra|darshan|family trip|holiday|tour)\b/i.test(seg) ||
+      /(?:pooja|puja|trip)$/i.test(seg.trim())
+    );
+
     // Detect Income vs Expense
     const isIncome =
-      segLower.includes('income') ||
-      segLower.includes('salary') ||
-      segLower.includes('credited') ||
-      segLower.includes('received') ||
-      segLower.includes('aaye') ||
-      segLower.includes('kamai') ||
-      segLower.includes('freelance') ||
-      segLower.includes('cashback') ||
-      segLower.includes('dividend') ||
-      segLower.includes('refund') ||
-      segLower.includes('bonus') ||
-      segLower.startsWith('+');
+      !isSavingsTransfer && (
+        segLower.includes('income') ||
+        segLower.includes('salary') ||
+        segLower.includes('credited') ||
+        segLower.includes('received') ||
+        segLower.includes('aaye') ||
+        segLower.includes('kamai') ||
+        segLower.includes('freelance') ||
+        segLower.includes('cashback') ||
+        segLower.includes('dividend') ||
+        segLower.includes('refund') ||
+        segLower.includes('bonus') ||
+        segLower.startsWith('+')
+      );
 
     const type: TransactionType = isIncome ? 'income' : 'expense';
 
@@ -1524,23 +1703,29 @@ function parseFallback(rawText: string, userCategories: CategoryDef[]): Array<{
       .trim();
 
     if (!cleanDesc || cleanDesc.length < 2) {
-      cleanDesc = isIncome ? 'Income' : 'Expense';
+      cleanDesc = isIncome ? 'Income' : (isReimbursement ? 'Office Reimbursement' : 'Expense');
     }
 
     // Match against user's categories
     let matchedCategory = 'Uncategorized';
-    const targetType = type;
-
-    // Exact or keyword match
-    for (const cat of userCategories) {
-      if (cat.type !== targetType && cat.type !== 'both') continue;
-      if (cat.name.toLowerCase() === cleanDesc.toLowerCase()) {
-        matchedCategory = cat.name;
-        break;
-      }
-      if (cat.keywords && cat.keywords.some(k => segLower.includes(k.toLowerCase()) || cleanDesc.toLowerCase().includes(k.toLowerCase()))) {
-        matchedCategory = cat.name;
-        break;
+    if (isReimbursement) {
+      matchedCategory = 'Reimbursement';
+    } else if (isFamilyTripPooja) {
+      matchedCategory = 'Family Trip & Pooja';
+    } else if (isInvestment) {
+      matchedCategory = 'Investments & Savings';
+    } else {
+      const targetType = type;
+      for (const cat of userCategories) {
+        if (cat.type !== targetType && cat.type !== 'both') continue;
+        if (cat.name.toLowerCase() === cleanDesc.toLowerCase()) {
+          matchedCategory = cat.name;
+          break;
+        }
+        if (cat.keywords && cat.keywords.some(k => segLower.includes(k.toLowerCase()) || cleanDesc.toLowerCase().includes(k.toLowerCase()))) {
+          matchedCategory = cat.name;
+          break;
+        }
       }
     }
 
@@ -1552,6 +1737,11 @@ function parseFallback(rawText: string, userCategories: CategoryDef[]): Array<{
       date: extractedDate || getAppDateTime().date,
       time: extractedTime,
       paymentMethod,
+      account: detectedAccount,
+      isReimbursement,
+      reimbursementStatus: isReimbursement ? 'pending' : undefined,
+      isSavingsTransfer,
+      isInvestment,
     });
   }
 
@@ -1571,6 +1761,11 @@ async function parseMessageWithGemini(
   date: string;
   time?: string;
   paymentMethod: PaymentMethod;
+  account?: string;
+  isReimbursement?: boolean;
+  reimbursementStatus?: 'pending' | 'settled';
+  isSavingsTransfer?: boolean;
+  isInvestment?: boolean;
   tags?: string[];
 }>> {
   const fallback = parseFallback(rawText, userCategories);
@@ -1590,40 +1785,31 @@ async function parseMessageWithGemini(
   if (!categoryNames.includes('Uncategorized')) {
     categoryNames.push('Uncategorized');
   }
+  if (!categoryNames.includes('Family Trip & Pooja')) {
+    categoryNames.push('Family Trip & Pooja');
+  }
+  if (!categoryNames.includes('Reimbursement')) {
+    categoryNames.push('Reimbursement');
+  }
 
   const prompt = `You are an expert financial transaction parser for an Indian personal ledger with full Hinglish, Hindi, and English support.
-Analyze the user's message (which can be in English, Hindi, or Hinglish, e.g. "30 dahi on 2 sep 26", "300 dahi cash 12:00", "500 petrol upi 4 pm", "15000 salary bank me aayi 1st sept", "1200 ki jeans kharidi card se kal", "sabzi 120 nagad 12 baje", "dost ko 500 diye shaam 6 baje", "kamla pasand 250 on 02/09/2026").
+Analyze the user's message (which can be in English, Hindi, or Hinglish, e.g. "Rim 100 Cab (ggn trip)", "300 dahi cash 12:00", "500 petrol upi 4 pm", "15000 salary bank me aayi 1st sept", "1200 ki jeans kharidi SBI 5733 se kal", "500 fal phool pooja", "1200 hotel stay trip", "5000 RD debit IC bank").
 
 Current date (Indian Standard Time): ${currentDate} (Year: ${new Date().getFullYear()})
 Current time (Indian Standard Time): ${nowInfo.time} (${nowInfo.time12})
 
 CRITICAL RULES:
 1. Extract every transaction (income or expense).
-2. Date Extraction:
-   - If the user specifies a date (e.g. "on 2 sep 26", "2 sep", "2nd september 2026", "15 aug", "02/09/2026", "2-9-2026", "2/9/26"), parse it into exact ISO format "YYYY-MM-DD" (e.g. "2026-09-02", "2026-08-15").
-   - If relative terms are used:
-     * "yesterday" or "kal" / "beeta kal" -> Calculate date for yesterday relative to ${currentDate}.
-     * "parso" / "2 days ago" -> Calculate date for 2 days before ${currentDate}.
-     * "today" or "aaj" or no date specified -> Use "${currentDate}".
-3. Time Extraction (Optional):
-   - If the user explicitly mentions a time in the text (e.g. "12:00", "12 baje", "12:30 pm", "4 pm", "shaam 6 baje", "raat 10:30 baje"):
-     convert it to 24-hour format "HH:mm" (e.g. "12:00", "12:30", "16:00", "18:00", "22:30").
-   - If no specific time is stated by the user, leave time as empty string.
-4. Payment Method Detection:
-   - If user wrote "cash", "nagad", "rokda", "haath me", "cash diya" -> paymentMethod: "Cash"
-   - If user wrote "upi", "gpay", "google pay", "phonepe", "paytm", "bhim", "scan", "qr" -> paymentMethod: "UPI"
-   - If user wrote "card", "visa", "mastercard", "credit", "debit", "swipe" -> paymentMethod: "Card"
-   - If user wrote "bank transfer", "net banking", "neft", "imps", "bank", "account me", "khate me" -> paymentMethod: "Bank Transfer"
-   - If not specified, default to "UPI" (or "Cash" if implied by small items).
-5. Category Assignment:
-   - Pick the best category from ONLY this exact list of the user's active categories:
-   ${JSON.stringify(categoryNames)}
-   - If the item does not clearly belong to any existing category, or if uncertain, set category to "Uncategorized".
-6. Clean description (in clean Title Case, DO NOT include the date, time, or amount in description):
-   - "30 dahi on 2 sep 26 12:00" -> description: "Dahi", amount: 30, date: "2026-09-02", time: "12:00", paymentMethod: "UPI", type: "expense"
-   - "500 petrol upi on 15 aug" -> description: "Petrol", amount: 500, date: "2026-08-15", paymentMethod: "UPI", type: "expense"
-   - "salary 50000 bank transfer 1st sep" -> description: "Salary", amount: 50000, date: "2026-09-01", paymentMethod: "Bank Transfer", type: "income"
-   - "200 chai yesterday cash 4 pm" -> description: "Chai", amount: 200, time: "16:00", paymentMethod: "Cash", type: "expense"
+2. Reimbursement detection:
+   - If user wrote "Rim", "reimburse", "claim", or "office claim", set isReimbursement: true, category: "Reimbursement" (or relevant transport/dining), reimbursementStatus: "pending".
+3. Family Trip & Pooja detection:
+   - If user ends description or mentions "pooja", "puja", "trip", "mandir", "yatra" (and NOT an office rim), category MUST BE "Family Trip & Pooja".
+4. Account detection:
+   - Pick account from: ["ICICI CC 0000", "SBI CC 5733", "SBI CC 6526", "AX CC 8210", "AX CC 5376", "IC Bank", "AX Bank", "Cash"]. Default: "ICICI CC 0000".
+5. Savings transfer detection:
+   - If user transfers money to wife ("transferred to wife", "savings to wife"), set isSavingsTransfer: true.
+6. Date & Time:
+   - Parse exact ISO date "YYYY-MM-DD" and 24-hr time "HH:mm".
 
 User message:
 """
@@ -1643,50 +1829,32 @@ ${rawText}
             category: { type: Type.STRING },
             description: { type: Type.STRING },
             date: { type: Type.STRING },
-            time: { type: Type.STRING, description: 'Optional 24-hour time HH:mm if mentioned, e.g. 12:00, 16:30' },
+            time: { type: Type.STRING },
             paymentMethod: { type: Type.STRING, enum: ['UPI', 'Cash', 'Card', 'Net Banking', 'Bank Transfer', 'Other'] },
-            tags: {
-              type: Type.ARRAY,
-              items: { type: Type.STRING },
-            },
+            account: { type: Type.STRING },
+            isReimbursement: { type: Type.BOOLEAN },
+            isSavingsTransfer: { type: Type.BOOLEAN },
+            isInvestment: { type: Type.BOOLEAN },
+            tags: { type: Type.ARRAY, items: { type: Type.STRING } },
           },
           required: ['type', 'amount', 'category', 'description', 'date', 'paymentMethod'],
         },
       },
     });
 
-    if (result && result.text) {
-      const parsed = JSON.parse(result.text.trim());
-      if (Array.isArray(parsed) && parsed.length > 0) {
-        return parsed.map((item: any) => {
-          let cat = item.category || 'Uncategorized';
-          if (!categoryNames.includes(cat)) {
-            cat = 'Uncategorized';
-          }
-          // Validate date format
-          let finalDate = item.date || currentDate;
-          if (!/^\d{4}-\d{2}-\d{2}$/.test(finalDate)) {
-            finalDate = parseCustomDateString(finalDate) || currentDate;
-          }
-          let parsedTime = typeof item.time === 'string' && /^\d{2}:\d{2}$/.test(item.time.trim()) ? item.time.trim() : undefined;
-          if (!parsedTime) {
-            parsedTime = extractCustomTimeString(rawText);
-          }
-          return {
-            type: item.type === 'income' ? 'income' : 'expense',
-            amount: Math.abs(Number(item.amount)),
-            category: cat,
-            description: item.description || 'Transaction',
-            date: finalDate,
-            time: parsedTime,
-            paymentMethod: (item.paymentMethod as PaymentMethod) || detectPaymentMethod(rawText),
-            tags: Array.isArray(item.tags) ? item.tags : [],
-          };
-        });
-      }
+    const parsedData = JSON.parse(result?.text || '[]');
+    if (Array.isArray(parsedData) && parsedData.length > 0) {
+      return parsedData.map((item: any) => ({
+        ...item,
+        account: item.account || detectAccountFromText(rawText) || 'ICICI CC 0000',
+        isReimbursement: Boolean(item.isReimbursement || detectReimbursement(rawText)),
+        reimbursementStatus: (item.isReimbursement || detectReimbursement(rawText)) ? 'pending' : undefined,
+        isSavingsTransfer: Boolean(item.isSavingsTransfer || detectSavingsTransfer(rawText)),
+        isInvestment: Boolean(item.isInvestment || detectInvestment(rawText)),
+      }));
     }
-  } catch (err: any) {
-    console.error('Gemini parsing error, falling back:', err.message);
+  } catch (err) {
+    console.error('Gemini parsing error, falling back:', err);
   }
 
   return fallback.map(f => ({
@@ -3783,6 +3951,41 @@ async function handleTelegramMessage(messageObj: any) {
   );
   const senderDisplayName = senderMember?.customAlias || senderMember?.name || userName || 'Telegram User';
 
+  // Check if sender is Owner vs Family Member
+  const isSenderOwner = 
+    String(targetUser.telegramChatId).trim() === chatId || 
+    (fromId && String(targetUser.telegramChatId).trim() === fromId) ||
+    (senderMember && senderMember.role === 'owner') ||
+    (!targetUser.telegramChatId && (!targetUser.linkedMembers || targetUser.linkedMembers.length === 0));
+
+  const isFamilyMemberSender = !isSenderOwner;
+
+  // Helper to calculate family member's personal spend & transaction metrics
+  const memberTransactions = userTransactions.filter(t => 
+    (t.telegramChatId && (t.telegramChatId === chatId || (fromId && t.telegramChatId === fromId))) ||
+    (t.telegramUser && senderDisplayName && (
+      t.telegramUser.toLowerCase() === senderDisplayName.toLowerCase() ||
+      t.telegramUser.toLowerCase().includes(senderDisplayName.toLowerCase()) ||
+      senderDisplayName.toLowerCase().includes(t.telegramUser.toLowerCase())
+    ))
+  );
+
+  const currentMonthStr = getAppDateTime().date.substring(0, 7);
+  const memberMonthSpent = memberTransactions
+    .filter(t => t.type === 'expense' && t.date && t.date.startsWith(currentMonthStr))
+    .reduce((s, t) => s + (Number(t.amount) || 0), 0);
+  const memberTotalSpent = memberTransactions
+    .filter(t => t.type === 'expense')
+    .reduce((s, t) => s + (Number(t.amount) || 0), 0);
+
+  // Helper for masking global amounts in Telegram with White Spoiler strip
+  const maskSensitiveAmount = (amt: number, isOwn: boolean = false): string => {
+    if (!isFamilyMemberSender || isOwn) {
+      return `₹${amt.toLocaleString('en-IN')}`;
+    }
+    return `<tg-spoiler>₹••••••</tg-spoiler>`;
+  };
+
   // Check for Excel / CSV Document Attachment in Telegram message
   if (messageObj.document && botToken) {
     const doc = messageObj.document;
@@ -3951,7 +4154,13 @@ Aap neeche diye gaye inline buttons par tap karein, keyboard buttons use karein 
 
   if (isBalanceQuery) {
     const summary = calculateUserSummary(userId);
-    const balanceMsg = `💰 <b>${targetUser.name} ka Net Bacha Hua Balance</b>\n\n💵 <b>Net Savings:</b> ₹${summary.netSavings.toLocaleString('en-IN')}\n🟢 <b>Kul Income (Kamai):</b> ₹${summary.totalIncome.toLocaleString('en-IN')}\n🔴 <b>Kul Kharcha:</b> ₹${summary.totalExpense.toLocaleString('en-IN')}\n📈 <b>Bachat Rate:</b> ${summary.savingsRate}%\n📝 <b>Total Transactions:</b> ${summary.transactionCount}\n\n💡 <i>Faltu kharcha aur bachat tips ke liye AI Faltu Kharcha button dabayein!</i>`;
+    let balanceMsg = '';
+    if (isSenderOwner) {
+      balanceMsg = `💰 <b>${targetUser.name} ka Net Bacha Hua Balance</b>\n\n💵 <b>Net Savings:</b> ₹${summary.netSavings.toLocaleString('en-IN')}\n🟢 <b>Kul Income (Kamai):</b> ₹${summary.totalIncome.toLocaleString('en-IN')}\n🔴 <b>Kul Kharcha:</b> ₹${summary.totalExpense.toLocaleString('en-IN')}\n📈 <b>Bachat Rate:</b> ${summary.savingsRate}%\n📝 <b>Total Transactions:</b> ${summary.transactionCount}\n\n💡 <i>Faltu kharcha aur bachat tips ke liye AI Faltu Kharcha button dabayein!</i>`;
+    } else {
+      balanceMsg = `💰 <b>Balance & Khata Summary</b> (👤 <b>${senderDisplayName}</b>)\n━━━━━━━━━━━━━━━━━━━━\n👤 <b>Aapka Is Mahine Ka Kharcha:</b> ₹${memberMonthSpent.toLocaleString('en-IN')}\n📝 <b>Aapke Kul Transactions:</b> ${memberTransactions.length}\n━━━━━━━━━━━━━━━━━━━━\n💵 <b>Net Family Balance:</b> <tg-spoiler>₹••••••</tg-spoiler>\n🟢 <b>Kul Family Income:</b> <tg-spoiler>₹••••••</tg-spoiler>\n🔴 <b>Kul Family Kharcha:</b> <tg-spoiler>₹••••••</tg-spoiler>\n\n🔒 <i>Family Privacy Active: Global balances and savings are covered with White Spoiler strip.</i>`;
+    }
+
     await sendTelegramReply(botToken, chatId, balanceMsg, {
       inline_keyboard: [
         [
@@ -3969,7 +4178,13 @@ Aap neeche diye gaye inline buttons par tap karein, keyboard buttons use karein 
 
   if (isSummaryQuery) {
     const summary = calculateUserSummary(userId);
-    const summaryMsg = `📊 <b>${targetUser.name} ka Financial Hisaab-Kitaab</b>\n\n🟢 <b>Kul Income (Kamai):</b> ₹${summary.totalIncome.toLocaleString('en-IN')}\n🔴 <b>Kul Kharcha:</b> ₹${summary.totalExpense.toLocaleString('en-IN')}\n💰 <b>Net Bacha Hua Balance:</b> ₹${summary.netSavings.toLocaleString('en-IN')}\n📈 <b>Bachat Rate:</b> ${summary.savingsRate}%\n📝 <b>Total Transactions:</b> ${summary.transactionCount}\n\n💡 <i>Faltu kharcha aur bachat tips ke liye <code>/tips</code> bhejein!</i>`;
+    let summaryMsg = '';
+    if (isSenderOwner) {
+      summaryMsg = `📊 <b>${targetUser.name} ka Financial Hisaab-Kitaab</b>\n\n🟢 <b>Kul Income (Kamai):</b> ₹${summary.totalIncome.toLocaleString('en-IN')}\n🔴 <b>Kul Kharcha:</b> ₹${summary.totalExpense.toLocaleString('en-IN')}\n💰 <b>Net Bacha Hua Balance:</b> ₹${summary.netSavings.toLocaleString('en-IN')}\n📈 <b>Bachat Rate:</b> ${summary.savingsRate}%\n📝 <b>Total Transactions:</b> ${summary.transactionCount}\n\n💡 <i>Faltu kharcha aur bachat tips ke liye <code>/tips</code> bhejein!</i>`;
+    } else {
+      summaryMsg = `📊 <b>Financial Summary Report</b> (👤 <b>${senderDisplayName}</b>)\n━━━━━━━━━━━━━━━━━━━━\n👤 <b>Aapka Is Mahine Ka Kharcha:</b> ₹${memberMonthSpent.toLocaleString('en-IN')}\n📝 <b>Aapke Records:</b> ${memberTransactions.length} transactions\n━━━━━━━━━━━━━━━━━━━━\n🟢 <b>Kul Family Income:</b> <tg-spoiler>₹••••••</tg-spoiler>\n🔴 <b>Kul Family Kharcha:</b> <tg-spoiler>₹••••••</tg-spoiler>\n💰 <b>Net Family Savings:</b> <tg-spoiler>₹••••••</tg-spoiler>\n\n🔒 <i>(Owner Privacy: Aapko sirf aapke transactions ka amount dikhayi dega)</i>`;
+    }
+
     await sendTelegramReply(botToken, chatId, summaryMsg, {
       inline_keyboard: [
         [
@@ -4006,6 +4221,14 @@ Aap neeche diye gaye inline buttons par tap karein, keyboard buttons use karein 
     lowerText.includes('budget bachat');
 
   if (isGullakQuery) {
+    if (isFamilyMemberSender) {
+      await sendTelegramReply(
+        botToken,
+        chatId,
+        `🐷 <b>Gullak Savings & Bachat Khata</b> (👤 <b>${senderDisplayName}</b>)\n━━━━━━━━━━━━━━━━━━━━\n💰 <b>Total Gullak Bachat:</b> <tg-spoiler>₹••••••</tg-spoiler>\n📈 <b>Is Mahine Ki Unspent Bachat:</b> <tg-spoiler>₹••••••</tg-spoiler>\n\n🔒 <i>Family Privacy Active: Master savings balance is protected by White Spoiler strip.</i>`
+      );
+      return;
+    }
     const gullakMsg = buildGullakReportTelegramMessage(userId, targetUser.name);
     await sendTelegramReply(botToken, chatId, gullakMsg, {
       inline_keyboard: [
@@ -4040,6 +4263,14 @@ Aap neeche diye gaye inline buttons par tap karein, keyboard buttons use karein 
     lowerText.includes('budget check');
 
   if (isBudgetQuery) {
+    if (isFamilyMemberSender) {
+      await sendTelegramReply(
+        botToken,
+        chatId,
+        `🎯 <b>Category Budget & Spending</b> (👤 <b>${senderDisplayName}</b>)\n━━━━━━━━━━━━━━━━━━━━\n👤 <b>Aapka Is Mahine Ka Kharcha:</b> ₹${memberMonthSpent.toLocaleString('en-IN')}\n💰 <b>Monthly Allocated Budget:</b> <tg-spoiler>₹••••••</tg-spoiler>\n🟢 <b>Bacha Budget:</b> <tg-spoiler>₹••••••</tg-spoiler>\n\n🔒 <i>Family Privacy: Budget limits and global balances are covered with White Spoiler strip.</i>`
+      );
+      return;
+    }
     const budgetMsg = buildCategoryBudgetTelegramMessage(userId, targetUser.name);
     await sendTelegramReply(botToken, chatId, budgetMsg, {
       inline_keyboard: [
@@ -4170,7 +4401,18 @@ ${tipsText}
     const list = recent.map((t, idx) => {
       const sign = t.type === 'income' ? '🟢 +' : '🔴 -';
       const pm = t.paymentMethod ? `[${t.paymentMethod}]` : '';
-      return `<b>[#${idx + 1}]</b> ${sign}₹${t.amount.toLocaleString('en-IN')} • <b>${t.description}</b> (${t.category}) ${pm} <i>${t.date}${t.time ? ` • ${t.time}` : ''}</i>`;
+      const isOwnTx = 
+        !isFamilyMemberSender ||
+        (t.telegramChatId && (t.telegramChatId === chatId || (fromId && t.telegramChatId === fromId))) ||
+        (t.telegramUser && senderDisplayName && (
+          t.telegramUser.toLowerCase() === senderDisplayName.toLowerCase() ||
+          t.telegramUser.toLowerCase().includes(senderDisplayName.toLowerCase()) ||
+          senderDisplayName.toLowerCase().includes(t.telegramUser.toLowerCase())
+        ));
+
+      const amtDisplay = isOwnTx ? `₹${t.amount.toLocaleString('en-IN')}` : `<tg-spoiler>₹••••••</tg-spoiler>`;
+      const userTag = t.telegramUser ? ` • <i>by ${t.telegramUser}</i>` : '';
+      return `<b>[#${idx + 1}]</b> ${sign}${amtDisplay} • <b>${t.description}</b> (${t.category}) ${pm}${userTag} <i>${t.date}${t.time ? ` • ${t.time}` : ''}</i>`;
     }).join('\n');
     await sendTelegramReply(botToken, chatId, `📝 <b>Haal hi ke Transactions:</b>\n\n${list}\n\n💡 <i>Tip: Item #1 ko delete karne ke liye neeche Undo button dabayein</i>`, {
       inline_keyboard: [
@@ -5130,6 +5372,11 @@ ${personNet > 0
         date: finalDate,
         time: finalTime,
         paymentMethod: parsed.paymentMethod,
+        account: parsed.account || detectAccountFromText(itemRaw) || 'ICICI CC 0000',
+        isReimbursement: Boolean(parsed.isReimbursement),
+        reimbursementStatus: parsed.isReimbursement ? 'pending' : undefined,
+        isSavingsTransfer: Boolean(parsed.isSavingsTransfer),
+        isInvestment: Boolean(parsed.isInvestment),
         source: 'telegram',
         telegramChatId: chatId,
         telegramMessageId: messageObj.message_id,
@@ -5155,7 +5402,8 @@ ${personNet > 0
       const itemTime = (item.time && /^\d{2}:\d{2}$/.test(item.time)) ? item.time : msgTimeInfo.time;
       const itemDate = (item.date && /^\d{4}-\d{2}-\d{2}$/.test(item.date)) ? item.date : msgTimeInfo.date;
 
-      replyText = `${isInc ? '🟢 <b>INCOME ADD HO GAYI</b>' : '🔴 <b>KHARCHA RECORD HO GAYA</b>'}
+      if (isSenderOwner) {
+        replyText = `${isInc ? '🟢 <b>INCOME ADD HO GAYI</b>' : '🔴 <b>KHARCHA RECORD HO GAYA</b>'}
 💰 <b>₹${item.amount.toLocaleString('en-IN')}</b>
 📁 <b>Category:</b> ${item.category}${isUncat ? ' <i>(Web par Category assign karein)</i>' : ''}
 📝 <b>Vivaran:</b> ${item.description}${memberTag}
@@ -5166,6 +5414,21 @@ ${personNet > 0
 💵 <b>Net Wallet/Bank Balance:</b> ₹${summary.netSavings.toLocaleString('en-IN')} <i>(Kamai - Kharcha)</i>
 🎯 <b>Monthly Budget Bacha:</b> ₹${Math.max(0, summary.monthlyBudget - summary.monthlySpent).toLocaleString('en-IN')}
 ${isInc ? `📈 <b>Kul Income:</b> ₹${summary.totalIncome.toLocaleString('en-IN')}` : `📉 <b>Kul Kharcha:</b> ₹${summary.totalExpense.toLocaleString('en-IN')}`}`;
+      } else {
+        const newMemberSpent = memberMonthSpent + (item.type === 'expense' ? item.amount : 0);
+        replyText = `${isInc ? '🟢 <b>INCOME ADD HO GAYI</b>' : '🔴 <b>KHARCHA RECORD HO GAYA</b>'}
+💰 <b>₹${item.amount.toLocaleString('en-IN')}</b>
+📁 <b>Category:</b> ${item.category}${isUncat ? ' <i>(Web par Category assign karein)</i>' : ''}
+📝 <b>Vivaran:</b> ${item.description}${memberTag}
+💳 <b>Payment:</b> ${item.paymentMethod || 'UPI'}
+📅 <b>Tareeq va Samay:</b> ${itemDate} • ${itemTime} (IST)
+
+━━━━━━━━━━━━━━━━━━━━
+👤 <b>Aapka Is Mahine Ka Kharcha:</b> ₹${newMemberSpent.toLocaleString('en-IN')}
+💵 <b>Net Family Balance:</b> <tg-spoiler>₹••••••</tg-spoiler>
+🎯 <b>Monthly Budget Bacha:</b> <tg-spoiler>₹••••••</tg-spoiler>
+🔒 <i>(Family Privacy Mode: Account balance & overall savings covered with White Spoiler strip)</i>`;
+      }
     } else {
       const itemsList = parsedList
         .map(p => {
@@ -5173,7 +5436,12 @@ ${isInc ? `📈 <b>Kul Income:</b> ₹${summary.totalIncome.toLocaleString('en-I
           return `• ${p.type === 'income' ? '🟢 +' : '🔴 -'}₹${p.amount.toLocaleString('en-IN')} ${p.description} (${p.category}) [${p.paymentMethod}] <i>(${tTime})</i>`;
         })
         .join('\n');
-      replyText = `✅ <b>${parsedList.length} TRANSACTIONS ADD HO GAYE</b>${memberTag}\n\n${itemsList}\n\n━━━━━━━━━━━━━━━━━━━━\n💵 <b>Net Wallet/Bank Balance:</b> ₹${summary.netSavings.toLocaleString('en-IN')} <i>(Kamai - Kharcha)</i>\n🎯 <b>Monthly Budget Bacha:</b> ₹${Math.max(0, summary.monthlyBudget - summary.monthlySpent).toLocaleString('en-IN')}`;
+
+      if (isSenderOwner) {
+        replyText = `✅ <b>${parsedList.length} TRANSACTIONS ADD HO GAYE</b>${memberTag}\n\n${itemsList}\n\n━━━━━━━━━━━━━━━━━━━━\n💵 <b>Net Wallet/Bank Balance:</b> ₹${summary.netSavings.toLocaleString('en-IN')} <i>(Kamai - Kharcha)</i>\n🎯 <b>Monthly Budget Bacha:</b> ₹${Math.max(0, summary.monthlyBudget - summary.monthlySpent).toLocaleString('en-IN')}`;
+      } else {
+        replyText = `✅ <b>${parsedList.length} TRANSACTIONS ADD HO GAYE</b>${memberTag}\n\n${itemsList}\n\n━━━━━━━━━━━━━━━━━━━━\n💵 <b>Net Family Balance:</b> <tg-spoiler>₹••••••</tg-spoiler>\n🎯 <b>Monthly Budget Bacha:</b> <tg-spoiler>₹••••••</tg-spoiler>\n🔒 <i>(Family Privacy: Balances covered with White Spoiler strip)</i>`;
+      }
     }
 
     if (detectedDuplicateTx) {
@@ -5395,44 +5663,147 @@ app.post('/api/auth/register', (req, res) => {
 });
 
 app.post('/api/auth/login', (req, res) => {
-  const { email, userId, password } = req.body;
-  let user: UserProfile | undefined;
-
+  users = loadJson<UserProfile[]>(USERS_FILE, users);
+  const { email, userId, identifier, password, memberId } = req.body;
+  const sInput = String(identifier || email || userId || '').trim();
   const sPassword = String(password || '').trim();
 
-  if (userId) {
-    user = users.find(u => u.id === userId);
-  } else if (email) {
-    user = users.find(u => u.email.toLowerCase() === String(email).toLowerCase().trim());
+  if (!sInput) {
+    return res.status(400).json({ error: 'Email, Telegram ID, or Member Name is required.' });
   }
 
-  if (!user) {
-    return res.status(404).json({ error: 'No account registered with this email address. Please create a new account.' });
-  }
+  const cleanInput = sInput.toLowerCase().replace(/^@/, '');
 
-  // If user has a password, verify strictly
-  if (user.password) {
-    if (!sPassword) {
-      return res.status(400).json({ error: 'Password or Security PIN is required to unlock this vault.' });
-    }
-    if (user.password !== sPassword) {
-      return res.status(401).json({ error: 'Incorrect password or Security PIN. Access denied.' });
-    }
-  } else {
-    // Legacy profile without password: if password supplied, set it to secure the account
-    if (sPassword && sPassword.length >= 4) {
-      user.password = sPassword;
+  // 1. First check if it matches an Owner account directly
+  let ownerUser = users.find(u => 
+    (u.email && u.email.toLowerCase() === cleanInput) ||
+    (u.id && u.id.toLowerCase() === cleanInput) ||
+    (u.telegramChatId && String(u.telegramChatId).trim() === sInput) ||
+    (u.telegramUsername && u.telegramUsername.toLowerCase().replace(/^@/, '') === cleanInput) ||
+    (u.linkCode && u.linkCode.toLowerCase() === cleanInput)
+  );
+
+  if (ownerUser) {
+    // Verify master password if set
+    if (ownerUser.password) {
+      if (!sPassword) {
+        return res.status(400).json({ error: 'Owner Security Password or PIN is required to unlock master view.' });
+      }
+      if (ownerUser.password !== sPassword) {
+        return res.status(401).json({ error: 'Incorrect Master password or PIN. Access denied.' });
+      }
+    } else if (sPassword && sPassword.length >= 4) {
+      ownerUser.password = sPassword;
       saveUsers(users);
-    } else if (!sPassword) {
-      return res.status(400).json({
-        error: 'Password required. Please enter a 4+ digit PIN or password to secure your account.',
-        requiresPasswordSetup: true
-      });
+    }
+
+    const token = Buffer.from(JSON.stringify({ userId: ownerUser.id, email: ownerUser.email, role: 'owner', t: Date.now() })).toString('base64');
+    return res.json({ 
+      success: true, 
+      user: toSafeUser(ownerUser), 
+      token,
+      role: 'owner',
+      isOwner: true,
+      memberName: ownerUser.name
+    });
+  }
+
+  // 2. Check if it matches a Linked Family Member in any ledger
+  let matchedMasterUser: UserProfile | undefined;
+  let matchedMember: LinkedMember | undefined;
+
+  for (const u of users) {
+    if (u.linkedMembers && u.linkedMembers.length > 0) {
+      const found = u.linkedMembers.find(m => 
+        (memberId && m.id === memberId) ||
+        (m.id && m.id.toLowerCase() === cleanInput) ||
+        (m.telegramChatId && String(m.telegramChatId).trim() === sInput) ||
+        (m.telegramUsername && m.telegramUsername.toLowerCase().replace(/^@/, '') === cleanInput) ||
+        (m.name && m.name.toLowerCase() === cleanInput) ||
+        (m.customAlias && m.customAlias.toLowerCase() === cleanInput)
+      );
+      if (found) {
+        matchedMasterUser = u;
+        matchedMember = found;
+        break;
+      }
     }
   }
 
-  const token = Buffer.from(JSON.stringify({ userId: user.id, email: user.email, t: Date.now() })).toString('base64');
-  res.json({ success: true, user: toSafeUser(user), token });
+  if (matchedMasterUser && matchedMember) {
+    const isOwnerRole = matchedMember.role === 'owner';
+    const role: UserRole = isOwnerRole ? 'owner' : 'family';
+    const memberDisplayName = matchedMember.customAlias || matchedMember.name;
+
+    const token = Buffer.from(JSON.stringify({ 
+      userId: matchedMasterUser.id, 
+      email: matchedMasterUser.email, 
+      memberId: matchedMember.id,
+      memberName: memberDisplayName,
+      role, 
+      t: Date.now() 
+    })).toString('base64');
+
+    return res.json({
+      success: true,
+      user: toSafeUser(matchedMasterUser),
+      token,
+      role,
+      isOwner: isOwnerRole,
+      memberName: memberDisplayName,
+      memberId: matchedMember.id,
+      telegramChatId: matchedMember.telegramChatId
+    });
+  }
+
+  return res.status(404).json({ 
+    error: `Koi khata ya member nahi mila "${sInput}" ke saath. Kripya apna sahi Email ya Telegram ID/Username enter karein.` 
+  });
+});
+
+app.post('/api/auth/family-login', (req, res) => {
+  users = loadJson<UserProfile[]>(USERS_FILE, users);
+  const { memberId, masterUserId, telegramChatId, memberName } = req.body;
+
+  let targetMaster = masterUserId ? users.find(u => u.id === masterUserId) : users[0];
+  if (!targetMaster && users.length > 0) targetMaster = users[0];
+
+  if (!targetMaster) {
+    return res.status(404).json({ error: 'No ledger found' });
+  }
+
+  let foundMember: LinkedMember | undefined;
+  if (targetMaster.linkedMembers) {
+    foundMember = targetMaster.linkedMembers.find(m => 
+      (memberId && m.id === memberId) ||
+      (telegramChatId && String(m.telegramChatId).trim() === String(telegramChatId).trim()) ||
+      (memberName && (m.name.toLowerCase() === String(memberName).toLowerCase() || (m.customAlias && m.customAlias.toLowerCase() === String(memberName).toLowerCase())))
+    );
+  }
+
+  const memberDisplayName = foundMember ? (foundMember.customAlias || foundMember.name) : (memberName || 'Family Member');
+  const isOwnerRole = foundMember?.role === 'owner';
+  const role: UserRole = isOwnerRole ? 'owner' : 'family';
+
+  const token = Buffer.from(JSON.stringify({ 
+    userId: targetMaster.id, 
+    email: targetMaster.email, 
+    memberId: foundMember?.id || 'family_guest',
+    memberName: memberDisplayName,
+    role, 
+    t: Date.now() 
+  })).toString('base64');
+
+  res.json({
+    success: true,
+    user: toSafeUser(targetMaster),
+    token,
+    role,
+    isOwner: isOwnerRole,
+    memberName: memberDisplayName,
+    memberId: foundMember?.id,
+    telegramChatId: foundMember?.telegramChatId
+  });
 });
 
 app.post('/api/auth/change-password', (req, res) => {
@@ -5976,7 +6347,7 @@ app.get('/api/transactions', (req, res) => {
 app.post('/api/transactions', (req, res) => {
   const user = getRequestUser(req);
   const store = getUserData(user.id);
-  const { type, amount, category, description, date, paymentMethod, tags } = req.body;
+  const { type, amount, category, description, date, paymentMethod, account, tags, isReimbursement, reimbursementStatus, isSavingsTransfer, isInvestment } = req.body;
 
   if (!amount || isNaN(Number(amount))) {
     return res.status(400).json({ error: 'Valid amount is required' });
@@ -5993,9 +6364,14 @@ app.post('/api/transactions', (req, res) => {
     date: date || nowInfo.date,
     time: req.body.time || nowInfo.time,
     paymentMethod: paymentMethod || 'UPI',
+    account: account || 'ICICI CC 0000',
     source: 'manual',
     createdAt: nowInfo.iso,
     tags: Array.isArray(tags) ? tags : [],
+    isReimbursement: Boolean(isReimbursement),
+    reimbursementStatus: isReimbursement ? (reimbursementStatus || 'pending') : undefined,
+    isSavingsTransfer: Boolean(isSavingsTransfer),
+    isInvestment: Boolean(isInvestment),
   };
 
   store.transactions.unshift(newTx);
@@ -6003,6 +6379,28 @@ app.post('/api/transactions', (req, res) => {
 
   const summary = calculateUserSummary(user.id);
   res.json({ success: true, transaction: newTx, summary });
+});
+
+// Bulk assign account to transactions
+app.post('/api/transactions/bulk-account', (req, res) => {
+  const user = getRequestUser(req);
+  const store = getUserData(user.id);
+  const { transactionIds, account } = req.body;
+
+  if (!Array.isArray(transactionIds) || !account) {
+    return res.status(400).json({ error: 'transactionIds array and account are required' });
+  }
+
+  let count = 0;
+  for (const t of store.transactions) {
+    if (transactionIds.includes(t.id)) {
+      t.account = account;
+      count++;
+    }
+  }
+
+  saveUserData(user.id, store);
+  res.json({ success: true, count, summary: calculateUserSummary(user.id) });
 });
 
 // Update transaction category
@@ -6032,7 +6430,7 @@ app.put('/api/transactions/:id', (req, res) => {
   const user = getRequestUser(req);
   const store = getUserData(user.id);
   const { id } = req.params;
-  const { type, amount, category, description, date, paymentMethod, tags } = req.body;
+  const { type, amount, category, description, date, paymentMethod, account, tags, isReimbursement, reimbursementStatus, isSavingsTransfer, isInvestment } = req.body;
 
   const tx = store.transactions.find(t => t.id === id);
   if (!tx) {
@@ -6045,10 +6443,138 @@ app.put('/api/transactions/:id', (req, res) => {
   if (description) tx.description = description.trim();
   if (date) tx.date = date;
   if (paymentMethod) tx.paymentMethod = paymentMethod;
+  if (account !== undefined) tx.account = account;
   if (tags) tx.tags = tags;
+  if (isReimbursement !== undefined) tx.isReimbursement = Boolean(isReimbursement);
+  if (reimbursementStatus !== undefined) tx.reimbursementStatus = reimbursementStatus;
+  if (isSavingsTransfer !== undefined) tx.isSavingsTransfer = Boolean(isSavingsTransfer);
+  if (isInvestment !== undefined) tx.isInvestment = Boolean(isInvestment);
 
   saveUserData(user.id, store);
   res.json({ success: true, transaction: tx, summary: calculateUserSummary(user.id) });
+});
+
+// ---------------- EMIs, Savings Transfers & Investments Endpoints ----------------
+app.get('/api/emis', (req, res) => {
+  const user = getRequestUser(req);
+  const store = getUserData(user.id);
+  res.json({ emis: store.cardEmis || [] });
+});
+
+app.post('/api/emis', (req, res) => {
+  const user = getRequestUser(req);
+  const store = getUserData(user.id);
+  if (!store.cardEmis) store.cardEmis = [];
+  const { cardId, title, monthlyAmount, totalMonths, paidMonths, dueDay, startDate, notes } = req.body;
+  const newEmi: CardEmi = {
+    id: `emi_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+    userId: user.id,
+    cardId: cardId || 'SBI CC 5733',
+    title: (title || 'Card EMI').trim(),
+    monthlyAmount: Math.abs(Number(monthlyAmount)) || 0,
+    totalMonths: Number(totalMonths) || 12,
+    paidMonths: Number(paidMonths) || 0,
+    dueDay: Number(dueDay) || 15,
+    startDate: startDate || getAppDateTime().date,
+    notes: notes || '',
+    createdAt: new Date().toISOString(),
+  };
+  store.cardEmis.unshift(newEmi);
+  saveUserData(user.id, store);
+  res.json({ success: true, emi: newEmi, emis: store.cardEmis });
+});
+
+app.put('/api/emis/:id', (req, res) => {
+  const user = getRequestUser(req);
+  const store = getUserData(user.id);
+  if (!store.cardEmis) store.cardEmis = [];
+  const emi = store.cardEmis.find(e => e.id === req.params.id);
+  if (!emi) return res.status(404).json({ error: 'EMI not found' });
+  Object.assign(emi, req.body);
+  saveUserData(user.id, store);
+  res.json({ success: true, emi, emis: store.cardEmis });
+});
+
+app.delete('/api/emis/:id', (req, res) => {
+  const user = getRequestUser(req);
+  const store = getUserData(user.id);
+  if (!store.cardEmis) store.cardEmis = [];
+  store.cardEmis = store.cardEmis.filter(e => e.id !== req.params.id);
+  saveUserData(user.id, store);
+  res.json({ success: true, emis: store.cardEmis });
+});
+
+app.get('/api/savings-transfers', (req, res) => {
+  const user = getRequestUser(req);
+  const store = getUserData(user.id);
+  res.json({ savingsTransfers: store.savingsTransfers || [] });
+});
+
+app.post('/api/savings-transfers', (req, res) => {
+  const user = getRequestUser(req);
+  const store = getUserData(user.id);
+  if (!store.savingsTransfers) store.savingsTransfers = [];
+  const { amount, date, recipient, fromAccount, notes } = req.body;
+  const newTransfer: SavingsTransfer = {
+    id: `sav_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+    userId: user.id,
+    amount: Math.abs(Number(amount)) || 0,
+    date: date || getAppDateTime().date,
+    recipient: (recipient || "Wife's Account").trim(),
+    fromAccount: fromAccount || 'AX Bank',
+    notes: notes || '',
+    createdAt: new Date().toISOString(),
+  };
+  store.savingsTransfers.unshift(newTransfer);
+  saveUserData(user.id, store);
+  res.json({ success: true, savingsTransfer: newTransfer, savingsTransfers: store.savingsTransfers, summary: calculateUserSummary(user.id) });
+});
+
+app.delete('/api/savings-transfers/:id', (req, res) => {
+  const user = getRequestUser(req);
+  const store = getUserData(user.id);
+  if (!store.savingsTransfers) store.savingsTransfers = [];
+  store.savingsTransfers = store.savingsTransfers.filter(s => s.id !== req.params.id);
+  saveUserData(user.id, store);
+  res.json({ success: true, savingsTransfers: store.savingsTransfers, summary: calculateUserSummary(user.id) });
+});
+
+app.get('/api/investments', (req, res) => {
+  const user = getRequestUser(req);
+  const store = getUserData(user.id);
+  res.json({ investments: store.investments || [] });
+});
+
+app.post('/api/investments', (req, res) => {
+  const user = getRequestUser(req);
+  const store = getUserData(user.id);
+  if (!store.investments) store.investments = [];
+  const { type, name, amount, account, date, maturityDate, interestRate, notes } = req.body;
+  const newInv: InvestmentRecord = {
+    id: `inv_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+    userId: user.id,
+    type: type || 'RD',
+    name: (name || 'Investment Plan').trim(),
+    amount: Math.abs(Number(amount)) || 0,
+    account: account || 'IC Bank',
+    date: date || getAppDateTime().date,
+    maturityDate: maturityDate || undefined,
+    interestRate: Number(interestRate) || undefined,
+    notes: notes || '',
+    createdAt: new Date().toISOString(),
+  };
+  store.investments.unshift(newInv);
+  saveUserData(user.id, store);
+  res.json({ success: true, investment: newInv, investments: store.investments, summary: calculateUserSummary(user.id) });
+});
+
+app.delete('/api/investments/:id', (req, res) => {
+  const user = getRequestUser(req);
+  const store = getUserData(user.id);
+  if (!store.investments) store.investments = [];
+  store.investments = store.investments.filter(i => i.id !== req.params.id);
+  saveUserData(user.id, store);
+  res.json({ success: true, investments: store.investments });
 });
 
 app.delete('/api/transactions/:id', (req, res) => {
@@ -6465,17 +6991,26 @@ export function restoreTransactionsBackup(
   rawCategoriesRows: any[] = [],
   rawBudgetsRows: any[] = [],
   rawUdhaarRows: any[] = [],
-  rawFuelRows: any[] = []
+  rawFuelRows: any[] = [],
+  rawInvestmentRows: any[] = [],
+  rawSavingsRows: any[] = [],
+  rawEmiRows: any[] = []
 ): {
   restoredCount: number;
   categoriesCreated: number;
   udhaarsCount: number;
   fuelLogsCount: number;
+  investmentsCount: number;
+  savingsTransfersCount: number;
+  emisCount: number;
   transactions: Transaction[];
   categories: CategoryDef[];
   budgets: CategoryBudget[];
   udhaars: UdhaarRecord[];
   fuelLogs: FuelLog[];
+  investments: InvestmentRecord[];
+  savingsTransfers: SavingsTransfer[];
+  cardEmis: CardEmi[];
   summary: any;
 } {
   const store = getUserData(userId);
@@ -6483,6 +7018,9 @@ export function restoreTransactionsBackup(
   let categoriesCreated = 0;
   let udhaarsCount = 0;
   let fuelLogsCount = 0;
+  let investmentsCount = 0;
+  let savingsTransfersCount = 0;
+  let emisCount = 0;
 
   // 1. Restore/Merge Categories if provided
   if (Array.isArray(rawCategoriesRows) && rawCategoriesRows.length > 0) {
@@ -6646,7 +7184,7 @@ export function restoreTransactionsBackup(
       timeStr = nowInfo.time;
     }
 
-    // 5. Description, Raw Message, Payment Method, Source
+    // 5. Description, Raw Message, Payment Method, Source, Account
     const description = String(rowObj['description'] ?? rowObj['details'] ?? rowObj['note'] ?? rowObj['particulars'] ?? category).trim();
     const rawMessage = String(rowObj['rawmessage'] ?? rowObj['originalmessage'] ?? rowObj['telegrammessage'] ?? rowObj['message'] ?? '').trim();
     const rawPayment = String(rowObj['paymentmethod'] ?? rowObj['mode'] ?? rowObj['paymode'] ?? 'UPI').trim().toLowerCase();
@@ -6657,6 +7195,7 @@ export function restoreTransactionsBackup(
     else if (rawPayment.includes('bank') || rawPayment.includes('transfer') || rawPayment.includes('neft') || rawPayment.includes('rtgs') || rawPayment.includes('imps')) paymentMethod = 'Bank Transfer';
     else if (rawPayment.includes('other')) paymentMethod = 'Other';
 
+    const account = String(rowObj['account'] ?? rowObj['accountname'] ?? rowObj['cardid'] ?? '').trim() || undefined;
     const source = String(rowObj['source'] ?? (rawMessage ? 'telegram' : 'manual')).trim() as 'telegram' | 'manual';
     const telegramUser = String(rowObj['telegramuser'] ?? rowObj['user'] ?? rowObj['member'] ?? '').trim() || undefined;
 
@@ -6683,6 +7222,7 @@ export function restoreTransactionsBackup(
       date: dateStr,
       time: timeStr,
       paymentMethod,
+      account,
       source: source === 'telegram' ? 'telegram' : 'manual',
       rawMessage: rawMessage || undefined,
       createdAt: `${dateStr}T${timeStr}:00.000Z`,
@@ -6726,6 +7266,7 @@ export function restoreTransactionsBackup(
       const type: 'lent' | 'borrowed' = (rawType.includes('diya') || rawType.includes('lent') || rawType.includes('lena')) ? 'lent' : 'borrowed';
       const status: 'pending' | 'settled' = String(uObj['status'] ?? '').toLowerCase().includes('settle') ? 'settled' : 'pending';
       const description = String(uObj['description'] ?? uObj['notes'] ?? uObj['note'] ?? '').trim();
+      const account = String(uObj['account'] ?? uObj['bank'] ?? '').trim() || undefined;
 
       let dateStr = String(uObj['date'] ?? uObj['tareeq'] ?? '').trim();
       if (!isNaN(Number(dateStr)) && Number(dateStr) > 20000 && Number(dateStr) < 70000) {
@@ -6748,6 +7289,7 @@ export function restoreTransactionsBackup(
         personName,
         amount,
         description: description || undefined,
+        account,
         date: dateStr,
         time: timeStr,
         status,
@@ -6828,6 +7370,179 @@ export function restoreTransactionsBackup(
     }
   }
 
+  // 6. Restore Investments (RD, FD, MF, Gold, PPF, etc.)
+  if (!store.investments) store.investments = [];
+  if (replaceExisting && Array.isArray(rawInvestmentRows) && rawInvestmentRows.length > 0) {
+    store.investments = [];
+  }
+  const existingInvIds = new Set((store.investments || []).map(i => i.id));
+  if (Array.isArray(rawInvestmentRows) && rawInvestmentRows.length > 0) {
+    for (const iRow of rawInvestmentRows) {
+      if (!iRow || typeof iRow !== 'object') continue;
+      const iObj: Record<string, any> = {};
+      for (const k of Object.keys(iRow)) {
+        iObj[k.trim().toLowerCase().replace(/[\s_\-\(\)]+/g, '')] = iRow[k];
+      }
+
+      const name = String(iObj['investmentname'] ?? iObj['name'] ?? iObj['plan'] ?? iObj['title'] ?? '').trim();
+      let rawAmt = iObj['amountinr'] ?? iObj['amount'] ?? iObj['rupaye'] ?? 0;
+      if (typeof rawAmt === 'string') rawAmt = rawAmt.replace(/[₹$,\s]/g, '');
+      const amount = Math.abs(parseFloat(String(rawAmt)) || 0);
+      if (!name || amount <= 0) continue;
+
+      const rawType = String(iObj['type'] ?? 'RD').trim().toUpperCase();
+      let type: 'RD' | 'FD' | 'Mutual Fund' | 'Gold' | 'PPF' | 'Other' = 'RD';
+      if (rawType.includes('FD')) type = 'FD';
+      else if (rawType.includes('MUTUAL') || rawType.includes('MF')) type = 'Mutual Fund';
+      else if (rawType.includes('GOLD')) type = 'Gold';
+      else if (rawType.includes('PPF')) type = 'PPF';
+      else if (rawType.includes('OTHER')) type = 'Other';
+
+      const account = (String(iObj['account'] ?? iObj['bank'] ?? 'IC Bank').trim() || 'IC Bank') as any;
+      let dateStr = String(iObj['date'] ?? iObj['startdate'] ?? '').trim();
+      if (!isNaN(Number(dateStr)) && Number(dateStr) > 20000 && Number(dateStr) < 70000) {
+        const excelEpoch = new Date(Date.UTC(1899, 11, 30));
+        dateStr = new Date(excelEpoch.getTime() + Number(dateStr) * 86400000).toISOString().split('T')[0];
+      } else if (!dateStr || dateStr.length < 8) {
+        dateStr = getAppDateTime().date;
+      }
+
+      let maturityDate = String(iObj['maturitydate'] ?? iObj['maturity'] ?? '').trim() || undefined;
+      if (maturityDate && !isNaN(Number(maturityDate)) && Number(maturityDate) > 20000 && Number(maturityDate) < 70000) {
+        const excelEpoch = new Date(Date.UTC(1899, 11, 30));
+        maturityDate = new Date(excelEpoch.getTime() + Number(maturityDate) * 86400000).toISOString().split('T')[0];
+      }
+
+      const interestRate = iObj['interestrate'] !== undefined && iObj['interestrate'] !== '' ? parseFloat(String(iObj['interestrate'])) : undefined;
+      const notes = String(iObj['notes'] ?? iObj['note'] ?? '').trim();
+
+      const invId = (iObj['investmentid'] || iObj['id']) && !existingInvIds.has(String(iObj['investmentid'] || iObj['id']))
+        ? String(iObj['investmentid'] || iObj['id'])
+        : `inv_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+
+      const newInv: InvestmentRecord = {
+        id: invId,
+        userId,
+        type,
+        name,
+        amount,
+        account,
+        date: dateStr,
+        maturityDate,
+        interestRate,
+        notes: notes || undefined,
+        createdAt: `${dateStr}T12:00:00.000Z`,
+      };
+
+      store.investments.push(newInv);
+      existingInvIds.add(invId);
+      investmentsCount++;
+    }
+  }
+
+  // 7. Restore Savings Transfers (Wife's A/c Transfers)
+  if (!store.savingsTransfers) store.savingsTransfers = [];
+  if (replaceExisting && Array.isArray(rawSavingsRows) && rawSavingsRows.length > 0) {
+    store.savingsTransfers = [];
+  }
+  const existingSavIds = new Set((store.savingsTransfers || []).map(s => s.id));
+  if (Array.isArray(rawSavingsRows) && rawSavingsRows.length > 0) {
+    for (const sRow of rawSavingsRows) {
+      if (!sRow || typeof sRow !== 'object') continue;
+      const sObj: Record<string, any> = {};
+      for (const k of Object.keys(sRow)) {
+        sObj[k.trim().toLowerCase().replace(/[\s_\-\(\)]+/g, '')] = sRow[k];
+      }
+
+      let rawAmt = sObj['amountinr'] ?? sObj['amount'] ?? sObj['rupaye'] ?? 0;
+      if (typeof rawAmt === 'string') rawAmt = rawAmt.replace(/[₹$,\s]/g, '');
+      const amount = Math.abs(parseFloat(String(rawAmt)) || 0);
+      if (amount <= 0) continue;
+
+      const recipient = String(sObj['recipient'] ?? sObj['transferto'] ?? sObj['to'] ?? "Wife's Account").trim() || "Wife's Account";
+      const fromAccount = (String(sObj['fromaccount'] ?? sObj['account'] ?? 'AX Bank').trim() || 'AX Bank') as any;
+
+      let dateStr = String(sObj['date'] ?? sObj['tareeq'] ?? '').trim();
+      if (!isNaN(Number(dateStr)) && Number(dateStr) > 20000 && Number(dateStr) < 70000) {
+        const excelEpoch = new Date(Date.UTC(1899, 11, 30));
+        dateStr = new Date(excelEpoch.getTime() + Number(dateStr) * 86400000).toISOString().split('T')[0];
+      } else if (!dateStr || dateStr.length < 8) {
+        dateStr = getAppDateTime().date;
+      }
+
+      const notes = String(sObj['notes'] ?? sObj['note'] ?? '').trim();
+      const savId = (sObj['transferid'] || sObj['id']) && !existingSavIds.has(String(sObj['transferid'] || sObj['id']))
+        ? String(sObj['transferid'] || sObj['id'])
+        : `sav_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+
+      const newSav: SavingsTransfer = {
+        id: savId,
+        userId,
+        amount,
+        recipient,
+        fromAccount,
+        date: dateStr,
+        notes: notes || undefined,
+        createdAt: `${dateStr}T12:00:00.000Z`,
+      };
+
+      store.savingsTransfers.push(newSav);
+      existingSavIds.add(savId);
+      savingsTransfersCount++;
+    }
+  }
+
+  // 8. Restore Credit Card EMIs
+  if (!store.cardEmis) store.cardEmis = [];
+  if (replaceExisting && Array.isArray(rawEmiRows) && rawEmiRows.length > 0) {
+    store.cardEmis = [];
+  }
+  const existingEmiIds = new Set((store.cardEmis || []).map(e => e.id));
+  if (Array.isArray(rawEmiRows) && rawEmiRows.length > 0) {
+    for (const eRow of rawEmiRows) {
+      if (!eRow || typeof eRow !== 'object') continue;
+      const eObj: Record<string, any> = {};
+      for (const k of Object.keys(eRow)) {
+        eObj[k.trim().toLowerCase().replace(/[\s_\-\(\)]+/g, '')] = eRow[k];
+      }
+
+      const title = String(eObj['emititle'] ?? eObj['title'] ?? eObj['item'] ?? eObj['name'] ?? '').trim();
+      let rawAmt = eObj['monthlyamountinr'] ?? eObj['monthlyamount'] ?? eObj['amount'] ?? 0;
+      if (typeof rawAmt === 'string') rawAmt = rawAmt.replace(/[₹$,\s]/g, '');
+      const monthlyAmount = Math.abs(parseFloat(String(rawAmt)) || 0);
+      if (!title || monthlyAmount <= 0) continue;
+
+      const cardId = (String(eObj['cardid'] ?? eObj['card'] ?? eObj['account'] ?? 'SBI CC 5733').trim() || 'SBI CC 5733') as any;
+      const totalMonths = Math.max(1, parseInt(String(eObj['totalmonths'] ?? eObj['tenure'] ?? 12), 10) || 12);
+      const paidMonths = Math.max(0, parseInt(String(eObj['paidmonths'] ?? eObj['completed'] ?? 0), 10) || 0);
+      const dueDay = Math.max(1, Math.min(31, parseInt(String(eObj['dueday'] ?? eObj['due'] ?? 15), 10) || 15));
+      const startDate = String(eObj['startdate'] ?? eObj['date'] ?? getAppDateTime().date).trim();
+      const notes = String(eObj['notes'] ?? eObj['note'] ?? '').trim();
+
+      const emiId = (eObj['emiid'] || eObj['id']) && !existingEmiIds.has(String(eObj['emiid'] || eObj['id']))
+        ? String(eObj['emiid'] || eObj['id'])
+        : `emi_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+
+      const newEmi: CardEmi = {
+        id: emiId,
+        userId,
+        cardId,
+        title,
+        monthlyAmount,
+        totalMonths,
+        paidMonths,
+        dueDay,
+        startDate,
+        notes: notes || undefined,
+        createdAt: `${startDate}T12:00:00.000Z`,
+      };
+
+      store.cardEmis.push(newEmi);
+      existingEmiIds.add(emiId);
+      emisCount++;
+    }
+  }
+
   syncBudgetsWithCategories(store);
   saveUserData(userId, store);
 
@@ -6838,11 +7553,17 @@ export function restoreTransactionsBackup(
     categoriesCreated,
     udhaarsCount,
     fuelLogsCount,
+    investmentsCount,
+    savingsTransfersCount,
+    emisCount,
     transactions: store.transactions,
     categories: store.categories,
     budgets: store.budgets,
     udhaars: store.udhaars,
     fuelLogs: store.fuelLogs,
+    investments: store.investments,
+    savingsTransfers: store.savingsTransfers,
+    cardEmis: store.cardEmis,
     summary,
   };
 }
@@ -6855,12 +7576,27 @@ app.post('/api/transactions/restore-backup', (req, res) => {
       return res.status(401).json({ error: 'User session not found. Please log in.' });
     }
 
-    const { rows, fileBase64, categoriesRows, budgetsRows, udhaarRows, fuelRows, replaceExisting = false } = req.body;
+    const { 
+      rows, 
+      fileBase64, 
+      categoriesRows, 
+      budgetsRows, 
+      udhaarRows, 
+      fuelRows,
+      investmentsRows,
+      savingsRows,
+      emisRows,
+      replaceExisting = false 
+    } = req.body;
+
     let parsedTxRows: any[] = [];
     let parsedCatRows: any[] = Array.isArray(categoriesRows) ? categoriesRows : [];
     let parsedBudRows: any[] = Array.isArray(budgetsRows) ? budgetsRows : [];
     let parsedUdhaarRows: any[] = Array.isArray(udhaarRows) ? udhaarRows : [];
     let parsedFuelRows: any[] = Array.isArray(fuelRows) ? fuelRows : [];
+    let parsedInvRows: any[] = Array.isArray(investmentsRows) ? investmentsRows : [];
+    let parsedSavRows: any[] = Array.isArray(savingsRows) ? savingsRows : [];
+    let parsedEmiRows: any[] = Array.isArray(emisRows) ? emisRows : [];
 
     if (fileBase64) {
       try {
@@ -6882,6 +7618,9 @@ app.post('/api/transactions/restore-backup', (req, res) => {
                 let categoriesCreated = 0;
                 let udhaarsCount = 0;
                 let fuelLogsCount = 0;
+                let investmentsCount = 0;
+                let savingsTransfersCount = 0;
+                let emisCount = 0;
 
                 // Restore categories
                 if (Array.isArray(fullData.categories)) {
@@ -6965,6 +7704,57 @@ app.post('/api/transactions/restore-backup', (req, res) => {
                   }
                 }
 
+                // Restore investments
+                if (!store.investments) store.investments = [];
+                if (replaceExisting) {
+                  store.investments = [];
+                }
+                const existingInvIds = new Set(store.investments.map(i => i.id));
+                if (Array.isArray(fullData.investments)) {
+                  for (const inv of fullData.investments) {
+                    if (inv && (!inv.id || !existingInvIds.has(inv.id))) {
+                      const invId = inv.id || `inv_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+                      store.investments.push({ ...inv, id: invId, userId: user.id });
+                      existingInvIds.add(invId);
+                      investmentsCount++;
+                    }
+                  }
+                }
+
+                // Restore savings transfers
+                if (!store.savingsTransfers) store.savingsTransfers = [];
+                if (replaceExisting) {
+                  store.savingsTransfers = [];
+                }
+                const existingSavIds = new Set(store.savingsTransfers.map(s => s.id));
+                if (Array.isArray(fullData.savingsTransfers)) {
+                  for (const sav of fullData.savingsTransfers) {
+                    if (sav && (!sav.id || !existingSavIds.has(sav.id))) {
+                      const savId = sav.id || `sav_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+                      store.savingsTransfers.push({ ...sav, id: savId, userId: user.id });
+                      existingSavIds.add(savId);
+                      savingsTransfersCount++;
+                    }
+                  }
+                }
+
+                // Restore card EMIs
+                if (!store.cardEmis) store.cardEmis = [];
+                if (replaceExisting) {
+                  store.cardEmis = [];
+                }
+                const existingEmiIds = new Set(store.cardEmis.map(e => e.id));
+                if (Array.isArray(fullData.cardEmis)) {
+                  for (const emi of fullData.cardEmis) {
+                    if (emi && (!emi.id || !existingEmiIds.has(emi.id))) {
+                      const emiId = emi.id || `emi_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+                      store.cardEmis.push({ ...emi, id: emiId, userId: user.id });
+                      existingEmiIds.add(emiId);
+                      emisCount++;
+                    }
+                  }
+                }
+
                 // Restore User Profile attributes (trackingStartMonth, etc.)
                 if (fullData.user?.trackingStartMonth) {
                   user.trackingStartMonth = fullData.user.trackingStartMonth;
@@ -6977,16 +7767,22 @@ app.post('/api/transactions/restore-backup', (req, res) => {
 
                 return res.json({
                   success: true,
-                  message: `Pure account ka backup successfully restore ho gaya! (${restoredCount} transactions, ${categoriesCreated} nayi categories, ${udhaarsCount} udhaar records, ${fuelLogsCount} fuel logs)`,
+                  message: `Pure account ka backup successfully restore ho gaya! (${restoredCount} transactions, ${categoriesCreated} nayi categories, ${udhaarsCount} udhaar, ${fuelLogsCount} fuel logs, ${investmentsCount} investments, ${savingsTransfersCount} transfers, ${emisCount} card EMIs)`,
                   restoredCount,
                   categoriesCreated,
                   udhaarsCount,
                   fuelLogsCount,
+                  investmentsCount,
+                  savingsTransfersCount,
+                  emisCount,
                   transactions: store.transactions,
                   categories: store.categories,
                   budgets: store.budgets,
                   udhaars: store.udhaars,
                   fuelLogs: store.fuelLogs,
+                  investments: store.investments,
+                  savingsTransfers: store.savingsTransfers,
+                  cardEmis: store.cardEmis,
                   summary: calculateUserSummary(user.id),
                 });
               } catch (jsonErr) {
@@ -7009,6 +7805,12 @@ app.post('/api/transactions/restore-backup', (req, res) => {
             parsedUdhaarRows = sRows;
           } else if (lowerName.includes('fuel') || lowerName.includes('mileage') || lowerName.includes('vehicle') || lowerName.includes('petrol')) {
             parsedFuelRows = sRows;
+          } else if (lowerName.includes('investment') || lowerName.includes('portfolio') || lowerName.includes('rd') || lowerName.includes('fd') || lowerName.includes('mutual')) {
+            parsedInvRows = sRows;
+          } else if (lowerName.includes('saving') || lowerName.includes('transfer') || lowerName.includes('wife')) {
+            parsedSavRows = sRows;
+          } else if (lowerName.includes('emi') || lowerName.includes('card emi') || lowerName.includes('loan')) {
+            parsedEmiRows = sRows;
           }
         }
 
@@ -7021,12 +7823,18 @@ app.post('/api/transactions/restore-backup', (req, res) => {
       }
     } else if (Array.isArray(rows) && rows.length > 0) {
       parsedTxRows = rows;
-    } else if (parsedUdhaarRows.length === 0 && parsedFuelRows.length === 0 && parsedCatRows.length === 0) {
-      return res.status(400).json({ error: 'No transaction rows or fileBase64 provided' });
     }
 
-    if (parsedTxRows.length === 0 && parsedCatRows.length === 0 && parsedUdhaarRows.length === 0 && parsedFuelRows.length === 0) {
-      return res.status(400).json({ error: 'Backup file me koi valid transaction, category, udhaar ya fuel data nahi mila' });
+    if (
+      parsedTxRows.length === 0 && 
+      parsedCatRows.length === 0 && 
+      parsedUdhaarRows.length === 0 && 
+      parsedFuelRows.length === 0 &&
+      parsedInvRows.length === 0 &&
+      parsedSavRows.length === 0 &&
+      parsedEmiRows.length === 0
+    ) {
+      return res.status(400).json({ error: 'Backup file me koi valid transaction, category, udhaar, fuel, investment ya EMI data nahi mila' });
     }
 
     const result = restoreTransactionsBackup(
@@ -7036,11 +7844,14 @@ app.post('/api/transactions/restore-backup', (req, res) => {
       parsedCatRows,
       parsedBudRows,
       parsedUdhaarRows,
-      parsedFuelRows
+      parsedFuelRows,
+      parsedInvRows,
+      parsedSavRows,
+      parsedEmiRows
     );
     return res.json({
       success: true,
-      message: `${result.restoredCount} transactions, ${result.categories.length} categories, ${result.udhaarsCount} udhaar records aur ${result.fuelLogsCount} fuel logs restore ho gaye hain!`,
+      message: `${result.restoredCount} transactions, ${result.categories.length} categories, ${result.udhaarsCount} udhaars, ${result.fuelLogsCount} fuel logs, ${result.investmentsCount} investments, ${result.savingsTransfersCount} transfers aur ${result.emisCount} EMIs restore ho gaye hain!`,
       ...result,
     });
   } catch (err: any) {
@@ -7228,10 +8039,12 @@ app.get('/api/transactions/export-backup', (req, res) => {
       'Category': t.category || 'Uncategorized',
       'Description': t.description || '',
       'Payment Method': t.paymentMethod || 'UPI',
+      'Account / Card': t.account || '',
       'Source': t.source || 'manual',
       'Raw Message': t.rawMessage || '',
       'Telegram User': t.telegramUser || (user?.name || ''),
       'Tags': Array.isArray(t.tags) ? t.tags.join(', ') : '',
+      'Reimbursement Status': t.reimbursementStatus || (t.isReimbursement ? 'pending' : ''),
       'Transaction ID': t.id || '',
     }));
 
@@ -7261,6 +8074,7 @@ app.get('/api/transactions/export-backup', (req, res) => {
       'Amount (INR)': Number(u.amount) || 0,
       'Status': (u.status || 'pending').toUpperCase(),
       'Description': u.description || '',
+      'Account': u.account || '',
       'Settled Date': u.settledAt || '',
       'Record ID': u.id || '',
     }));
@@ -7282,7 +8096,46 @@ app.get('/api/transactions/export-backup', (req, res) => {
       'Log ID': f.id || '',
     }));
 
-    // 5. Gullak & Savings Summary Sheet Data
+    // 5. Investments Portfolio Sheet Data
+    const investmentsList = Array.isArray(store.investments) ? store.investments : [];
+    const investmentsData = investmentsList.map((i) => ({
+      'Date': i.date || '',
+      'Type': i.type || 'RD',
+      'Investment Name': i.name || '',
+      'Amount (INR)': Number(i.amount) || 0,
+      'Account': i.account || 'IC Bank',
+      'Maturity Date': i.maturityDate || '',
+      'Interest Rate (%)': i.interestRate !== undefined ? Number(i.interestRate) : '',
+      'Notes': i.notes || '',
+      'Investment ID': i.id || '',
+    }));
+
+    // 6. Savings & Pot Transfers Sheet Data
+    const savingsList = Array.isArray(store.savingsTransfers) ? store.savingsTransfers : [];
+    const savingsData = savingsList.map((s) => ({
+      'Date': s.date || '',
+      'Recipient': s.recipient || "Wife's Account",
+      'Amount (INR)': Number(s.amount) || 0,
+      'From Account': s.fromAccount || 'AX Bank',
+      'Notes': s.notes || '',
+      'Transfer ID': s.id || '',
+    }));
+
+    // 7. Credit Card EMIs Sheet Data
+    const emisList = Array.isArray(store.cardEmis) ? store.cardEmis : [];
+    const emisData = emisList.map((e) => ({
+      'Card ID': e.cardId || 'SBI CC 5733',
+      'EMI Title': e.title || '',
+      'Monthly Amount (INR)': Number(e.monthlyAmount) || 0,
+      'Total Months': Number(e.totalMonths) || 12,
+      'Paid Months': Number(e.paidMonths) || 0,
+      'Due Day': Number(e.dueDay) || 15,
+      'Start Date': e.startDate || '',
+      'Notes': e.notes || '',
+      'EMI ID': e.id || '',
+    }));
+
+    // 8. Gullak & Savings Summary Sheet Data
     const gullakData = [
       { 'Metric / Field': 'Gullak Total Lifetime Savings (INR)', 'Value': gullakSummary.totalGullakSavings || 0 },
       { 'Metric / Field': 'Current Month Savings (INR)', 'Value': gullakSummary.currentMonthSaved || 0 },
@@ -7299,7 +8152,7 @@ app.get('/api/transactions/export-backup', (req, res) => {
       }
     }
 
-    // 6. Account & Linked Members Sheet Data
+    // 9. Account & Linked Members Sheet Data
     const accountData = [
       { 'Setting / Property': 'Account Name', 'Value': user?.name || 'Main Ledger' },
       { 'Setting / Property': 'Account Email', 'Value': user?.email || 'N/A' },
@@ -7313,6 +8166,9 @@ app.get('/api/transactions/export-backup', (req, res) => {
       { 'Setting / Property': 'Total Categories Count', 'Value': categoriesList.length },
       { 'Setting / Property': 'Total Udhaar Records Count', 'Value': udhaarsList.length },
       { 'Setting / Property': 'Total Fuel Logs Count', 'Value': fuelLogsList.length },
+      { 'Setting / Property': 'Total Investments Count', 'Value': investmentsList.length },
+      { 'Setting / Property': 'Total Savings Transfers Count', 'Value': savingsList.length },
+      { 'Setting / Property': 'Total Card EMIs Count', 'Value': emisList.length },
       { 'Setting / Property': 'Total Income (INR)', 'Value': summary.totalIncome || 0 },
       { 'Setting / Property': 'Total Expense (INR)', 'Value': summary.totalExpense || 0 },
       { 'Setting / Property': 'Net Balance (INR)', 'Value': summary.netSavings || 0 },
@@ -7323,16 +8179,17 @@ app.get('/api/transactions/export-backup', (req, res) => {
     const linkedMembersData = (user?.linkedMembers && Array.isArray(user.linkedMembers) && user.linkedMembers.length > 0)
       ? user.linkedMembers.map(m => ({
           'Member Name': m.name || 'Member',
+          'Custom Alias': m.customAlias || '',
           'Telegram Chat ID': m.telegramChatId || '',
           'Telegram Username': m.telegramUsername ? `@${m.telegramUsername}` : 'N/A',
           'Role': m.role || 'member',
           'Linked At': m.linkedAt || '',
         }))
-      : [{ 'Member Name': user?.name || 'Owner', 'Telegram Chat ID': user?.telegramChatId || '', 'Telegram Username': user?.telegramUsername || '', 'Role': 'owner', 'Linked At': '' }];
+      : [{ 'Member Name': user?.name || 'Owner', 'Custom Alias': '', 'Telegram Chat ID': user?.telegramChatId || '', 'Telegram Username': user?.telegramUsername || '', 'Role': 'owner', 'Linked At': '' }];
 
-    // 7. Raw Full State JSON chunked safely (Never exceed Excel 32,767 cell limit)
+    // 10. Raw Full State JSON chunked safely (Never exceed Excel 32,767 cell limit)
     const fullJsonString = JSON.stringify({
-      version: '3.0',
+      version: '4.0',
       exportedAt: new Date().toISOString(),
       user: user ? {
         id: user.id,
@@ -7349,6 +8206,9 @@ app.get('/api/transactions/export-backup', (req, res) => {
       transactions: txList,
       udhaars: udhaarsList,
       fuelLogs: fuelLogsList,
+      investments: investmentsList,
+      savingsTransfers: savingsList,
+      cardEmis: emisList,
     });
 
     const CHUNK_SIZE = 15000;
@@ -7358,7 +8218,7 @@ app.get('/api/transactions/export-backup', (req, res) => {
     for (let i = 0; i < totalChunks; i++) {
       const slice = fullJsonString.substring(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
       rawBackupPayload.push({
-        'BackupVersion': '3.0',
+        'BackupVersion': '4.0',
         'ChunkIndex': i + 1,
         'TotalChunks': totalChunks,
         'DataJSON': slice,
@@ -7383,18 +8243,30 @@ app.get('/api/transactions/export-backup', (req, res) => {
     const wsFuel = XLSX.utils.json_to_sheet(fuelLogsData.length > 0 ? fuelLogsData : [{ 'Date': '', 'Vehicle Name': '', 'Fuel Amount (INR)': 0, 'Odometer Reading (km)': 0 }]);
     XLSX.utils.book_append_sheet(workbook, wsFuel, 'Fuel & Mileage Tracker');
 
-    // Add Sheet 5: Gullak & Savings Summary
+    // Add Sheet 5: Investments Portfolio
+    const wsInvestments = XLSX.utils.json_to_sheet(investmentsData.length > 0 ? investmentsData : [{ 'Date': '', 'Type': 'RD', 'Investment Name': '', 'Amount (INR)': 0 }]);
+    XLSX.utils.book_append_sheet(workbook, wsInvestments, 'Investments Portfolio');
+
+    // Add Sheet 6: Savings & Pot Transfers
+    const wsSavings = XLSX.utils.json_to_sheet(savingsData.length > 0 ? savingsData : [{ 'Date': '', 'Recipient': "Wife's Account", 'Amount (INR)': 0 }]);
+    XLSX.utils.book_append_sheet(workbook, wsSavings, 'Savings Transfers');
+
+    // Add Sheet 7: Credit Card EMIs
+    const wsEmis = XLSX.utils.json_to_sheet(emisData.length > 0 ? emisData : [{ 'Card ID': 'SBI CC 5733', 'EMI Title': '', 'Monthly Amount (INR)': 0 }]);
+    XLSX.utils.book_append_sheet(workbook, wsEmis, 'Credit Card EMIs');
+
+    // Add Sheet 8: Gullak & Savings Summary
     const wsGullak = XLSX.utils.json_to_sheet(gullakData);
     XLSX.utils.book_append_sheet(workbook, wsGullak, 'Gullak & Savings');
 
-    // Add Sheet 6: Account & Linked Members
+    // Add Sheet 9: Account & Linked Members
     const wsAcc = XLSX.utils.json_to_sheet(accountData);
     XLSX.utils.book_append_sheet(workbook, wsAcc, 'Account Details');
 
     const wsMembers = XLSX.utils.json_to_sheet(linkedMembersData);
     XLSX.utils.book_append_sheet(workbook, wsMembers, 'Linked Members');
 
-    // Add Sheet 7: Internal High-Fidelity JSON Backup Data
+    // Add Sheet 10: Internal High-Fidelity JSON Backup Data
     const wsMeta = XLSX.utils.json_to_sheet(rawBackupPayload);
     XLSX.utils.book_append_sheet(workbook, wsMeta, '_TeleExpense_Backup_Data_');
 
@@ -7894,7 +8766,7 @@ app.post('/api/udhaar', (req, res) => {
   const user = getRequestUser(req);
   if (!user) return res.status(401).json({ error: 'User session required' });
   const store = getUserData(user.id);
-  const { type, personName, amount, description, date, dueDate } = req.body;
+  const { type, personName, amount, description, date, dueDate, account } = req.body;
 
   if (!personName || !amount) {
     return res.status(400).json({ error: 'Person name and amount are required' });
@@ -7907,6 +8779,7 @@ app.post('/api/udhaar', (req, res) => {
     personName: String(personName).trim(),
     amount: Math.abs(Number(amount)),
     description: description ? String(description).trim() : undefined,
+    account: account || 'IC Bank',
     date: date || getAppDateTime().date,
     time: getAppDateTime().time,
     status: 'pending',
@@ -7946,6 +8819,7 @@ app.put('/api/udhaar/:id', (req, res) => {
   if (updates.amount) existing.amount = Math.abs(Number(updates.amount));
   if (updates.description !== undefined) existing.description = updates.description;
   if (updates.date) existing.date = updates.date;
+  if (updates.account !== undefined) existing.account = updates.account;
 
   saveUserData(user.id, store);
   res.json({ success: true, udhaar: existing, udhaars: store.udhaars });

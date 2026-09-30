@@ -2,6 +2,29 @@ export type TransactionType = 'income' | 'expense';
 
 export type PaymentMethod = 'UPI' | 'Cash' | 'Card' | 'Net Banking' | 'Bank Transfer' | 'Other';
 
+export type AccountId =
+  | 'ICICI CC 0000'
+  | 'SBI CC 5733'
+  | 'SBI CC 6526'
+  | 'AX CC 8210'
+  | 'AX CC 5376'
+  | 'IC Bank'
+  | 'AX Bank'
+  | 'Cash';
+
+export interface AccountMeta {
+  id: AccountId;
+  name: string;
+  shortName: string;
+  type: 'rupay_card' | 'credit_card' | 'bank_account' | 'cash';
+  badge: string;
+  color: string;
+  isUpiCapable?: boolean;
+  creditLimit?: number;
+  billingDay?: number;
+  paymentDueDay?: number;
+}
+
 export interface LinkedMember {
   id: string; // e.g. "mem_838107368"
   name: string; // Telegram user name e.g. "Ansh", "Pooja"
@@ -10,6 +33,18 @@ export interface LinkedMember {
   telegramChatId: string;
   telegramUsername?: string;
   linkedAt: string;
+}
+
+export type UserRole = 'owner' | 'family';
+
+export interface AuthSession {
+  user: UserProfile;
+  token?: string;
+  role: UserRole;
+  isOwner: boolean;
+  memberName?: string;
+  memberId?: string;
+  loginIdentity?: string;
 }
 
 export interface PendingMemberRequest {
@@ -45,6 +80,7 @@ export interface Transaction {
   date: string; // YYYY-MM-DD
   time?: string; // HH:mm
   paymentMethod?: PaymentMethod;
+  account?: AccountId | string;
   source: 'telegram' | 'manual' | 'simulator' | 'import';
   telegramChatId?: string;
   telegramMessageId?: number;
@@ -52,6 +88,10 @@ export interface Transaction {
   rawMessage?: string;
   createdAt: string; // ISO string
   tags?: string[];
+  isReimbursement?: boolean;
+  reimbursementStatus?: 'pending' | 'settled';
+  isSavingsTransfer?: boolean;
+  isInvestment?: boolean;
 }
 
 export interface CategoryDef {
@@ -108,6 +148,10 @@ export interface BotConfig {
 export interface FinancialSummary {
   totalIncome: number;
   totalExpense: number;
+  personalExpense?: number;
+  pendingReimbursements?: number;
+  savingsTransfers?: number;
+  investmentsTotal?: number;
   netSavings: number;
   savingsRate: number;
   transactionCount: number;
@@ -116,6 +160,45 @@ export interface FinancialSummary {
   monthlyBudget: number;
   monthlySpent: number;
   dailyAverageExpense: number;
+}
+
+export interface CardEmi {
+  id: string;
+  userId?: string;
+  cardId: AccountId;
+  title: string;
+  monthlyAmount: number;
+  totalMonths: number;
+  paidMonths: number;
+  dueDay: number;
+  startDate: string;
+  notes?: string;
+  createdAt: string;
+}
+
+export interface SavingsTransfer {
+  id: string;
+  userId?: string;
+  amount: number;
+  date: string;
+  recipient: string;
+  fromAccount: AccountId;
+  notes?: string;
+  createdAt: string;
+}
+
+export interface InvestmentRecord {
+  id: string;
+  userId?: string;
+  type: 'RD' | 'FD' | 'Mutual Fund' | 'Gold' | 'PPF' | 'Other';
+  name: string;
+  amount: number;
+  account: AccountId;
+  date: string;
+  maturityDate?: string;
+  interestRate?: number;
+  notes?: string;
+  createdAt: string;
 }
 
 export interface AvoidableExpenseItem {
@@ -184,6 +267,7 @@ export interface UdhaarRecord {
   date: string; // YYYY-MM-DD
   time?: string;
   status: 'pending' | 'settled';
+  account?: AccountId;
   settledAt?: string;
   createdAt: string;
 }
@@ -213,6 +297,93 @@ export interface BudgetAlert {
   status: 'warning' | 'exceeded'; // warning >= 80%, exceeded >= 100%
   message: string;
 }
+
+export interface RestoreBackupResult {
+  success: boolean;
+  message: string;
+  restoredCount: number;
+  categoriesCreated: number;
+  udhaarsCount?: number;
+  fuelLogsCount?: number;
+  investmentsCount?: number;
+  savingsTransfersCount?: number;
+  emisCount?: number;
+  transactions: Transaction[];
+  categories: CategoryDef[];
+  budgets: CategoryBudget[];
+  udhaars?: UdhaarRecord[];
+  fuelLogs?: FuelLog[];
+  investments?: InvestmentRecord[];
+  savingsTransfers?: SavingsTransfer[];
+  cardEmis?: CardEmi[];
+  summary: FinancialSummary;
+}
+
+export interface DailyItemLimit {
+  id: string;
+  userId?: string;
+  itemName: string;
+  dailyLimit: number;
+  keywords: string[];
+  category: string;
+  notes?: string;
+  isActive: boolean;
+  todaySpent?: number;
+  status?: 'safe' | 'warning' | 'exceeded';
+  percentage?: number;
+  todayCount?: number;
+  createdAt?: string;
+}
+
+export interface DailyLimitsSummary {
+  totalLimitsCount: number;
+  activeLimitsCount: number;
+  totalDailyBudget: number;
+  totalTodaySpent: number;
+  totalExceededCount: number;
+  totalWarningCount: number;
+  totalSafeCount: number;
+}
+
+export interface PiggyBankItem {
+  id: string;
+  userId?: string;
+  name: string;
+  category: 'general' | 'emergency' | 'goal' | 'travel' | 'investment' | 'vehicle' | 'home' | 'health';
+  targetAmount?: number;
+  currentBalance: number;
+  icon?: string;
+  color?: string;
+  notes?: string;
+  isSurplusFund?: boolean;
+  targetDate?: string;
+  createdAt: string;
+  updatedAt?: string;
+}
+
+export interface PiggyBankTransaction {
+  id: string;
+  userId?: string;
+  fundId: string;
+  fundName?: string;
+  type: 'deposit' | 'withdraw' | 'transfer_in' | 'transfer_out' | 'surplus_collect';
+  amount: number;
+  sourceFundId?: string;
+  targetFundId?: string;
+  notes?: string;
+  date: string;
+  createdAt: string;
+}
+
+export interface PiggyBankSummary {
+  totalInAllFunds: number;
+  surplusFundBalance: number;
+  totalAllocatedToGoals: number;
+  totalTargetGoals: number;
+  currentMonthUncollectedSurplus: number;
+  activeFundsCount: number;
+}
+
 
 
 
