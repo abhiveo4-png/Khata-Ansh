@@ -871,6 +871,7 @@ function getUserData(userId: string): UserDataStore {
 
     // Auto-migrate any transactions that had the UTC server time offset bug to Indian Standard Time (IST)
     let timeAdjusted = false;
+    let descAdjusted = false;
     for (const tx of store.transactions) {
       if (tx.createdAt && tx.time) {
         try {
@@ -886,9 +887,18 @@ function getUserData(userId: string): UserDataStore {
           // ignore
         }
       }
+
+      // Auto-clean description if it accidentally had account names attached (e.g. "LPG Ax", "School Fee Ax")
+      if (tx.description && /\b(?:ax|axis|sbi|icici|ic|rupay)\s*(?:cc|card|bank)?$/i.test(tx.description.trim())) {
+        const cleaned = cleanTransactionDescription(tx.description, tx.category);
+        if (cleaned && cleaned !== tx.description) {
+          tx.description = cleaned;
+          descAdjusted = true;
+        }
+      }
     }
 
-    if (synced || timeAdjusted) {
+    if (synced || timeAdjusted || descAdjusted) {
       saveJson(filePath, store);
       persistToPg(`user_data:${userId}`, store).catch(() => {});
     }
@@ -1609,6 +1619,32 @@ function detectFamilyTripPooja(text: string): boolean {
   return poojaPattern.test(lower) || endsWithTripOrPooja;
 }
 
+function cleanTransactionDescription(rawDesc: string, detectedCategory?: string): string {
+  if (!rawDesc) return detectedCategory || 'Expense';
+  let cleaned = rawDesc
+    // Remove account keywords and common bank words
+    .replace(/\b(?:ax\s*bank|axis\s*bank|ic\s*bank|icici\s*bank|sbi\s*bank|hdfc\s*bank|kotak\s*bank)\b/gi, '')
+    .replace(/\b(?:icici\s*cc\s*0000|icici\s*cc|rupay\s*cc|sbi\s*cc\s*5733|sbi\s*cc\s*6526|sbi\s*5733|sbi\s*6526|ax\s*cc\s*8210|ax\s*cc\s*5376|ax\s*8210|ax\s*5376|axis\s*8210|axis\s*5376)\b/gi, '')
+    .replace(/\b(?:axis\s*cc|axis\s*card|ax\s*cc|ax\s*card|icici\s*card|sbi\s*card)\b/gi, '')
+    .replace(/\b(?:axis|ax|icici|sbi|hdfc|kotak)\s*(?:cc|card|bank)?\b/gi, '')
+    .replace(/\b(?:0000|5733|6526|8210|5376)\b/g, '')
+    .replace(/\b(?:cash|nagad|rokda|upi|gpay|paytm|phonepe|net\s*banking|credit\s*card|debit\s*card)\b/gi, '')
+    .replace(/\b(?:rim|reimburse|reimbursement|office\s*claim|client\s*trip|claim)\b/gi, '')
+    .replace(/\b(?:yesterday|kal|beeta kal|parso|today|aaj)\b/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  // Clean trailing prepositions/symbols like 'se', 'me', 'mai', 'via', 'from', 'through', '-', '/'
+  cleaned = cleaned.replace(/\s+(?:se|me|mai|via|from|through|by|ki|ka|ke|for|wala|wali)$/i, '').trim();
+  cleaned = cleaned.replace(/^[-–—:,.\s]+|[-–—:,.\s]+$/g, '').trim();
+
+  if (!cleaned || cleaned.length < 2) {
+    return detectedCategory && detectedCategory !== 'Uncategorized' ? detectedCategory : (rawDesc || 'Expense');
+  }
+
+  return cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
+}
+
 // ---------------- Fallback Rule-based parser ----------------
 
 function parseFallback(rawText: string, userCategories: CategoryDef[]): Array<{
@@ -1750,11 +1786,13 @@ function parseFallback(rawText: string, userCategories: CategoryDef[]): Array<{
       }
     }
 
+    const finalDescription = cleanTransactionDescription(cleanDesc, matchedCategory);
+
     results.push({
       type,
       amount,
       category: matchedCategory,
-      description: cleanDesc.charAt(0).toUpperCase() + cleanDesc.slice(1),
+      description: finalDescription,
       date: extractedDate || getAppDateTime().date,
       time: extractedTime,
       paymentMethod,
@@ -1838,6 +1876,13 @@ CRITICAL RULES:
    - If user mentions bank transfer/net banking -> "Bank Transfer".
    - CRITICAL: For expense/spend transactions, if the user DID NOT specify any payment method (e.g. "100 dahi", "50 chai", "500 petrol", "200 auto"), paymentMethod MUST BE "UPI/Cash".
 
+8. Clean Description & Account separation:
+   - The "description" field MUST ONLY contain the clean item / purpose / merchant name (e.g. "LPG", "School Fee", "Petrol", "Dahi", "Groceries").
+   - NEVER keep account names, bank names, or card names (like "AX", "AX Bank", "Axis", "SBI", "ICICI", "Cash", "Card") inside the "description" field.
+   - Example 1: User says "1000 LPG AX Bank" -> description: "LPG", account: "AX Bank".
+   - Example 2: User says "15000 School Fee AX Bank" -> description: "School Fee", account: "AX Bank".
+   - Example 3: User says "500 Petrol SBI 5733" -> description: "Petrol", account: "SBI CC 5733".
+
 User message:
 """
 ${rawText}
@@ -1876,8 +1921,10 @@ ${rawText}
         if (item.type === 'expense' && !hasExplicitPaymentMethod(rawText)) {
           finalPm = 'UPI/Cash';
         }
+        const cleanedDesc = cleanTransactionDescription(item.description, item.category);
         return {
           ...item,
+          description: cleanedDesc,
           paymentMethod: finalPm,
           account: item.account || detectAccountFromText(rawText) || 'ICICI CC 0000',
           isReimbursement: Boolean(item.isReimbursement || detectReimbursement(rawText)),
@@ -5830,13 +5877,15 @@ ${personNet > 0
       const finalDate = (parsed.date && /^\d{4}-\d{2}-\d{2}$/.test(parsed.date)) ? parsed.date : msgTimeInfo.date;
       const itemRaw = parsedList.length > 1 ? `${parsed.amount} ${parsed.description}` : rawText;
 
+      const cleanedDesc = cleanTransactionDescription(parsed.description, parsed.category);
+
       const newTx: Transaction = {
         id: `tx_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
         userId,
         type: parsed.type,
         amount: parsed.amount,
         category: parsed.category,
-        description: parsed.description,
+        description: cleanedDesc,
         date: finalDate,
         time: finalTime,
         paymentMethod: parsed.paymentMethod,
