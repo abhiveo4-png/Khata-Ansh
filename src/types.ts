@@ -161,6 +161,13 @@ export interface FinancialSummary {
   monthlyBudget: number;
   monthlySpent: number;
   dailyAverageExpense: number;
+  currentMonthIncome?: number;
+  currentMonthTotalExpense?: number;
+  currentMonthPersonalExpense?: number;
+  currentMonthNetSavings?: number;
+  currentMonthCount?: number;
+  openingCarryforward?: number;
+  totalNetSavings?: number;
 }
 
 export interface CardEmi {

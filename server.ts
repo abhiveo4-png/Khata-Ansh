@@ -230,6 +230,13 @@ export interface FinancialSummary {
   monthlyBudget: number;
   monthlySpent: number;
   dailyAverageExpense: number;
+  currentMonthIncome?: number;
+  currentMonthTotalExpense?: number;
+  currentMonthPersonalExpense?: number;
+  currentMonthNetSavings?: number;
+  currentMonthCount?: number;
+  openingCarryforward?: number;
+  totalNetSavings?: number;
 }
 
 export interface UdhaarRecord {
@@ -1008,18 +1015,36 @@ function calculateUserSummary(userId: string): FinancialSummary {
   let expenseCount = 0;
   let monthlySpent = 0;
 
+  let currentMonthIncome = 0;
+  let currentMonthTotalExpense = 0;
+  let currentMonthPersonalExpense = 0;
+  let currentMonthCount = 0;
+  let prevIncome = 0;
+  let prevPersonalExpense = 0;
+
   const istInfo = getAppDateTime();
   const currentMonthPrefix = istInfo.date.substring(0, 7);
   const currentDay = parseInt(istInfo.date.substring(8, 10), 10) || 1;
 
   for (const t of txList) {
     const amt = Number(t.amount) || 0;
+    const isCurrentMonth = Boolean(t.date && t.date.startsWith(currentMonthPrefix));
+    const isPrevMonth = Boolean(t.date && t.date < `${currentMonthPrefix}-01`);
+
+    if (isCurrentMonth) {
+      currentMonthCount++;
+    }
+
     if (t.type === 'income') {
       totalIncome += amt;
       incomeCount++;
+      if (isCurrentMonth) currentMonthIncome += amt;
+      if (isPrevMonth) prevIncome += amt;
     } else {
       totalExpense += amt;
       expenseCount++;
+
+      if (isCurrentMonth) currentMonthTotalExpense += amt;
 
       // Check if reimbursement (exempt from budget and personal expense)
       const isRim = Boolean(t.isReimbursement || t.category === 'Reimbursement');
@@ -1039,17 +1064,24 @@ function calculateUserSummary(userId: string): FinancialSummary {
         if (t.isInvestment) {
           investmentsTotal += amt;
         }
-        if (t.date && t.date.startsWith(currentMonthPrefix)) {
+        if (isCurrentMonth) {
           monthlySpent += amt;
+          currentMonthPersonalExpense += amt;
+        }
+        if (isPrevMonth) {
+          prevPersonalExpense += amt;
         }
       }
     }
   }
 
-  // True Net Savings = Income - Personal Expense (or Cash Balance + Pending Reimbursements)
+  const openingCarryforward = prevIncome - prevPersonalExpense;
+  const currentMonthNetSavings = currentMonthIncome - currentMonthPersonalExpense;
+  const totalNetSavings = openingCarryforward + currentMonthNetSavings;
+
+  // True Net Savings = Income - Personal Expense
   const cashBalance = totalIncome - totalExpense;
-  const netSavings = totalIncome - personalExpense;
-  const savingsRate = totalIncome > 0 ? Math.max(0, Math.round((netSavings / totalIncome) * 100)) : 0;
+  const savingsRate = currentMonthIncome > 0 ? Math.max(0, Math.round((currentMonthNetSavings / currentMonthIncome) * 100)) : 0;
   const expenseCats = new Set((store.categories || []).filter(c => c.type !== 'income').map(c => c.name.toLowerCase()));
   const monthlyBudget = (store.budgets || [])
     .filter(b => expenseCats.has(b.category.toLowerCase()))
@@ -1065,7 +1097,7 @@ function calculateUserSummary(userId: string): FinancialSummary {
     pendingReimbursements,
     savingsTransfers,
     investmentsTotal,
-    netSavings,
+    netSavings: totalNetSavings,
     savingsRate,
     transactionCount: txList.length,
     incomeCount,
@@ -1073,6 +1105,13 @@ function calculateUserSummary(userId: string): FinancialSummary {
     monthlyBudget,
     monthlySpent,
     dailyAverageExpense,
+    currentMonthIncome,
+    currentMonthTotalExpense,
+    currentMonthPersonalExpense,
+    currentMonthNetSavings,
+    currentMonthCount,
+    openingCarryforward,
+    totalNetSavings,
   };
 }
 
@@ -4471,8 +4510,23 @@ Aap neeche diye gaye inline buttons par tap karein, keyboard buttons use karein 
   if (isBalanceQuery) {
     const summary = calculateUserSummary(userId);
     let balanceMsg = '';
+    const istInfo = getAppDateTime();
+    const [y, m] = istInfo.date.split('-').map(Number);
+    const monthName = new Date(y, m - 1, 1).toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
+
     if (isSenderOwner) {
-      balanceMsg = `💰 <b>${targetUser.name} ka Net Bacha Hua Balance</b>\n\n💵 <b>Net Savings:</b> ₹${summary.netSavings.toLocaleString('en-IN')}\n🟢 <b>Kul Income (Kamai):</b> ₹${summary.totalIncome.toLocaleString('en-IN')}\n🔴 <b>Kul Kharcha:</b> ₹${summary.totalExpense.toLocaleString('en-IN')}\n📈 <b>Bachat Rate:</b> ${summary.savingsRate}%\n📝 <b>Total Transactions:</b> ${summary.transactionCount}\n\n💡 <i>Faltu kharcha aur bachat tips ke liye AI Faltu Kharcha button dabayein!</i>`;
+      balanceMsg = `💰 <b>${targetUser.name} ka Net Balance (${monthName})</b>
+
+🟢 <b>Is Mahine Ki Income:</b> ₹${(summary.currentMonthIncome || 0).toLocaleString('en-IN')}
+🔴 <b>Is Mahine Ka Kharcha:</b> ₹${(summary.currentMonthPersonalExpense || 0).toLocaleString('en-IN')}
+📈 <b>Is Mahine Ki Net Bachat:</b> ₹${(summary.currentMonthNetSavings || 0).toLocaleString('en-IN')} (Rate: ${summary.savingsRate}%)
+📦 <b>Pichla Carryforward Balance:</b> ₹${(summary.openingCarryforward || 0).toLocaleString('en-IN')}
+━━━━━━━━━━━━━━━━━━━━
+💵 <b>Total Wallet/Bank Net Balance:</b> <b>₹${(summary.totalNetSavings || summary.netSavings).toLocaleString('en-IN')}</b>
+🎯 <b>Monthly Budget Remaining:</b> ₹${Math.max(0, summary.monthlyBudget - summary.monthlySpent).toLocaleString('en-IN')}
+📝 <b>Is Mahine Ke Transactions:</b> ${summary.currentMonthCount || 0}
+
+💡 <i>Purane mahino ka detailed archive dekhne ke liye Web Dashboard use karein!</i>`;
     } else {
       balanceMsg = `💰 <b>Balance & Khata Summary</b> (👤 <b>${senderDisplayName}</b>)\n━━━━━━━━━━━━━━━━━━━━\n👤 <b>Aapka Is Mahine Ka Kharcha:</b> <b>₹${memberMonthSpent.toLocaleString('en-IN')}</b>\n📝 <b>Aapke Kul Transactions:</b> ${memberTransactions.length}\n━━━━━━━━━━━━━━━━━━━━\n💵 <b>Net Family Balance:</b> 🔒 Masked (Owner Protected)\n🟢 <b>Kul Family Income:</b> 🔒 Masked (Owner Protected)\n🔴 <b>Kul Family Kharcha:</b> 🔒 Masked (Owner Protected)\n\n🔒 <i>(Family Privacy Active: Master financial vault figures are protected)</i>`;
     }
@@ -4495,8 +4549,23 @@ Aap neeche diye gaye inline buttons par tap karein, keyboard buttons use karein 
   if (isSummaryQuery) {
     const summary = calculateUserSummary(userId);
     let summaryMsg = '';
+    const istInfo = getAppDateTime();
+    const [y, m] = istInfo.date.split('-').map(Number);
+    const monthName = new Date(y, m - 1, 1).toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
+
     if (isSenderOwner) {
-      summaryMsg = `📊 <b>${targetUser.name} ka Financial Hisaab-Kitaab</b>\n\n🟢 <b>Kul Income (Kamai):</b> ₹${summary.totalIncome.toLocaleString('en-IN')}\n🔴 <b>Kul Kharcha:</b> ₹${summary.totalExpense.toLocaleString('en-IN')}\n💰 <b>Net Bacha Hua Balance:</b> ₹${summary.netSavings.toLocaleString('en-IN')}\n📈 <b>Bachat Rate:</b> ${summary.savingsRate}%\n📝 <b>Total Transactions:</b> ${summary.transactionCount}\n\n💡 <i>Faltu kharcha aur bachat tips ke liye <code>/tips</code> bhejein!</i>`;
+      summaryMsg = `📊 <b>${targetUser.name} ka Current Month Hisaab (${monthName})</b>
+
+🟢 <b>Is Mahine Ki Income:</b> ₹${(summary.currentMonthIncome || 0).toLocaleString('en-IN')}
+🔴 <b>Is Mahine Ka Kharcha:</b> ₹${(summary.currentMonthPersonalExpense || 0).toLocaleString('en-IN')}
+📈 <b>Is Mahine Ki Bachat Rate:</b> ${summary.savingsRate}%
+📦 <b>Pichla Balance Carryforward:</b> ₹${(summary.openingCarryforward || 0).toLocaleString('en-IN')}
+━━━━━━━━━━━━━━━━━━━━
+💵 <b>Net Bacha Hua Balance:</b> <b>₹${(summary.totalNetSavings || summary.netSavings).toLocaleString('en-IN')}</b>
+🎯 <b>Monthly Budget Limit:</b> ₹${summary.monthlyBudget.toLocaleString('en-IN')} (₹${Math.max(0, summary.monthlyBudget - summary.monthlySpent).toLocaleString('en-IN')} bacha)
+📝 <b>Is Mahine Ke Records:</b> ${summary.currentMonthCount || 0} transactions
+
+💡 <i>Faltu kharcha aur bachat tips ke liye <code>/tips</code> bhejein!</i>`;
     } else {
       summaryMsg = `📊 <b>Financial Summary Report</b> (👤 <b>${senderDisplayName}</b>)\n━━━━━━━━━━━━━━━━━━━━\n👤 <b>Aapka Is Mahine Ka Kharcha:</b> <b>₹${memberMonthSpent.toLocaleString('en-IN')}</b>\n📝 <b>Aapke Records:</b> ${memberTransactions.length} transactions\n━━━━━━━━━━━━━━━━━━━━\n🟢 <b>Kul Family Income:</b> 🔒 Masked (Owner Protected)\n🔴 <b>Kul Family Kharcha:</b> 🔒 Masked (Owner Protected)\n💰 <b>Net Family Savings:</b> 🔒 Masked (Owner Protected)\n\n🔒 <i>(Owner Privacy: Aapko sirf aapke transactions ka amount dikhayi dega)</i>`;
     }
@@ -5932,9 +6001,10 @@ ${personNet > 0
 📅 <b>Tareeq va Samay:</b> ${itemDate} • ${itemTime} (IST)
 
 ━━━━━━━━━━━━━━━━━━━━
-💵 <b>Net Wallet/Bank Balance:</b> ₹${summary.netSavings.toLocaleString('en-IN')} <i>(Kamai - Kharcha)</i>
+💵 <b>Net Wallet/Bank Balance:</b> ₹${(summary.totalNetSavings || summary.netSavings).toLocaleString('en-IN')}
+📦 <i>(Pichla Carry: ₹${(summary.openingCarryforward || 0).toLocaleString('en-IN')} + Is Mahine: ₹${(summary.currentMonthNetSavings || 0).toLocaleString('en-IN')})</i>
 🎯 <b>Monthly Budget Bacha:</b> ₹${Math.max(0, summary.monthlyBudget - summary.monthlySpent).toLocaleString('en-IN')}
-${isInc ? `📈 <b>Kul Income:</b> ₹${summary.totalIncome.toLocaleString('en-IN')}` : `📉 <b>Kul Kharcha:</b> ₹${summary.totalExpense.toLocaleString('en-IN')}`}`;
+${isInc ? `🟢 <b>Is Mahine Ki Income:</b> ₹${(summary.currentMonthIncome || 0).toLocaleString('en-IN')}` : `🔴 <b>Is Mahine Ka Kharcha:</b> ₹${(summary.currentMonthPersonalExpense || 0).toLocaleString('en-IN')}`}`;
       } else {
         const newMemberSpent = memberMonthSpent + (item.type === 'expense' ? item.amount : 0);
         replyText = `${isInc ? '🟢 <b>INCOME ADD HO GAYI</b>' : '🔴 <b>KHARCHA RECORD HO GAYA</b>'}
@@ -5959,7 +6029,7 @@ ${isInc ? `📈 <b>Kul Income:</b> ₹${summary.totalIncome.toLocaleString('en-I
         .join('\n');
 
       if (isSenderOwner) {
-        replyText = `✅ <b>${parsedList.length} TRANSACTIONS ADD HO GAYE</b>${memberTag}\n\n${itemsList}\n\n━━━━━━━━━━━━━━━━━━━━\n💵 <b>Net Wallet/Bank Balance:</b> ₹${summary.netSavings.toLocaleString('en-IN')} <i>(Kamai - Kharcha)</i>\n🎯 <b>Monthly Budget Bacha:</b> ₹${Math.max(0, summary.monthlyBudget - summary.monthlySpent).toLocaleString('en-IN')}`;
+        replyText = `✅ <b>${parsedList.length} TRANSACTIONS ADD HO GAYE</b>${memberTag}\n\n${itemsList}\n\n━━━━━━━━━━━━━━━━━━━━\n💵 <b>Net Wallet/Bank Balance:</b> ₹${(summary.totalNetSavings || summary.netSavings).toLocaleString('en-IN')}\n📦 <i>(Pichla Carry: ₹${(summary.openingCarryforward || 0).toLocaleString('en-IN')} + Is Mahine: ₹${(summary.currentMonthNetSavings || 0).toLocaleString('en-IN')})</i>\n🎯 <b>Monthly Budget Bacha:</b> ₹${Math.max(0, summary.monthlyBudget - summary.monthlySpent).toLocaleString('en-IN')}`;
       } else {
         replyText = `✅ <b>${parsedList.length} TRANSACTIONS ADD HO GAYE</b>${memberTag}\n\n${itemsList}\n\n━━━━━━━━━━━━━━━━━━━━\n💵 <b>Net Family Balance:</b> 🔒 Masked (Owner Protected)\n🎯 <b>Monthly Budget Bacha:</b> 🔒 Masked (Owner Protected)\n🔒 <i>(Family Privacy: Master balance protected)</i>`;
       }
@@ -9600,9 +9670,11 @@ async function sendDailyTelegramDigest(type: 'morning' | 'evening') {
 ━━━━━━━━━━━━━━━━━━━━
 📊 <b>Aapka Aaj Ka Financial Plan:</b>
 
-💵 <b>Pocket / Bank Net Balance:</b> <b>₹${summary.netSavings.toLocaleString('en-IN')}</b>
-<i>(Kul Kamai - Kul Kharcha)</i>
+💵 <b>Pocket / Bank Net Balance:</b> <b>₹${(summary.totalNetSavings || summary.netSavings).toLocaleString('en-IN')}</b>
+<i>(Pichla Carryforward ₹${(summary.openingCarryforward || 0).toLocaleString('en-IN')} + Is Mahine Ki Net Bachat ₹${(summary.currentMonthNetSavings || 0).toLocaleString('en-IN')})</i>
 
+🟢 <b>Is Mahine Ki Income:</b> ₹${(summary.currentMonthIncome || 0).toLocaleString('en-IN')}
+🔴 <b>Is Mahine Ka Kharcha:</b> ₹${(summary.currentMonthPersonalExpense || 0).toLocaleString('en-IN')}
 🎯 <b>Monthly Budget Limit Bacha:</b> <b>₹${monthlyRemainingBudget.toLocaleString('en-IN')}</b> (${daysRemaining} din baaki)
 <i>(Target Budget: ₹${summary.monthlyBudget.toLocaleString('en-IN')} | Kharch: ₹${summary.monthlySpent.toLocaleString('en-IN')})</i>
 ${gullak.currentMonthSaved > 0 && Math.abs(gullak.currentMonthSaved - monthlyRemainingBudget) > 1 ? `🐷 <b>Gullak Bachat:</b> ₹${gullak.currentMonthSaved.toLocaleString('en-IN')} <i>(Unspent Category Funds)</i>\n` : ''}
@@ -9623,8 +9695,8 @@ ${gullak.currentMonthSaved > 0 && Math.abs(gullak.currentMonthSaved - monthlyRem
 ━━━━━━━━━━━━━━━━━━━━
 📊 <b>Aaj Ka Total Kharcha:</b> <b>₹${todayExpense.toLocaleString('en-IN')}</b> (${todayTxs.filter(t => t.type === 'expense').length} items)
 ${todayIncome > 0 ? `🟢 <b>Aaj Ki Income:</b> ₹${todayIncome.toLocaleString('en-IN')}\n` : ''}
-💵 <b>Pocket / Bank Net Balance:</b> <b>₹${summary.netSavings.toLocaleString('en-IN')}</b>
-<i>(Kul Kamai - Kul Kharcha)</i>
+💵 <b>Pocket / Bank Net Balance:</b> <b>₹${(summary.totalNetSavings || summary.netSavings).toLocaleString('en-IN')}</b>
+<i>(Pichla Carryforward ₹${(summary.openingCarryforward || 0).toLocaleString('en-IN')} + Is Mahine Ki Net Bachat ₹${(summary.currentMonthNetSavings || 0).toLocaleString('en-IN')})</i>
 
 🎯 <b>Monthly Budget Limit Bacha:</b> <b>₹${monthlyRemainingBudget.toLocaleString('en-IN')}</b>
 <i>(Target Budget me se bacha quota)</i>
