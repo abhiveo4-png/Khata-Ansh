@@ -2285,8 +2285,25 @@ export function isPureDateQuery(rawText: string): string | null {
   return null;
 }
 
-export function buildDateReportTelegramMessage(userId: string, targetDate: string, userName: string): string {
+export interface SenderTelegramContext {
+  isSenderOwner: boolean;
+  senderDisplayName?: string;
+  chatId?: string;
+  fromId?: string;
+}
+
+export function buildDateReportTelegramMessage(
+  userId: string, 
+  targetDate: string, 
+  userName: string,
+  senderContext?: SenderTelegramContext
+): string {
   const store = getUserData(userId);
+  const isOwner = senderContext ? senderContext.isSenderOwner : true;
+  const senderDisplayName = senderContext?.senderDisplayName || '';
+  const chatId = senderContext?.chatId || '';
+  const fromId = senderContext?.fromId || '';
+
   const matching = store.transactions.filter(t => t.date === targetDate);
 
   // Format date display
@@ -2317,7 +2334,7 @@ export function buildDateReportTelegramMessage(userId: string, targetDate: strin
     return `📅 <b>TAREEQ KA HISAAB-KITAAB REPORT</b>
 <b>${formattedDate}</b> (<code>${targetDate}</code>)
 ━━━━━━━━━━━━━━━━━━━━
-👤 <b>Khata:</b> ${userName}
+👤 <b>Khata:</b> ${userName}${!isOwner ? ` (👤 <b>${senderDisplayName}</b>)` : ''}
 
 ℹ️ <b>Is tareeq ko koi bhi kharcha ya income record nahi hua tha.</b>
 
@@ -2333,12 +2350,55 @@ export function buildDateReportTelegramMessage(userId: string, targetDate: strin
   }
 
   const txListText = matching.map((t, idx) => {
+    const isOwnTx = isOwner || 
+      (t.telegramChatId && (t.telegramChatId === chatId || (fromId && t.telegramChatId === fromId))) ||
+      (t.telegramUser && senderDisplayName && (
+        t.telegramUser.toLowerCase() === senderDisplayName.toLowerCase() ||
+        t.telegramUser.toLowerCase().includes(senderDisplayName.toLowerCase()) ||
+        senderDisplayName.toLowerCase().includes(t.telegramUser.toLowerCase())
+      ));
+
     const sign = t.type === 'income' ? '🟢 +' : '🔴 -';
+    const amtStr = isOwnTx ? `₹${t.amount.toLocaleString('en-IN')}` : `🔒 Masked`;
     const pm = t.paymentMethod ? `[${t.paymentMethod}]` : '';
     const timeStr = t.time ? ` • 🕒 ${t.time}` : '';
     const emoji = getCategoryEmoji(t.category);
-    return `<b>[#${idx + 1}]</b> ${sign}₹${t.amount.toLocaleString('en-IN')} • <b>${t.description}</b> (${emoji} ${t.category}) ${pm}${timeStr}`;
+    const byTag = t.telegramUser ? ` <i>(by ${t.telegramUser})</i>` : '';
+    return `<b>[#${idx + 1}]</b> ${sign}${amtStr} • <b>${t.description}</b> (${emoji} ${t.category}) ${pm}${byTag}${timeStr}`;
   }).join('\n\n');
+
+  if (!isOwner) {
+    const memberMatching = matching.filter(t => 
+      (t.telegramChatId && (t.telegramChatId === chatId || (fromId && t.telegramChatId === fromId))) ||
+      (t.telegramUser && senderDisplayName && (
+        t.telegramUser.toLowerCase() === senderDisplayName.toLowerCase() ||
+        t.telegramUser.toLowerCase().includes(senderDisplayName.toLowerCase()) ||
+        senderDisplayName.toLowerCase().includes(t.telegramUser.toLowerCase())
+      ))
+    );
+    const memberDaySpent = memberMatching
+      .filter(t => t.type === 'expense')
+      .reduce((s, t) => s + (Number(t.amount) || 0), 0);
+
+    return `📅 <b>TAREEQ KA HISAAB-KITAAB REPORT</b>
+<b>${formattedDate}</b> (<code>${targetDate}</code>)
+━━━━━━━━━━━━━━━━━━━━
+👤 <b>Viewer:</b> <b>${senderDisplayName}</b> <i>(Family Privacy Mode)</i>
+👤 <b>Aapka Is Din Ka Kharcha:</b> <b>₹${memberDaySpent.toLocaleString('en-IN')}</b> (${memberMatching.length} transactions)
+━━━━━━━━━━━━━━━━━━━━
+🟢 <b>Kul Family Income:</b> 🔒 Masked (Owner Protected)
+🔴 <b>Kul Family Kharcha:</b> 🔒 Masked (Owner Protected)
+💰 <b>Net Day Savings:</b> 🔒 Masked (Owner Protected)
+📝 <b>Total Transactions:</b> ${matching.length}
+
+━━━━━━━━━━━━━━━━━━━━
+📋 <b>TRANSACTIONS LIST (Is Tareeq Ke):</b>
+
+${txListText}
+
+━━━━━━━━━━━━━━━━━━━━
+🔒 <i>(Owner Privacy: Aapko sirf aapke transactions ka amount dikhta hai)</i>`;
+  }
 
   return `📅 <b>TAREEQ KA HISAAB-KITAAB REPORT</b>
 <b>${formattedDate}</b> (<code>${targetDate}</code>)
@@ -2350,12 +2410,12 @@ export function buildDateReportTelegramMessage(userId: string, targetDate: strin
 📝 <b>Total Transactions:</b> ${matching.length}
 
 ━━━━━━━━━━━━━━━━━━━━
-📋 <b>IS DIN KE SAARE TRANSACTIONS:</b>
+📋 <b>TRANSACTIONS LIST (Is Tareeq Ke):</b>
 
 ${txListText}
 
 ━━━━━━━━━━━━━━━━━━━━
-💡 <i>Tip: Kisi transaction ko delete karne ke liye <code>/delete &lt;number&gt;</code> ya <code>/undo</code> bhejein!</i>`;
+💡 <i>Kisi transaction ko delete karne ke liye: <code>delete ${matching[0]?.description || 'item'}</code></i>`;
 }
 
 // ---------------- Helper for Item-Specific Spending Queries (/spent <item>, "signature pe kitna kharch huwa") ----------------
@@ -2486,17 +2546,26 @@ export function isTransactionItemMatch(t: Transaction, cleanQuery: string): bool
   return false;
 }
 
-export function buildItemSpendingReportTelegramMessage(userId: string, itemQuery: string, userName: string): string {
+export function buildItemSpendingReportTelegramMessage(
+  userId: string, 
+  itemQuery: string, 
+  userName: string,
+  senderContext?: SenderTelegramContext
+): string {
   const store = getUserData(userId);
   const cleanQ = itemQuery.toLowerCase().trim();
+  const isOwner = senderContext ? senderContext.isSenderOwner : true;
+  const senderDisplayName = senderContext?.senderDisplayName || '';
+  const chatId = senderContext?.chatId || '';
+  const fromId = senderContext?.fromId || '';
 
   // Search matching transactions ONLY in item description & tags (never entire batch rawMessage)
-  const matchingExpenses = store.transactions.filter(t => {
+  let matchingExpenses = store.transactions.filter(t => {
     if (t.type !== 'expense') return false;
     return isTransactionItemMatch(t, cleanQ);
   });
 
-  const matchingIncomes = store.transactions.filter(t => {
+  let matchingIncomes = store.transactions.filter(t => {
     if (t.type !== 'income') return false;
     return isTransactionItemMatch(t, cleanQ);
   });
@@ -2506,7 +2575,7 @@ export function buildItemSpendingReportTelegramMessage(userId: string, itemQuery
   if (matchingExpenses.length === 0 && matchingIncomes.length === 0) {
     return `🔍 <b>ITEM EXPENSE REPORT: "${displayKeyword.toUpperCase()}"</b>
 ━━━━━━━━━━━━━━━━━━━━
-👤 <b>Khata:</b> ${userName}
+👤 <b>Khata:</b> ${userName}${!isOwner ? ` (👤 <b>${senderDisplayName}</b>)` : ''}
 
 ℹ️ <b>"${itemQuery}" ke naam se koi bhi kharcha ya transaction nahi mila.</b>
 
@@ -2514,6 +2583,58 @@ export function buildItemSpendingReportTelegramMessage(userId: string, itemQuery
 • Naya kharcha add karein: <code>250 ${itemQuery} upi</code>
 • Kisi doosre item/merchant ko search karein: <code>/spent petrol</code> ya <code>zomato ka kharcha</code>
 • Saare recent transactions dekhne ke liye <code>/recent</code> bhejein.`;
+  }
+
+  if (!isOwner) {
+    // For Family Member: only calculate and show transactions added by this family member
+    matchingExpenses = matchingExpenses.filter(t => 
+      (t.telegramChatId && (t.telegramChatId === chatId || (fromId && t.telegramChatId === fromId))) ||
+      (t.telegramUser && senderDisplayName && (
+        t.telegramUser.toLowerCase() === senderDisplayName.toLowerCase() ||
+        t.telegramUser.toLowerCase().includes(senderDisplayName.toLowerCase()) ||
+        senderDisplayName.toLowerCase().includes(t.telegramUser.toLowerCase())
+      ))
+    );
+
+    matchingIncomes = matchingIncomes.filter(t => 
+      (t.telegramChatId && (t.telegramChatId === chatId || (fromId && t.telegramChatId === fromId))) ||
+      (t.telegramUser && senderDisplayName && (
+        t.telegramUser.toLowerCase() === senderDisplayName.toLowerCase() ||
+        t.telegramUser.toLowerCase().includes(senderDisplayName.toLowerCase()) ||
+        senderDisplayName.toLowerCase().includes(t.telegramUser.toLowerCase())
+      ))
+    );
+
+    if (matchingExpenses.length === 0 && matchingIncomes.length === 0) {
+      return `🔍 <b>ITEM EXPENSE REPORT: "${displayKeyword.toUpperCase()}"</b>
+━━━━━━━━━━━━━━━━━━━━
+👤 <b>Viewer:</b> <b>${senderDisplayName}</b> <i>(Family Privacy Mode)</i>
+
+ℹ️ <b>Aapke dwara "${itemQuery}" par abhi tak koi personal kharcha log nahi kiya gaya hai.</b>
+
+💡 <i>Naya kharcha add karne ke liye likhein:</i> <code>300 ${itemQuery} cash</code>`;
+    }
+
+    const memberTotalSpent = matchingExpenses.reduce((sum, t) => sum + (Number(t.amount) || 0), 0);
+    const purchasesList = matchingExpenses.slice(0, 6).map((t, idx) => {
+      const pm = t.paymentMethod ? `[${t.paymentMethod}]` : '[UPI]';
+      const timeStr = t.time ? ` (${t.time})` : '';
+      const emoji = getCategoryEmoji(t.category);
+      return `<b>[#${idx + 1}]</b> 🔴 <b>₹${Number(t.amount).toLocaleString('en-IN')}</b> • <b>${t.description}</b> (${emoji} ${t.category}) ${pm}\n   📅 <i>${t.date}${timeStr}</i>`;
+    }).join('\n\n');
+
+    return `🔍 <b>ITEM HISAB REPORT: "${displayKeyword.toUpperCase()}"</b>
+━━━━━━━━━━━━━━━━━━━━
+👤 <b>Viewer:</b> <b>${senderDisplayName}</b> <i>(Family Privacy Mode)</i>
+🔴 <b>Aapka Is Item Par Kharcha:</b> <b>₹${memberTotalSpent.toLocaleString('en-IN')}</b>
+🔢 <b>Kitni Baar Liya:</b> <b>${matchingExpenses.length} baar</b>
+━━━━━━━━━━━━━━━━━━━━
+📋 <b>AAPKE TRANSACTIONS:</b>
+
+${purchasesList}
+
+━━━━━━━━━━━━━━━━━━━━
+🔒 <i>(Family Privacy: Sirf aapke records calculate hue hain)</i>`;
   }
 
   const totalSpent = matchingExpenses.reduce((sum, t) => sum + (Number(t.amount) || 0), 0);
@@ -2527,7 +2648,8 @@ export function buildItemSpendingReportTelegramMessage(userId: string, itemQuery
     const pm = t.paymentMethod ? `[${t.paymentMethod}]` : '[UPI]';
     const timeStr = t.time ? ` (${t.time})` : '';
     const emoji = getCategoryEmoji(t.category);
-    return `<b>[#${idx + 1}]</b> 🔴 <b>₹${Number(t.amount).toLocaleString('en-IN')}</b> • <b>${t.description}</b> (${emoji} ${t.category}) ${pm}\n   📅 <i>${t.date}${timeStr}</i>`;
+    const byTag = t.telegramUser ? ` <i>(by ${t.telegramUser})</i>` : '';
+    return `<b>[#${idx + 1}]</b> 🔴 <b>₹${Number(t.amount).toLocaleString('en-IN')}</b> • <b>${t.description}</b> (${emoji} ${t.category}) ${pm}${byTag}\n   📅 <i>${t.date}${timeStr}</i>`;
   }).join('\n\n');
 
   // Income summary if any (e.g. refund / cashback / income from same keyword)
@@ -2555,9 +2677,30 @@ ${purchasesList}
 
 // ---------------- Month-on-Month (MoM) Comparison Generator ----------------
 
-export function buildMonthComparisonReportTelegramMessage(userId: string, userName: string): { text: string; replyMarkup?: any } {
+export function buildMonthComparisonReportTelegramMessage(
+  userId: string, 
+  userName: string,
+  senderContext?: SenderTelegramContext
+): { text: string; replyMarkup?: any } {
   const store = getUserData(userId);
-  const txs = store.transactions || [];
+  const isOwner = senderContext ? senderContext.isSenderOwner : true;
+  const senderDisplayName = senderContext?.senderDisplayName || '';
+  const chatId = senderContext?.chatId || '';
+  const fromId = senderContext?.fromId || '';
+
+  let txs = store.transactions || [];
+
+  if (!isOwner) {
+    // Filter to member's transactions
+    txs = txs.filter(t => 
+      (t.telegramChatId && (t.telegramChatId === chatId || (fromId && t.telegramChatId === fromId))) ||
+      (t.telegramUser && senderDisplayName && (
+        t.telegramUser.toLowerCase() === senderDisplayName.toLowerCase() ||
+        t.telegramUser.toLowerCase().includes(senderDisplayName.toLowerCase()) ||
+        senderDisplayName.toLowerCase().includes(t.telegramUser.toLowerCase())
+      ))
+    );
+  }
 
   const nowInfo = getAppDateTime();
   const [currYStr, currMStr, currDStr] = nowInfo.date.split('-');
@@ -2730,11 +2873,20 @@ export function isTransactionSearchMatch(t: Transaction, cleanQ: string): boolea
   return false;
 }
 
-export function buildSearchReportTelegramMessage(userId: string, rawQuery: string, userName: string): { text: string; replyMarkup?: any } {
+export function buildSearchReportTelegramMessage(
+  userId: string, 
+  rawQuery: string, 
+  userName: string,
+  senderContext?: SenderTelegramContext
+): { text: string; replyMarkup?: any } {
   const store = getUserData(userId);
   const txs = store.transactions || [];
   const q = rawQuery.trim();
   const lowerQ = q.toLowerCase();
+  const isOwner = senderContext ? senderContext.isSenderOwner : true;
+  const senderDisplayName = senderContext?.senderDisplayName || '';
+  const chatId = senderContext?.chatId || '';
+  const fromId = senderContext?.fromId || '';
 
   const compMatch = lowerQ.match(/^([><]=?)\s*(\d+(?:\.\d+)?)$/);
   const isPureNumber = /^\d+(?:\.\d+)?$/.test(lowerQ);
@@ -2781,7 +2933,7 @@ export function buildSearchReportTelegramMessage(userId: string, rawQuery: strin
 
   if (filtered.length === 0) {
     return {
-      text: `🔍 <b>SEARCH RESULTS: "${searchTitle}"</b>\n━━━━━━━━━━━━━━━━━━━━\n👤 <b>Khata:</b> ${userName}\n\nℹ️ <b>Koi matching transaction nahi mila.</b>\n\n💡 <b>Suggestions:</b>\n• Keyword search: <code>/find medicine</code>, <code>/find petrol</code>, <code>/find swiggy</code>\n• Amount comparison: <code>/find > 2000</code>, <code>/find < 500</code>\n• Payment method: <code>/find upi</code>, <code>/find cash</code>\n• Timing: <code>/find last month</code>`,
+      text: `🔍 <b>SEARCH RESULTS: "${searchTitle}"</b>\n━━━━━━━━━━━━━━━━━━━━\n👤 <b>Khata:</b> ${userName}${!isOwner ? ` (👤 <b>${senderDisplayName}</b>)` : ''}\n\nℹ️ <b>Koi matching transaction nahi mila.</b>\n\n💡 <b>Suggestions:</b>\n• Keyword search: <code>/find medicine</code>, <code>/find petrol</code>, <code>/find swiggy</code>\n• Amount comparison: <code>/find > 2000</code>, <code>/find < 500</code>\n• Payment method: <code>/find upi</code>, <code>/find cash</code>\n• Timing: <code>/find last month</code>`,
       replyMarkup: {
         inline_keyboard: [
           [{ text: '🕒 Recent 5 Tx', callback_data: 'cmd_recent' }, { text: '💰 Balance', callback_data: 'cmd_balance' }],
@@ -2798,13 +2950,63 @@ export function buildSearchReportTelegramMessage(userId: string, rawQuery: strin
 
   const displayList = filtered.slice(0, 8);
   const itemsText = displayList.map((t, idx) => {
+    const isOwnTx = isOwner || 
+      (t.telegramChatId && (t.telegramChatId === chatId || (fromId && t.telegramChatId === fromId))) ||
+      (t.telegramUser && senderDisplayName && (
+        t.telegramUser.toLowerCase() === senderDisplayName.toLowerCase() ||
+        t.telegramUser.toLowerCase().includes(senderDisplayName.toLowerCase()) ||
+        senderDisplayName.toLowerCase().includes(t.telegramUser.toLowerCase())
+      ));
+
     const isInc = t.type === 'income';
     const sign = isInc ? '🟢 +' : '🔴 -';
+    const amtStr = isOwnTx ? `₹${Number(t.amount).toLocaleString('en-IN')}` : `🔒 Masked`;
     const pm = t.paymentMethod ? `[${t.paymentMethod}]` : '';
     const emoji = getCategoryEmoji(t.category);
     const timeStr = t.time ? ` • ${t.time}` : '';
-    return `<b>[#${idx + 1}]</b> ${sign}<b>₹${Number(t.amount).toLocaleString('en-IN')}</b> • <b>${t.description}</b>\n   ${emoji} ${t.category} ${pm} <i>(📅 ${t.date}${timeStr})</i>`;
+    const byTag = t.telegramUser ? ` <i>(by ${t.telegramUser})</i>` : '';
+    return `<b>[#${idx + 1}]</b> ${sign}<b>${amtStr}</b> • <b>${t.description}</b>\n   ${emoji} ${t.category} ${pm}${byTag} <i>(📅 ${t.date}${timeStr})</i>`;
   }).join('\n\n');
+
+  if (!isOwner) {
+    const memberFiltered = filtered.filter(t => 
+      (t.telegramChatId && (t.telegramChatId === chatId || (fromId && t.telegramChatId === fromId))) ||
+      (t.telegramUser && senderDisplayName && (
+        t.telegramUser.toLowerCase() === senderDisplayName.toLowerCase() ||
+        t.telegramUser.toLowerCase().includes(senderDisplayName.toLowerCase()) ||
+        senderDisplayName.toLowerCase().includes(t.telegramUser.toLowerCase())
+      ))
+    );
+    const memberExpenses = memberFiltered.filter(t => t.type === 'expense');
+    const memberSpent = memberExpenses.reduce((s, t) => s + (Number(t.amount) || 0), 0);
+
+    let text = `🔍 <b>SEARCH RESULTS: "${searchTitle}"</b>
+━━━━━━━━━━━━━━━━━━━━
+👤 <b>Viewer:</b> <b>${senderDisplayName}</b> <i>(Family Privacy Mode)</i>
+📌 <b>Total Matched:</b> <b>${filtered.length} transactions</b>
+👤 <b>Aapka Matching Kharcha:</b> <b>₹${memberSpent.toLocaleString('en-IN')}</b> (${memberExpenses.length} tx)
+━━━━━━━━━━━━━━━━━━━━
+📋 <b>MATCHING TRANSACTIONS:</b>
+
+${itemsText}
+`;
+
+    if (filtered.length > 8) {
+      text += `\n<i>...aur ${filtered.length - 8} transactions hain</i>\n`;
+    }
+
+    text += `\n━━━━━━━━━━━━━━━━━━━━\n🔒 <i>(Owner Privacy: Aapko sirf aapke transactions ka amount dikhta hai)</i>`;
+
+    return {
+      text,
+      replyMarkup: {
+        inline_keyboard: [
+          [{ text: '💰 Balance', callback_data: 'cmd_balance' }, { text: '📊 Summary', callback_data: 'cmd_summary' }],
+          [{ text: '🕒 Recent 5 Tx', callback_data: 'cmd_recent' }, { text: '↩️ Undo Last', callback_data: 'cmd_undo' }],
+        ],
+      },
+    };
+  }
 
   let text = `🔍 <b>SEARCH RESULTS: "${searchTitle}"</b>
 ━━━━━━━━━━━━━━━━━━━━
@@ -2836,9 +3038,29 @@ ${itemsText}
 
 // ---------------- Duplicate / Double Charge Audit Generator ----------------
 
-export function buildDuplicatesReportTelegramMessage(userId: string, userName: string): { text: string; replyMarkup?: any } {
+export function buildDuplicatesReportTelegramMessage(
+  userId: string, 
+  userName: string,
+  senderContext?: SenderTelegramContext
+): { text: string; replyMarkup?: any } {
   const store = getUserData(userId);
-  const txs = store.transactions || [];
+  const isOwner = senderContext ? senderContext.isSenderOwner : true;
+  const senderDisplayName = senderContext?.senderDisplayName || '';
+  const chatId = senderContext?.chatId || '';
+  const fromId = senderContext?.fromId || '';
+
+  let txs = store.transactions || [];
+
+  if (!isOwner) {
+    txs = txs.filter(t => 
+      (t.telegramChatId && (t.telegramChatId === chatId || (fromId && t.telegramChatId === fromId))) ||
+      (t.telegramUser && senderDisplayName && (
+        t.telegramUser.toLowerCase() === senderDisplayName.toLowerCase() ||
+        t.telegramUser.toLowerCase().includes(senderDisplayName.toLowerCase()) ||
+        senderDisplayName.toLowerCase().includes(t.telegramUser.toLowerCase())
+      ))
+    );
+  }
 
   const duplicatePairs: { original: Transaction; duplicate: Transaction; minutesApart: number }[] = [];
 
@@ -3951,14 +4173,25 @@ async function handleTelegramMessage(messageObj: any) {
   );
   const senderDisplayName = senderMember?.customAlias || senderMember?.name || userName || 'Telegram User';
 
-  // Check if sender is Owner vs Family Member
-  const isSenderOwner = 
-    String(targetUser.telegramChatId).trim() === chatId || 
-    (fromId && String(targetUser.telegramChatId).trim() === fromId) ||
-    (senderMember && senderMember.role === 'owner') ||
-    (!targetUser.telegramChatId && (!targetUser.linkedMembers || targetUser.linkedMembers.length === 0));
+  // Check if sender is Owner vs Family Member strictly
+  const isMasterChat = 
+    (targetUser.telegramChatId && String(targetUser.telegramChatId).trim() === chatId) ||
+    (fromId && targetUser.telegramChatId && String(targetUser.telegramChatId).trim() === fromId) ||
+    (targetUser.email?.toLowerCase() === 'abhiveo4@gmail.com' && (chatId === '838107368' || fromId === '838107368'));
+
+  const isSenderOwner = Boolean(
+    isMasterChat || (senderMember && senderMember.role === 'owner')
+  );
 
   const isFamilyMemberSender = !isSenderOwner;
+
+  // Bundle sender context for helper reports
+  const senderCtx: SenderTelegramContext = {
+    isSenderOwner,
+    senderDisplayName,
+    chatId,
+    fromId,
+  };
 
   // Helper to calculate family member's personal spend & transaction metrics
   const memberTransactions = userTransactions.filter(t => 
@@ -3978,12 +4211,12 @@ async function handleTelegramMessage(messageObj: any) {
     .filter(t => t.type === 'expense')
     .reduce((s, t) => s + (Number(t.amount) || 0), 0);
 
-  // Helper for masking global amounts in Telegram with White Spoiler strip
+  // Helper for masking global amounts in Telegram
   const maskSensitiveAmount = (amt: number, isOwn: boolean = false): string => {
-    if (!isFamilyMemberSender || isOwn) {
+    if (isSenderOwner || isOwn) {
       return `₹${amt.toLocaleString('en-IN')}`;
     }
-    return `<tg-spoiler>₹••••••</tg-spoiler>`;
+    return `🔒 Masked`;
   };
 
   // Check for Excel / CSV Document Attachment in Telegram message
@@ -4158,7 +4391,7 @@ Aap neeche diye gaye inline buttons par tap karein, keyboard buttons use karein 
     if (isSenderOwner) {
       balanceMsg = `💰 <b>${targetUser.name} ka Net Bacha Hua Balance</b>\n\n💵 <b>Net Savings:</b> ₹${summary.netSavings.toLocaleString('en-IN')}\n🟢 <b>Kul Income (Kamai):</b> ₹${summary.totalIncome.toLocaleString('en-IN')}\n🔴 <b>Kul Kharcha:</b> ₹${summary.totalExpense.toLocaleString('en-IN')}\n📈 <b>Bachat Rate:</b> ${summary.savingsRate}%\n📝 <b>Total Transactions:</b> ${summary.transactionCount}\n\n💡 <i>Faltu kharcha aur bachat tips ke liye AI Faltu Kharcha button dabayein!</i>`;
     } else {
-      balanceMsg = `💰 <b>Balance & Khata Summary</b> (👤 <b>${senderDisplayName}</b>)\n━━━━━━━━━━━━━━━━━━━━\n👤 <b>Aapka Is Mahine Ka Kharcha:</b> ₹${memberMonthSpent.toLocaleString('en-IN')}\n📝 <b>Aapke Kul Transactions:</b> ${memberTransactions.length}\n━━━━━━━━━━━━━━━━━━━━\n💵 <b>Net Family Balance:</b> <tg-spoiler>₹••••••</tg-spoiler>\n🟢 <b>Kul Family Income:</b> <tg-spoiler>₹••••••</tg-spoiler>\n🔴 <b>Kul Family Kharcha:</b> <tg-spoiler>₹••••••</tg-spoiler>\n\n🔒 <i>Family Privacy Active: Global balances and savings are covered with White Spoiler strip.</i>`;
+      balanceMsg = `💰 <b>Balance & Khata Summary</b> (👤 <b>${senderDisplayName}</b>)\n━━━━━━━━━━━━━━━━━━━━\n👤 <b>Aapka Is Mahine Ka Kharcha:</b> <b>₹${memberMonthSpent.toLocaleString('en-IN')}</b>\n📝 <b>Aapke Kul Transactions:</b> ${memberTransactions.length}\n━━━━━━━━━━━━━━━━━━━━\n💵 <b>Net Family Balance:</b> 🔒 Masked (Owner Protected)\n🟢 <b>Kul Family Income:</b> 🔒 Masked (Owner Protected)\n🔴 <b>Kul Family Kharcha:</b> 🔒 Masked (Owner Protected)\n\n🔒 <i>(Family Privacy Active: Master financial vault figures are protected)</i>`;
     }
 
     await sendTelegramReply(botToken, chatId, balanceMsg, {
@@ -4182,7 +4415,7 @@ Aap neeche diye gaye inline buttons par tap karein, keyboard buttons use karein 
     if (isSenderOwner) {
       summaryMsg = `📊 <b>${targetUser.name} ka Financial Hisaab-Kitaab</b>\n\n🟢 <b>Kul Income (Kamai):</b> ₹${summary.totalIncome.toLocaleString('en-IN')}\n🔴 <b>Kul Kharcha:</b> ₹${summary.totalExpense.toLocaleString('en-IN')}\n💰 <b>Net Bacha Hua Balance:</b> ₹${summary.netSavings.toLocaleString('en-IN')}\n📈 <b>Bachat Rate:</b> ${summary.savingsRate}%\n📝 <b>Total Transactions:</b> ${summary.transactionCount}\n\n💡 <i>Faltu kharcha aur bachat tips ke liye <code>/tips</code> bhejein!</i>`;
     } else {
-      summaryMsg = `📊 <b>Financial Summary Report</b> (👤 <b>${senderDisplayName}</b>)\n━━━━━━━━━━━━━━━━━━━━\n👤 <b>Aapka Is Mahine Ka Kharcha:</b> ₹${memberMonthSpent.toLocaleString('en-IN')}\n📝 <b>Aapke Records:</b> ${memberTransactions.length} transactions\n━━━━━━━━━━━━━━━━━━━━\n🟢 <b>Kul Family Income:</b> <tg-spoiler>₹••••••</tg-spoiler>\n🔴 <b>Kul Family Kharcha:</b> <tg-spoiler>₹••••••</tg-spoiler>\n💰 <b>Net Family Savings:</b> <tg-spoiler>₹••••••</tg-spoiler>\n\n🔒 <i>(Owner Privacy: Aapko sirf aapke transactions ka amount dikhayi dega)</i>`;
+      summaryMsg = `📊 <b>Financial Summary Report</b> (👤 <b>${senderDisplayName}</b>)\n━━━━━━━━━━━━━━━━━━━━\n👤 <b>Aapka Is Mahine Ka Kharcha:</b> <b>₹${memberMonthSpent.toLocaleString('en-IN')}</b>\n📝 <b>Aapke Records:</b> ${memberTransactions.length} transactions\n━━━━━━━━━━━━━━━━━━━━\n🟢 <b>Kul Family Income:</b> 🔒 Masked (Owner Protected)\n🔴 <b>Kul Family Kharcha:</b> 🔒 Masked (Owner Protected)\n💰 <b>Net Family Savings:</b> 🔒 Masked (Owner Protected)\n\n🔒 <i>(Owner Privacy: Aapko sirf aapke transactions ka amount dikhayi dega)</i>`;
     }
 
     await sendTelegramReply(botToken, chatId, summaryMsg, {
@@ -4225,7 +4458,7 @@ Aap neeche diye gaye inline buttons par tap karein, keyboard buttons use karein 
       await sendTelegramReply(
         botToken,
         chatId,
-        `🐷 <b>Gullak Savings & Bachat Khata</b> (👤 <b>${senderDisplayName}</b>)\n━━━━━━━━━━━━━━━━━━━━\n💰 <b>Total Gullak Bachat:</b> <tg-spoiler>₹••••••</tg-spoiler>\n📈 <b>Is Mahine Ki Unspent Bachat:</b> <tg-spoiler>₹••••••</tg-spoiler>\n\n🔒 <i>Family Privacy Active: Master savings balance is protected by White Spoiler strip.</i>`
+        `🐷 <b>Gullak Savings & Bachat Khata</b> (👤 <b>${senderDisplayName}</b>)\n━━━━━━━━━━━━━━━━━━━━\n💰 <b>Total Gullak Bachat:</b> 🔒 Masked (Owner Protected)\n📈 <b>Is Mahine Ki Unspent Bachat:</b> 🔒 Masked (Owner Protected)\n\n🔒 <i>Family Privacy Active: Master savings balance is protected.</i>`
       );
       return;
     }
@@ -4267,7 +4500,7 @@ Aap neeche diye gaye inline buttons par tap karein, keyboard buttons use karein 
       await sendTelegramReply(
         botToken,
         chatId,
-        `🎯 <b>Category Budget & Spending</b> (👤 <b>${senderDisplayName}</b>)\n━━━━━━━━━━━━━━━━━━━━\n👤 <b>Aapka Is Mahine Ka Kharcha:</b> ₹${memberMonthSpent.toLocaleString('en-IN')}\n💰 <b>Monthly Allocated Budget:</b> <tg-spoiler>₹••••••</tg-spoiler>\n🟢 <b>Bacha Budget:</b> <tg-spoiler>₹••••••</tg-spoiler>\n\n🔒 <i>Family Privacy: Budget limits and global balances are covered with White Spoiler strip.</i>`
+        `🎯 <b>Category Budget & Spending</b> (👤 <b>${senderDisplayName}</b>)\n━━━━━━━━━━━━━━━━━━━━\n👤 <b>Aapka Is Mahine Ka Kharcha:</b> <b>₹${memberMonthSpent.toLocaleString('en-IN')}</b>\n💰 <b>Monthly Allocated Budget:</b> 🔒 Masked (Owner Protected)\n🟢 <b>Bacha Budget:</b> 🔒 Masked (Owner Protected)\n\n🔒 <i>Family Privacy: Budget limits and global balances are protected.</i>`
       );
       return;
     }
@@ -4402,7 +4635,7 @@ ${tipsText}
       const sign = t.type === 'income' ? '🟢 +' : '🔴 -';
       const pm = t.paymentMethod ? `[${t.paymentMethod}]` : '';
       const isOwnTx = 
-        !isFamilyMemberSender ||
+        isSenderOwner ||
         (t.telegramChatId && (t.telegramChatId === chatId || (fromId && t.telegramChatId === fromId))) ||
         (t.telegramUser && senderDisplayName && (
           t.telegramUser.toLowerCase() === senderDisplayName.toLowerCase() ||
@@ -4410,7 +4643,7 @@ ${tipsText}
           senderDisplayName.toLowerCase().includes(t.telegramUser.toLowerCase())
         ));
 
-      const amtDisplay = isOwnTx ? `₹${t.amount.toLocaleString('en-IN')}` : `<tg-spoiler>₹••••••</tg-spoiler>`;
+      const amtDisplay = isOwnTx ? `₹${t.amount.toLocaleString('en-IN')}` : `🔒 Masked`;
       const userTag = t.telegramUser ? ` • <i>by ${t.telegramUser}</i>` : '';
       return `<b>[#${idx + 1}]</b> ${sign}${amtDisplay} • <b>${t.description}</b> (${t.category}) ${pm}${userTag} <i>${t.date}${t.time ? ` • ${t.time}` : ''}</i>`;
     }).join('\n');
@@ -4445,13 +4678,28 @@ ${tipsText}
     if (parts.length > 1 && /^\d+$/.test(parts[1])) {
       const targetIndex = parseInt(parts[1], 10) - 1;
       if (targetIndex >= 0 && targetIndex < userTransactions.length) {
+        const targetTx = userTransactions[targetIndex];
+        const isOwnTx = isSenderOwner || 
+          (targetTx.telegramChatId && (targetTx.telegramChatId === chatId || (fromId && targetTx.telegramChatId === fromId))) ||
+          (targetTx.telegramUser && senderDisplayName && (
+            targetTx.telegramUser.toLowerCase() === senderDisplayName.toLowerCase() ||
+            targetTx.telegramUser.toLowerCase().includes(senderDisplayName.toLowerCase()) ||
+            senderDisplayName.toLowerCase().includes(targetTx.telegramUser.toLowerCase())
+          ));
+
+        if (!isOwnTx) {
+          await sendTelegramReply(botToken, chatId, `⚠️ <b>Permission Denied:</b> Aap sirf apne dwara add kiye gaye transactions delete kar sakte hain.`);
+          return;
+        }
+
         const [deleted] = userTransactions.splice(targetIndex, 1);
         saveUserData(userId, userStore);
         const summary = calculateUserSummary(userId);
+        const balanceDisplay = isSenderOwner ? `₹${summary.netSavings.toLocaleString('en-IN')}` : `🔒 Masked (Owner Protected)`;
         await sendTelegramReply(
           botToken,
           chatId,
-          `🗑️ <b>Transaction #${targetIndex + 1} Delete Ho Gaya:</b>\n₹${deleted.amount} • ${deleted.description} (${deleted.category})\n\n📊 <b>Updated Balance:</b> ₹${summary.netSavings.toLocaleString('en-IN')}`,
+          `🗑️ <b>Transaction #${targetIndex + 1} Delete Ho Gaya:</b>\n₹${deleted.amount} • ${deleted.description} (${deleted.category})\n\n📊 <b>Updated Balance:</b> ${balanceDisplay}`,
           {
             inline_keyboard: [
               [
@@ -4476,13 +4724,30 @@ ${tipsText}
       await sendTelegramReply(botToken, chatId, 'ℹ️ Delete karne ke liye koi transaction nahi mila.');
       return;
     }
+
+    // Check if top transaction belongs to this sender
+    const topTx = userTransactions[0];
+    const isOwnTopTx = isSenderOwner || 
+      (topTx.telegramChatId && (topTx.telegramChatId === chatId || (fromId && topTx.telegramChatId === fromId))) ||
+      (topTx.telegramUser && senderDisplayName && (
+        topTx.telegramUser.toLowerCase() === senderDisplayName.toLowerCase() ||
+        topTx.telegramUser.toLowerCase().includes(senderDisplayName.toLowerCase()) ||
+        senderDisplayName.toLowerCase().includes(topTx.telegramUser.toLowerCase())
+      ));
+
+    if (!isOwnTopTx) {
+      await sendTelegramReply(botToken, chatId, `⚠️ <b>Permission Denied:</b> Aakhri transaction kisi aur member dwara add kiya gaya tha. Aap sirf apne transactions delete kar sakte hain.`);
+      return;
+    }
+
     const deleted = userTransactions.shift();
     saveUserData(userId, userStore);
     const summary = calculateUserSummary(userId);
+    const balanceDisplay = isSenderOwner ? `₹${summary.netSavings.toLocaleString('en-IN')}` : `🔒 Masked (Owner Protected)`;
     await sendTelegramReply(
       botToken,
       chatId,
-      `🗑️ <b>Aakhri Transaction Delete Ho Gaya:</b>\n₹${deleted?.amount} • ${deleted?.description} (${deleted?.category})\n\n📊 <b>Updated Balance:</b> ₹${summary.netSavings.toLocaleString('en-IN')}`,
+      `🗑️ <b>Aakhri Transaction Delete Ho Gaya:</b>\n₹${deleted?.amount} • ${deleted?.description} (${deleted?.category})\n\n📊 <b>Updated Balance:</b> ${balanceDisplay}`,
       {
         inline_keyboard: [
           [
@@ -4507,23 +4772,42 @@ ${tipsText}
     let foundIdx = -1;
 
     if (!isNaN(queryNum) && queryNum > 0) {
-      foundIdx = userTransactions.findIndex(t => Math.abs(t.amount - queryNum) < 0.01);
+      foundIdx = userTransactions.findIndex(t => {
+        const isOwn = isSenderOwner || 
+          (t.telegramChatId && (t.telegramChatId === chatId || (fromId && t.telegramChatId === fromId))) ||
+          (t.telegramUser && senderDisplayName && (
+            t.telegramUser.toLowerCase() === senderDisplayName.toLowerCase() ||
+            t.telegramUser.toLowerCase().includes(senderDisplayName.toLowerCase()) ||
+            senderDisplayName.toLowerCase().includes(t.telegramUser.toLowerCase())
+          ));
+        return isOwn && Math.abs(t.amount - queryNum) < 0.01;
+      });
     }
     if (foundIdx === -1) {
-      foundIdx = userTransactions.findIndex(t =>
-        t.description.toLowerCase().includes(query) ||
-        t.category.toLowerCase().includes(query)
-      );
+      foundIdx = userTransactions.findIndex(t => {
+        const isOwn = isSenderOwner || 
+          (t.telegramChatId && (t.telegramChatId === chatId || (fromId && t.telegramChatId === fromId))) ||
+          (t.telegramUser && senderDisplayName && (
+            t.telegramUser.toLowerCase() === senderDisplayName.toLowerCase() ||
+            t.telegramUser.toLowerCase().includes(senderDisplayName.toLowerCase()) ||
+            senderDisplayName.toLowerCase().includes(t.telegramUser.toLowerCase())
+          ));
+        return isOwn && (
+          t.description.toLowerCase().includes(query) ||
+          t.category.toLowerCase().includes(query)
+        );
+      });
     }
 
     if (foundIdx !== -1) {
       const [deleted] = userTransactions.splice(foundIdx, 1);
       saveUserData(userId, userStore);
       const summary = calculateUserSummary(userId);
+      const balanceDisplay = isSenderOwner ? `₹${summary.netSavings.toLocaleString('en-IN')}` : `🔒 Masked (Owner Protected)`;
       await sendTelegramReply(
         botToken,
         chatId,
-        `🗑️ <b>Matching Transaction Delete Ho Gaya:</b>\n₹${deleted.amount} • ${deleted.description} (${deleted.category}) [${deleted.date}]\n\n📊 <b>Updated Balance:</b> ₹${summary.netSavings.toLocaleString('en-IN')}`,
+        `🗑️ <b>Matching Transaction Delete Ho Gaya:</b>\n₹${deleted.amount} • ${deleted.description} (${deleted.category}) [${deleted.date}]\n\n📊 <b>Updated Balance:</b> ${balanceDisplay}`,
         {
           inline_keyboard: [
             [
@@ -4544,7 +4828,7 @@ ${tipsText}
   // 8.5. Date-Specific Expense & Income Inquiry (/date <date> or pure date queries like "2 sep", "kal", "parso", "2 sep ka kharcha", "aaj ka hisab")
   const queriedDate = isPureDateQuery(rawText);
   if (queriedDate) {
-    const dateReportMsg = buildDateReportTelegramMessage(userId, queriedDate, targetUser.name);
+    const dateReportMsg = buildDateReportTelegramMessage(userId, queriedDate, targetUser.name, senderCtx);
     await sendTelegramReply(botToken, chatId, dateReportMsg, {
       inline_keyboard: [
         [
@@ -4563,7 +4847,7 @@ ${tipsText}
   // 8.75. Item-Specific Natural Language Spending Query (e.g. /spent signature, signature pe kitna kharch huwa, petrol me kitna gaya, zomato ka total kharcha)
   const itemQuery = extractItemSpendingQuery(rawText);
   if (itemQuery) {
-    const itemReportMsg = buildItemSpendingReportTelegramMessage(userId, itemQuery, targetUser.name);
+    const itemReportMsg = buildItemSpendingReportTelegramMessage(userId, itemQuery, targetUser.name, senderCtx);
     await sendTelegramReply(botToken, chatId, itemReportMsg, {
       inline_keyboard: [
         [
@@ -4596,7 +4880,7 @@ ${tipsText}
     lowerText.includes('compare months');
 
   if (isCompareQuery) {
-    const report = buildMonthComparisonReportTelegramMessage(userId, targetUser.name);
+    const report = buildMonthComparisonReportTelegramMessage(userId, targetUser.name, senderCtx);
     await sendTelegramReply(botToken, chatId, report.text, report.replyMarkup);
     return;
   }
@@ -4642,7 +4926,7 @@ ${tipsText}
       return;
     }
 
-    const report = buildSearchReportTelegramMessage(userId, queryToSearch, targetUser.name);
+    const report = buildSearchReportTelegramMessage(userId, queryToSearch, targetUser.name, senderCtx);
     await sendTelegramReply(botToken, chatId, report.text, report.replyMarkup);
     return;
   }
@@ -4659,7 +4943,7 @@ ${tipsText}
     lowerText.includes('duplicate kharcha');
 
   if (isDuplicatesQuery) {
-    const report = buildDuplicatesReportTelegramMessage(userId, targetUser.name);
+    const report = buildDuplicatesReportTelegramMessage(userId, targetUser.name, senderCtx);
     await sendTelegramReply(botToken, chatId, report.text, report.replyMarkup);
     return;
   }
@@ -5301,7 +5585,7 @@ ${personNet > 0
           fuelReply += `\n💡 <i>Pehli fuel entry! Agli baar fuel bharne par bot exact mileage aur per-km cost nikalega.</i>\n`;
         }
 
-        fuelReply += `━━━━━━━━━━━━━━━━━━━━\n📊 <b>Net Bacha Balance:</b> ₹${summary.netSavings.toLocaleString('en-IN')}`;
+        fuelReply += `━━━━━━━━━━━━━━━━━━━━\n📊 <b>Net Balance:</b> ${isSenderOwner ? `₹${summary.netSavings.toLocaleString('en-IN')}` : `🔒 Masked (Owner Protected)`}`;
 
         await sendTelegramReply(botToken, chatId, fuelReply, {
           inline_keyboard: [
@@ -5424,10 +5708,10 @@ ${isInc ? `📈 <b>Kul Income:</b> ₹${summary.totalIncome.toLocaleString('en-I
 📅 <b>Tareeq va Samay:</b> ${itemDate} • ${itemTime} (IST)
 
 ━━━━━━━━━━━━━━━━━━━━
-👤 <b>Aapka Is Mahine Ka Kharcha:</b> ₹${newMemberSpent.toLocaleString('en-IN')}
-💵 <b>Net Family Balance:</b> <tg-spoiler>₹••••••</tg-spoiler>
-🎯 <b>Monthly Budget Bacha:</b> <tg-spoiler>₹••••••</tg-spoiler>
-🔒 <i>(Family Privacy Mode: Account balance & overall savings covered with White Spoiler strip)</i>`;
+👤 <b>Aapka Is Mahine Ka Kharcha:</b> <b>₹${newMemberSpent.toLocaleString('en-IN')}</b>
+💵 <b>Net Family Balance:</b> 🔒 Masked (Owner Protected)
+🎯 <b>Monthly Budget Bacha:</b> 🔒 Masked (Owner Protected)
+🔒 <i>(Family Privacy Mode: Account balance & overall savings protected)</i>`;
       }
     } else {
       const itemsList = parsedList
@@ -5440,7 +5724,7 @@ ${isInc ? `📈 <b>Kul Income:</b> ₹${summary.totalIncome.toLocaleString('en-I
       if (isSenderOwner) {
         replyText = `✅ <b>${parsedList.length} TRANSACTIONS ADD HO GAYE</b>${memberTag}\n\n${itemsList}\n\n━━━━━━━━━━━━━━━━━━━━\n💵 <b>Net Wallet/Bank Balance:</b> ₹${summary.netSavings.toLocaleString('en-IN')} <i>(Kamai - Kharcha)</i>\n🎯 <b>Monthly Budget Bacha:</b> ₹${Math.max(0, summary.monthlyBudget - summary.monthlySpent).toLocaleString('en-IN')}`;
       } else {
-        replyText = `✅ <b>${parsedList.length} TRANSACTIONS ADD HO GAYE</b>${memberTag}\n\n${itemsList}\n\n━━━━━━━━━━━━━━━━━━━━\n💵 <b>Net Family Balance:</b> <tg-spoiler>₹••••••</tg-spoiler>\n🎯 <b>Monthly Budget Bacha:</b> <tg-spoiler>₹••••••</tg-spoiler>\n🔒 <i>(Family Privacy: Balances covered with White Spoiler strip)</i>`;
+        replyText = `✅ <b>${parsedList.length} TRANSACTIONS ADD HO GAYE</b>${memberTag}\n\n${itemsList}\n\n━━━━━━━━━━━━━━━━━━━━\n💵 <b>Net Family Balance:</b> 🔒 Masked (Owner Protected)\n🎯 <b>Monthly Budget Bacha:</b> 🔒 Masked (Owner Protected)\n🔒 <i>(Family Privacy: Master balance protected)</i>`;
       }
     }
 
