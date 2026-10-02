@@ -156,10 +156,15 @@ export interface InvestmentRecord {
   type: 'RD' | 'FD' | 'Mutual Fund' | 'Gold' | 'PPF' | 'Other';
   name: string;
   amount: number;
+  monthlyAmount?: number;
+  paidInstallments?: number;
+  totalInstallments?: number;
   account: string;
   date: string;
   maturityDate?: string;
   interestRate?: number;
+  currentValue?: number;
+  maturityAmount?: number;
   notes?: string;
   createdAt: string;
 }
@@ -1090,13 +1095,64 @@ function calculateUserSummary(userId: string): FinancialSummary {
   const daysInMonthSoFar = Math.max(1, currentDay);
   const dailyAverageExpense = Math.round(monthlySpent / daysInMonthSoFar);
 
+  // Compute accumulated investment portfolio (RD / FD / SIP with interest)
+  let computedInvestmentsAccumulated = 0;
+  if (Array.isArray(store.investments) && store.investments.length > 0) {
+    const today = new Date();
+    for (const inv of store.investments) {
+      const rawAmt = Number(inv.monthlyAmount) || Number(inv.amount) || 0;
+      const rate = Number(inv.interestRate) || 0;
+      const startDate = inv.date ? new Date(inv.date) : new Date();
+
+      if (inv.type === 'RD' || inv.type === 'Mutual Fund') {
+        let totalMonths = Number(inv.totalInstallments) || 0;
+        if (!totalMonths && inv.maturityDate && inv.date) {
+          const matDate = new Date(inv.maturityDate);
+          totalMonths = Math.max(1, (matDate.getFullYear() - startDate.getFullYear()) * 12 + (matDate.getMonth() - startDate.getMonth()));
+        }
+        if (!totalMonths) totalMonths = 12;
+
+        let paidCount = Number(inv.paidInstallments);
+        if (paidCount === undefined || isNaN(paidCount) || paidCount <= 0) {
+          let monthsElapsed = (today.getFullYear() - startDate.getFullYear()) * 12 + (today.getMonth() - startDate.getMonth());
+          if (today.getDate() >= startDate.getDate()) {
+            monthsElapsed += 1;
+          }
+          paidCount = Math.max(1, Math.min(totalMonths, monthsElapsed));
+        }
+
+        const deposited = paidCount * rawAmt;
+        let interest = 0;
+        if (rate > 0) {
+          const qRate = (rate / 100) / 4;
+          for (let i = 1; i <= paidCount; i++) {
+            const mHeld = paidCount - i + 1;
+            interest += rawAmt * (Math.pow(1 + qRate, mHeld / 3) - 1);
+          }
+        }
+        computedInvestmentsAccumulated += deposited + Math.round(interest);
+      } else {
+        const principal = rawAmt;
+        let interest = 0;
+        if (rate > 0 && inv.date) {
+          const diffTime = Math.max(0, today.getTime() - startDate.getTime());
+          const years = diffTime / (1000 * 60 * 60 * 24 * 365.25);
+          interest = Math.round(principal * (Math.pow(1 + (rate / 400), 4 * years) - 1));
+        }
+        computedInvestmentsAccumulated += principal + interest;
+      }
+    }
+  }
+
+  const finalInvestmentsTotal = computedInvestmentsAccumulated > 0 ? computedInvestmentsAccumulated : investmentsTotal;
+
   return {
     totalIncome,
     totalExpense,
     personalExpense,
     pendingReimbursements,
     savingsTransfers,
-    investmentsTotal,
+    investmentsTotal: finalInvestmentsTotal,
     netSavings: totalNetSavings,
     savingsRate,
     transactionCount: txList.length,
@@ -7288,23 +7344,60 @@ app.post('/api/investments', (req, res) => {
   const user = getRequestUser(req);
   const store = getUserData(user.id);
   if (!store.investments) store.investments = [];
-  const { type, name, amount, account, date, maturityDate, interestRate, notes } = req.body;
+  const { type, name, amount, account, date, maturityDate, interestRate, notes, monthlyAmount, paidInstallments, totalInstallments, currentValue, maturityAmount } = req.body;
+  const numAmt = Math.abs(Number(amount)) || Math.abs(Number(monthlyAmount)) || 0;
   const newInv: InvestmentRecord = {
     id: `inv_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
     userId: user.id,
     type: type || 'RD',
     name: (name || 'Investment Plan').trim(),
-    amount: Math.abs(Number(amount)) || 0,
+    amount: numAmt,
+    monthlyAmount: monthlyAmount !== undefined ? Number(monthlyAmount) : (type === 'RD' ? numAmt : undefined),
+    paidInstallments: paidInstallments !== undefined ? Number(paidInstallments) : undefined,
+    totalInstallments: totalInstallments !== undefined ? Number(totalInstallments) : undefined,
     account: account || 'IC Bank',
     date: date || getAppDateTime().date,
     maturityDate: maturityDate || undefined,
     interestRate: Number(interestRate) || undefined,
+    currentValue: currentValue !== undefined ? Number(currentValue) : undefined,
+    maturityAmount: maturityAmount !== undefined ? Number(maturityAmount) : undefined,
     notes: notes || '',
     createdAt: new Date().toISOString(),
   };
   store.investments.unshift(newInv);
   saveUserData(user.id, store);
   res.json({ success: true, investment: newInv, investments: store.investments, summary: calculateUserSummary(user.id) });
+});
+
+app.put('/api/investments/:id', (req, res) => {
+  const user = getRequestUser(req);
+  const store = getUserData(user.id);
+  if (!store.investments) store.investments = [];
+  const idx = store.investments.findIndex(i => i.id === req.params.id);
+  if (idx === -1) {
+    return res.status(404).json({ error: 'Investment not found' });
+  }
+  const current = store.investments[idx];
+  const { type, name, amount, account, date, maturityDate, interestRate, notes, monthlyAmount, paidInstallments, totalInstallments, currentValue, maturityAmount } = req.body;
+  const numAmt = amount !== undefined ? Math.abs(Number(amount)) : current.amount;
+  store.investments[idx] = {
+    ...current,
+    type: type || current.type,
+    name: name !== undefined ? name.trim() : current.name,
+    amount: numAmt,
+    monthlyAmount: monthlyAmount !== undefined ? Number(monthlyAmount) : current.monthlyAmount,
+    paidInstallments: paidInstallments !== undefined ? Number(paidInstallments) : current.paidInstallments,
+    totalInstallments: totalInstallments !== undefined ? Number(totalInstallments) : current.totalInstallments,
+    account: account || current.account,
+    date: date || current.date,
+    maturityDate: maturityDate !== undefined ? maturityDate : current.maturityDate,
+    interestRate: interestRate !== undefined ? (interestRate === '' ? undefined : Number(interestRate)) : current.interestRate,
+    currentValue: currentValue !== undefined ? Number(currentValue) : current.currentValue,
+    maturityAmount: maturityAmount !== undefined ? Number(maturityAmount) : current.maturityAmount,
+    notes: notes !== undefined ? notes : current.notes,
+  };
+  saveUserData(user.id, store);
+  res.json({ success: true, investment: store.investments[idx], investments: store.investments, summary: calculateUserSummary(user.id) });
 });
 
 app.delete('/api/investments/:id', (req, res) => {

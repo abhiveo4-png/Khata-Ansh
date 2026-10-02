@@ -201,10 +201,15 @@ export interface InvestmentRecord {
   type: 'RD' | 'FD' | 'Mutual Fund' | 'Gold' | 'PPF' | 'Other';
   name: string;
   amount: number;
+  monthlyAmount?: number;
+  paidInstallments?: number;
+  totalInstallments?: number;
   account: AccountId;
   date: string;
   maturityDate?: string;
   interestRate?: number;
+  currentValue?: number;
+  maturityAmount?: number;
   notes?: string;
   createdAt: string;
 }
