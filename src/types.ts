@@ -245,6 +245,7 @@ export interface GullakMonthRecord {
   monthName: string; // e.g. "September 2026"
   totalBudget: number;
   totalSpent: number;
+  uncategorizedSpent?: number;
   totalSaved: number;
   categories: GullakCategorySaving[];
 }

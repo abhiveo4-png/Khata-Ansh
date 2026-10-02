@@ -1164,7 +1164,8 @@ async function callGeminiCandidateModels(
 export function hasExplicitPaymentMethod(text: string): boolean {
   const lower = text.toLowerCase();
   return (
-    /\b(cash|nagad|rokda|in cash|by cash|card|credit card|debit card|visa|mastercard|amex|rupay|pos|bank|net banking|netbanking|bank transfer|neft|rtgs|imps|cheque|upi|gpay|google pay|phonepe|phone pe|paytm|bhim|cred|scan|qr|amazon pay)\b/i.test(lower) ||
+    /\b(cash|nagad|rokda|in cash|by cash|card|credit card|debit card|visa|mastercard|amex|rupay|pos|bank|net banking|netbanking|bank transfer|neft|rtgs|imps|cheque|upi|gpay|google pay|phonepe|phone pe|paytm|bhim|cred|scan|qr|amazon pay|0000|5733|6526|8210|5376|cc)\b/i.test(lower) ||
+    /\b(?:00|33|26|76)\b/.test(lower) ||
     lower.endsWith(' cash') ||
     lower.startsWith('cash ') ||
     lower.endsWith(' upi') ||
@@ -1184,8 +1185,11 @@ export function detectPaymentMethod(text: string, isIncome: boolean = false): Pa
     return 'Cash';
   }
 
-  // Card detection
-  if (/\b(card|credit card|debit card|visa|mastercard|amex|rupay card|pos)\b/i.test(lower)) {
+  // Card detection by keywords, card digits, or 2-digit abbreviations (0000, 5733, 6526, 8210, 5376, 00, 33, 26, 76, cc, card)
+  if (
+    /\b(card|credit card|debit card|visa|mastercard|amex|rupay|pos|cc|0000|5733|6526|8210|5376)\b/i.test(lower) ||
+    /\b(?:00|33|26|76)\b/.test(lower)
+  ) {
     return 'Card';
   }
 
@@ -1610,16 +1614,17 @@ export function extractCustomTimeString(text: string): string | undefined {
 function detectAccountFromText(text: string): string | undefined {
   if (!text) return undefined;
   const lower = text.toLowerCase();
-  if (lower.includes('0000') || lower.includes('rupay') || (lower.includes('icic') && lower.includes('cc')) || lower.includes('icici cc') || lower.includes('icici card')) return 'ICICI CC 0000';
-  if (lower.includes('5733') || (lower.includes('sbi') && lower.includes('5733'))) return 'SBI CC 5733';
-  if (lower.includes('6526') || (lower.includes('sbi') && lower.includes('6526'))) return 'SBI CC 6526';
+  if (lower.includes('0000') || /\b00\b/.test(lower) || lower.includes('rupay') || (lower.includes('icic') && lower.includes('cc')) || lower.includes('icici cc') || lower.includes('icici card')) return 'ICICI CC 0000';
+  if (lower.includes('5733') || /\b33\b/.test(lower) || (lower.includes('sbi') && lower.includes('5733'))) return 'SBI CC 5733';
+  if (lower.includes('6526') || /\b26\b/.test(lower) || (lower.includes('sbi') && lower.includes('6526'))) return 'SBI CC 6526';
   if (lower.includes('8210') || ((lower.includes('ax') || lower.includes('axis')) && lower.includes('8210'))) return 'AX CC 8210';
-  if (lower.includes('5376') || ((lower.includes('ax') || lower.includes('axis')) && lower.includes('5376'))) return 'AX CC 5376';
+  if (lower.includes('5376') || /\b76\b/.test(lower) || ((lower.includes('ax') || lower.includes('axis')) && lower.includes('5376'))) return 'AX CC 5376';
   if (lower.includes('sbi cc') || lower.includes('sbi card')) return 'SBI CC 5733';
   if (lower.includes('axis cc') || lower.includes('ax cc') || lower.includes('axis card')) return 'AX CC 8210';
   if ((lower.includes('icici') && !lower.includes('cc') && !lower.includes('card')) || lower.includes('ic bank') || lower.includes('icici bank')) return 'IC Bank';
   if ((lower.includes('axis') && !lower.includes('cc') && !lower.includes('card')) || lower.includes('ax bank') || lower.includes('axis bank')) return 'AX Bank';
   if (lower.includes('cash') || lower.includes('nagad') || lower.includes('rokda') || lower.includes('haath me')) return 'Cash';
+  if (lower.includes('upi') || lower.includes('gpay') || lower.includes('paytm') || lower.includes('phonepe')) return 'AX Bank';
   return undefined;
 }
 
@@ -1667,11 +1672,15 @@ function cleanTransactionDescription(rawDesc: string, detectedCategory?: string)
     .replace(/\b(?:axis\s*cc|axis\s*card|ax\s*cc|ax\s*card|icici\s*card|sbi\s*card)\b/gi, '')
     .replace(/\b(?:axis|ax|icici|sbi|hdfc|kotak)\s*(?:cc|card|bank)?\b/gi, '')
     .replace(/\b(?:0000|5733|6526|8210|5376)\b/g, '')
-    .replace(/\b(?:cash|nagad|rokda|upi|gpay|paytm|phonepe|net\s*banking|credit\s*card|debit\s*card)\b/gi, '')
+    .replace(/\b(?:00|33|26|76)\b/g, '')
+    .replace(/\b(?:cash|nagad|rokda|upi|gpay|paytm|phonepe|net\s*banking|credit\s*card|debit\s*card|card|cc)\b/gi, '')
     .replace(/\b(?:rim|reimburse|reimbursement|office\s*claim|client\s*trip|claim)\b/gi, '')
     .replace(/\b(?:yesterday|kal|beeta kal|parso|today|aaj)\b/gi, '')
     .replace(/\s+/g, ' ')
     .trim();
+
+  // If "10" is left at end of text as a card code e.g. "chai 10", and not the main amount
+  cleaned = cleaned.replace(/\s+\b10\b$/g, '').trim();
 
   // Clean trailing prepositions/symbols like 'se', 'me', 'mai', 'via', 'from', 'through', '-', '/'
   cleaned = cleaned.replace(/\s+(?:se|me|mai|via|from|through|by|ki|ka|ke|for|wala|wali)$/i, '').trim();
@@ -1904,23 +1913,34 @@ CRITICAL RULES:
    - If user ends description or mentions "pooja", "puja", "trip", "mandir", "yatra" (and NOT an office rim), category MUST BE "Family Trip & Pooja".
 4. Account detection:
    - Pick account from: ["ICICI CC 0000", "SBI CC 5733", "SBI CC 6526", "AX CC 8210", "AX CC 5376", "IC Bank", "AX Bank", "Cash"]. Default: "ICICI CC 0000".
+   - Card digit matching:
+     * "0000" or "00" or "rupay" or "icici cc" -> "ICICI CC 0000" (Card)
+     * "5733" or "33" or "sbi cc" -> "SBI CC 5733" (Card)
+     * "6526" or "26" -> "SBI CC 6526" (Card)
+     * "8210" or "10" or "axis cc" -> "AX CC 8210" (Card)
+     * "5376" or "76" -> "AX CC 5376" (Card)
+     * "upi" -> "AX Bank" (UPI)
+     * "cash" -> "Cash" (Cash)
 5. Savings transfer detection:
    - If user transfers money to wife ("transferred to wife", "savings to wife"), set isSavingsTransfer: true.
 6. Date & Time:
    - Parse exact ISO date "YYYY-MM-DD" and 24-hr time "HH:mm".
 7. Payment method detection:
+   - If user mentions or enters card digits ("0000", "5733", "6526", "8210", "5376", "00", "33", "26", "76", "cc", "card") -> "Card".
    - If user mentions cash/nagad/rokda -> "Cash".
    - If user mentions upi/gpay/phonepe/paytm -> "UPI".
-   - If user mentions card/credit card/debit card -> "Card".
    - If user mentions bank transfer/net banking -> "Bank Transfer".
-   - CRITICAL: For expense/spend transactions, if the user DID NOT specify any payment method (e.g. "100 dahi", "50 chai", "500 petrol", "200 auto"), paymentMethod MUST BE "UPI/Cash".
+   - CRITICAL: For expense/spend transactions, if the user DID NOT specify any payment method or card digits (e.g. "100 dahi", "50 chai", "500 petrol", "200 auto"), paymentMethod MUST BE "UPI/Cash".
 
 8. Clean Description & Account separation:
-   - The "description" field MUST ONLY contain the clean item / purpose / merchant name (e.g. "LPG", "School Fee", "Petrol", "Dahi", "Groceries").
-   - NEVER keep account names, bank names, or card names (like "AX", "AX Bank", "Axis", "SBI", "ICICI", "Cash", "Card") inside the "description" field.
-   - Example 1: User says "1000 LPG AX Bank" -> description: "LPG", account: "AX Bank".
-   - Example 2: User says "15000 School Fee AX Bank" -> description: "School Fee", account: "AX Bank".
-   - Example 3: User says "500 Petrol SBI 5733" -> description: "Petrol", account: "SBI CC 5733".
+   - The "description" field MUST ONLY contain the clean item / purpose / merchant name (e.g. "Chai", "Petrol", "Dahi", "Groceries", "LPG").
+   - NEVER keep account names, bank names, or card digits inside the "description" field.
+   - Example 1: User says "10 chai 0000" -> amount: 10, description: "Chai", account: "ICICI CC 0000", paymentMethod: "Card".
+   - Example 2: User says "10 chai 00" -> amount: 10, description: "Chai", account: "ICICI CC 0000", paymentMethod: "Card".
+   - Example 3: User says "500 petrol 5733" -> amount: 500, description: "Petrol", account: "SBI CC 5733", paymentMethod: "Card".
+   - Example 4: User says "50 chai upi" -> amount: 50, description: "Chai", account: "AX Bank", paymentMethod: "UPI".
+   - Example 5: User says "100 auto cash" -> amount: 100, description: "Auto", account: "Cash", paymentMethod: "Cash".
+   - Example 6: User says "10 chai" -> amount: 10, description: "Chai", account: "ICICI CC 0000", paymentMethod: "UPI/Cash".
 
 User message:
 """
@@ -2261,6 +2281,30 @@ export function calculateGullakSummary(userId: string) {
       }
     }
 
+    // Uncategorized or unbudgeted personal expenses in this month (excluding reimbursements & savings transfers)
+    const uncategorizedSpent = monthExpenses
+      .filter(t => {
+        const isRim = Boolean(t.isReimbursement || t.category === 'Reimbursement');
+        if (isRim || t.isSavingsTransfer) return false;
+        const catLower = (t.category || '').toLowerCase().trim();
+        const hasBudget = store.budgets.some(b => b.category.toLowerCase().trim() === catLower && (Number(b.limit) || 0) > 0);
+        return !hasBudget || catLower === 'uncategorized' || catLower === 'undefined' || catLower === '';
+      })
+      .reduce((sum, t) => sum + (Number(t.amount) || 0), 0);
+
+    if (uncategorizedSpent > 0) {
+      categorySavings.push({
+        category: 'Uncategorized',
+        month: ym,
+        budgetLimit: 0,
+        spent: uncategorizedSpent,
+        savedAmount: 0,
+      });
+    }
+
+    // Uncategorized spend reduces net monthly Gullak savings
+    const netMonthSaved = Math.max(0, monthTotalSaved - uncategorizedSpent);
+
     // Sort category savings descending by savedAmount
     categorySavings.sort((a, b) => b.savedAmount - a.savedAmount);
 
@@ -2268,16 +2312,17 @@ export function calculateGullakSummary(userId: string) {
       month: ym,
       monthName,
       totalBudget: monthTotalBudget,
-      totalSpent: monthTotalSpent,
-      totalSaved: monthTotalSaved,
+      totalSpent: monthTotalSpent + uncategorizedSpent,
+      uncategorizedSpent,
+      totalSaved: netMonthSaved,
       categories: categorySavings,
     });
 
-    totalGullakSavings += monthTotalSaved;
+    totalGullakSavings += netMonthSaved;
     if (ym === currentMonth) {
-      currentMonthSaved += monthTotalSaved;
+      currentMonthSaved += netMonthSaved;
     } else {
-      pastMonthsSaved += monthTotalSaved;
+      pastMonthsSaved += netMonthSaved;
     }
   }
 
@@ -9664,6 +9709,71 @@ async function sendDailyTelegramDigest(type: 'morning' | 'evening') {
     const daysRemaining = Math.max(1, totalDaysInMonth - currD + 1);
     const monthlyRemainingBudget = Math.max(0, summary.monthlyBudget - summary.monthlySpent);
     const safeDailyLimit = Math.round(monthlyRemainingBudget / daysRemaining);
+
+    const cId = String(chatId).trim();
+    const isMasterChat = 
+      (user.telegramChatId && String(user.telegramChatId).trim() === cId) ||
+      (user.email?.toLowerCase() === 'abhiveo4@gmail.com' && cId === '838107368');
+
+    const linkedMember = user.linkedMembers?.find(m => String(m.telegramChatId).trim() === cId);
+    const isOwner = Boolean(isMasterChat || (linkedMember && linkedMember.role === 'owner'));
+
+    // Family Member Privacy Mode: Mask master balances and show only member's own activity
+    if (!isOwner) {
+      const memberName = linkedMember?.name || 'Member';
+      const memberTxs = (store.transactions || []).filter(t => 
+        String(t.telegramChatId).trim() === cId || 
+        (linkedMember && t.telegramUser && t.telegramUser.toLowerCase().includes(linkedMember.name.toLowerCase()))
+      );
+      const memberTodayTxs = memberTxs.filter(t => t.date === todayDate);
+      const memberTodayExpense = memberTodayTxs.filter(t => t.type === 'expense').reduce((a, b) => a + (Number(b.amount) || 0), 0);
+      const memberTodayIncome = memberTodayTxs.filter(t => t.type === 'income').reduce((a, b) => a + (Number(b.amount) || 0), 0);
+      const currentMonthPrefix = todayDate.substring(0, 7);
+      const memberMonthSpent = memberTxs.filter(t => t.type === 'expense' && t.date && t.date.startsWith(currentMonthPrefix)).reduce((a, b) => a + (Number(b.amount) || 0), 0);
+
+      if (type === 'morning') {
+        const memberMorningMsg = `🌅 <b>SHUBH PRABHAT, ${memberName.toUpperCase()}!</b>
+━━━━━━━━━━━━━━━━━━━━
+📊 <b>Aapka Aaj Ka Status & Reminder:</b>
+
+👤 <b>Aapka Is Mahine Ka Kharcha:</b> <b>₹${memberMonthSpent.toLocaleString('en-IN')}</b>
+📝 <b>Aapke Transactions:</b> ${memberTxs.length} records
+━━━━━━━━━━━━━━━━━━━━
+💵 <b>Net Family Balance:</b> 🔒 Masked (Owner Protected)
+🎯 <b>Monthly Family Budget:</b> 🔒 Masked (Owner Protected)
+
+💡 <i>Kharcha hote hi bot par message bhejein:</i>
+• <code>100 nashta cash</code>
+• <code>200 auto upi</code>
+🔒 <i>(Family Privacy Active: Master account vault is protected)</i>`;
+
+        await sendTelegramReply(botToken, chatId, memberMorningMsg, {
+          inline_keyboard: [
+            [{ text: '🕒 Recent 5 Tx', callback_data: 'cmd_recent' }, { text: '💡 Help', callback_data: 'cmd_help' }],
+          ],
+        });
+      } else {
+        const memberEveningMsg = `🌙 <b>SHUBH RATRI, ${memberName.toUpperCase()}! (AAJ KA HISAB)</b>
+━━━━━━━━━━━━━━━━━━━━
+📊 <b>Aapka Aaj Ka Kharcha:</b> <b>₹${memberTodayExpense.toLocaleString('en-IN')}</b> (${memberTodayTxs.filter(t => t.type === 'expense').length} items)
+${memberTodayIncome > 0 ? `🟢 <b>Aapki Income:</b> ₹${memberTodayIncome.toLocaleString('en-IN')}\n` : ''}
+👤 <b>Aapka Is Mahine Ka Kharcha:</b> <b>₹${memberMonthSpent.toLocaleString('en-IN')}</b>
+📝 <b>Aapke Kul Records:</b> ${memberTxs.length} entries
+━━━━━━━━━━━━━━━━━━━━
+💵 <b>Net Family Balance:</b> 🔒 Masked (Owner Protected)
+🟢 <b>Family Income:</b> 🔒 Masked (Owner Protected)
+🎯 <b>Family Budget:</b> 🔒 Masked (Owner Protected)
+
+🔒 <i>(Family Privacy Mode: Master vault numbers remain private)</i>`;
+
+        await sendTelegramReply(botToken, chatId, memberEveningMsg, {
+          inline_keyboard: [
+            [{ text: '🕒 Recent 5 Tx', callback_data: 'cmd_recent' }, { text: '↩️ Undo Last', callback_data: 'cmd_undo' }],
+          ],
+        });
+      }
+      continue;
+    }
 
     if (type === 'morning') {
       const morningMsg = `🌅 <b>SHUBH PRABHAT, ${user.name.toUpperCase()}!</b>

@@ -21,9 +21,10 @@ import {
   Filter,
   Sparkles
 } from 'lucide-react';
-import { Transaction, AccountId, CardEmi, UserRole } from '../types';
-import { ACCOUNTS_CONFIG, ALL_ACCOUNTS } from '../utils/accounts';
+import { Transaction, AccountId, CardEmi, UserRole, CategoryDef } from '../types';
+import { ACCOUNTS_CONFIG, ALL_ACCOUNTS, CREDIT_CARDS, BANK_ACCOUNTS } from '../utils/accounts';
 import { safeFetchJson } from '../utils/api';
+import { DEFAULT_CATEGORIES } from '../utils/categories';
 import { 
   exportAccountStatementToExcel, 
   filterTransactionsForStatement,
@@ -40,6 +41,7 @@ interface AccountsLedgerViewProps {
   selectedMonth?: string;
   onSelectMonth?: (month: string) => void;
   availableMonths?: string[];
+  categories?: CategoryDef[];
 }
 
 export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
@@ -52,11 +54,29 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
   selectedMonth = 'all',
   onSelectMonth,
   availableMonths = [],
+  categories = DEFAULT_CATEGORIES,
 }) => {
   const isFamily = userRole === 'family';
   const [selectedAccountId, setSelectedAccountId] = useState<AccountId | 'all'>('ICICI CC 0000');
   const [emis, setEmis] = useState<CardEmi[]>([]);
   const [isAddEmiOpen, setIsAddEmiOpen] = useState(false);
+  const [modalTab, setModalTab] = useState<'transaction' | 'emi'>('transaction');
+
+  // Form states for Add Card Manual Transaction
+  const [cardTxAccount, setCardTxAccount] = useState<AccountId>('ICICI CC 0000');
+  const [cardTxType, setCardTxType] = useState<'expense' | 'income'>('expense');
+  const [cardTxAmount, setCardTxAmount] = useState('');
+  const [cardTxDesc, setCardTxDesc] = useState('');
+  const [cardTxCategory, setCardTxCategory] = useState('Shopping & Apparel');
+  const [cardTxDate, setCardTxDate] = useState(() => new Date().toISOString().split('T')[0]);
+  const [cardTxTime, setCardTxTime] = useState(() => {
+    const d = new Date();
+    return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+  });
+  const [cardTxRef, setCardTxRef] = useState('');
+  const [emiCardAccount, setEmiCardAccount] = useState<AccountId>('ICICI CC 0000');
+  const [isSubmittingTx, setIsSubmittingTx] = useState(false);
+
   const [isRecordBillPaymentOpen, setIsRecordBillPaymentOpen] = useState(false);
   const [billAmount, setBillAmount] = useState('');
   const [billFromAccount, setBillFromAccount] = useState<AccountId>('AX Bank');
@@ -82,9 +102,13 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
   const [emiDueDay, setEmiDueDay] = useState('15');
   const [emiNotes, setEmiNotes] = useState('');
 
-  // Keep export account in sync with active tab when opened
+  // Keep export account and cardTxAccount in sync with active tab when opened
   useEffect(() => {
     setExportAccountId(selectedAccountId);
+    if (selectedAccountId !== 'all') {
+      setCardTxAccount(selectedAccountId);
+      setEmiCardAccount(selectedAccountId);
+    }
   }, [selectedAccountId]);
 
   // Fetch EMIs
@@ -99,10 +123,66 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
     fetchEmis();
   }, []);
 
+  const handleAddCardTransaction = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const numAmt = parseFloat(cardTxAmount);
+    if (isNaN(numAmt) || numAmt <= 0) {
+      setToastMessage('Kripya valid amount dalein');
+      setTimeout(() => setToastMessage(null), 3000);
+      return;
+    }
+    if (!cardTxDesc.trim()) {
+      setToastMessage('Kripya description / merchant name dalein');
+      setTimeout(() => setToastMessage(null), 3000);
+      return;
+    }
+
+    try {
+      setIsSubmittingTx(true);
+      const targetCard = cardTxAccount || (selectedAccountId === 'all' ? 'ICICI CC 0000' : selectedAccountId);
+      const fullDesc = cardTxRef.trim() ? `${cardTxDesc.trim()} (Ref: ${cardTxRef.trim()})` : cardTxDesc.trim();
+      const defaultCat = cardTxType === 'income' ? 'Cashback & Rewards' : 'Shopping & Apparel';
+      const { data } = await safeFetchJson<{ success?: boolean; transaction?: Transaction }>('/api/transactions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: cardTxType,
+          amount: numAmt,
+          category: cardTxCategory || defaultCat,
+          description: fullDesc,
+          date: cardTxDate || new Date().toISOString().split('T')[0],
+          time: cardTxTime || undefined,
+          paymentMethod: 'Card',
+          account: targetCard,
+          source: 'manual',
+          tags: ['card_statement_entry', 'manual_card_match'],
+        }),
+      });
+
+      if (data?.transaction || data?.success) {
+        setToastMessage(`✅ Card Transaction successfully add ho gaya! (${targetCard})`);
+        setTimeout(() => setToastMessage(null), 3500);
+        setCardTxAmount('');
+        setCardTxDesc('');
+        setCardTxRef('');
+        setIsAddEmiOpen(false);
+        if (onRefreshTransactions) {
+          await onRefreshTransactions();
+        }
+      }
+    } catch (err: any) {
+      console.error('Failed to add card transaction:', err);
+      setToastMessage('Transaction save karne me samasya aayi');
+      setTimeout(() => setToastMessage(null), 3500);
+    } finally {
+      setIsSubmittingTx(false);
+    }
+  };
+
   const handleAddEmi = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!emiTitle.trim() || !emiAmount || isNaN(Number(emiAmount))) return;
-    const targetCard = selectedAccountId === 'all' ? 'SBI CC 5733' : selectedAccountId;
+    const targetCard = selectedAccountId === 'all' ? (emiCardAccount || 'SBI CC 5733') : selectedAccountId;
     const { data } = await safeFetchJson<{ success?: boolean; emis?: CardEmi[] }>('/api/emis', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -119,6 +199,8 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
     if (data?.emis) {
       setEmis(data.emis);
     }
+    setToastMessage(`✅ EMI successfully add ho gayi! (${targetCard})`);
+    setTimeout(() => setToastMessage(null), 3000);
     setEmiTitle('');
     setEmiAmount('');
     setEmiPaidMonths('0');
@@ -286,23 +368,25 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
               <span>Download Statement (Excel)</span>
             </button>
 
+            <button
+              onClick={() => {
+                setModalTab('transaction');
+                setIsAddEmiOpen(true);
+              }}
+              className="px-3.5 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold flex items-center gap-1.5 transition-all shadow-md shadow-indigo-900/30 cursor-pointer"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              <span>+ Card Entry / EMI Jodein</span>
+            </button>
+
             {selectedMeta && (selectedMeta.type === 'credit_card' || selectedMeta.type === 'rupay_card') && (
-              <>
-                <button
-                  onClick={() => setIsAddEmiOpen(true)}
-                  className="px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold flex items-center gap-1.5 transition-all shadow-sm cursor-pointer"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                  + Underlying EMI Jodein
-                </button>
-                <button
-                  onClick={() => setIsRecordBillPaymentOpen(true)}
-                  className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-white/10 text-xs font-semibold flex items-center gap-1.5 transition-all shadow-sm cursor-pointer"
-                >
-                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
-                  Bill Payment Record Karein
-                </button>
-              </>
+              <button
+                onClick={() => setIsRecordBillPaymentOpen(true)}
+                className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-white/10 text-xs font-semibold flex items-center gap-1.5 transition-all shadow-sm cursor-pointer"
+              >
+                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                <span>Bill Payment Record Karein</span>
+              </button>
             )}
           </div>
         </div>
@@ -468,7 +552,10 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
               </h3>
             </div>
             <button
-              onClick={() => setIsAddEmiOpen(true)}
+              onClick={() => {
+                setModalTab('emi');
+                setIsAddEmiOpen(true);
+              }}
               className="text-xs font-semibold text-indigo-400 hover:text-indigo-300 flex items-center gap-1 cursor-pointer"
             >
               <Plus className="w-3.5 h-3.5" /> Nayi EMI Jodein
@@ -533,7 +620,17 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
               Statement Ledger ({filteredTxs.length} entries)
             </h3>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
+            <button
+              onClick={() => {
+                setModalTab('transaction');
+                setIsAddEmiOpen(true);
+              }}
+              className="px-2.5 py-1 rounded-lg bg-indigo-600/30 hover:bg-indigo-600/50 text-indigo-200 border border-indigo-500/40 text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              <span>+ Card Entry Jodein</span>
+            </button>
             <button
               onClick={() => {
                 setExportAccountId(selectedAccountId);
@@ -817,105 +914,385 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
         </div>
       )}
 
-      {/* Add EMI Modal */}
+      {/* Add Card Transaction / Add EMI Unified Modal */}
       {isAddEmiOpen && (
         <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-indigo-500/40 rounded-2xl max-w-md w-full p-6 shadow-2xl animate-in fade-in zoom-in duration-150">
+          <div className="bg-slate-900 border border-indigo-500/40 rounded-2xl max-w-lg w-full p-5 sm:p-6 shadow-2xl animate-in fade-in zoom-in duration-150 max-h-[90vh] overflow-y-auto">
+            {/* Modal Header */}
             <div className="flex items-center justify-between pb-3 border-b border-white/[0.08]">
-              <h3 className="font-bold text-sm text-white flex items-center gap-2">
-                <Plus className="w-4 h-4 text-indigo-400" />
-                Underlying EMI Jodein
-              </h3>
+              <div>
+                <h3 className="font-bold text-sm text-white flex items-center gap-2">
+                  {modalTab === 'transaction' ? (
+                    <>
+                      <CreditCard className="w-4 h-4 text-indigo-400" />
+                      Card Entry (Bank Statement Match)
+                    </>
+                  ) : (
+                    <>
+                      <Clock className="w-4 h-4 text-indigo-400" />
+                      Underlying Card EMI Jodein
+                    </>
+                  )}
+                </h3>
+                <p className="text-[11px] text-slate-400 mt-0.5">
+                  {modalTab === 'transaction' 
+                    ? 'Bank / Card statement se missing entries match karne ke liye direct add karein'
+                    : 'Gadgets & loans ki monthly EMI schedule aur tenure track karein'}
+                </p>
+              </div>
               <button
                 onClick={() => setIsAddEmiOpen(false)}
-                className="text-slate-400 hover:text-white"
+                className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-white/[0.05] transition-colors cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
 
-            <form onSubmit={handleAddEmi} className="space-y-3.5 mt-4 text-xs font-mono">
-              <div>
-                <label className="block text-slate-300 mb-1">EMI Item / Gadget Name</label>
-                <input
-                  type="text"
-                  placeholder="e.g. iPhone 16 Pro EMI / MacBook / AC"
-                  value={emiTitle}
-                  onChange={(e) => setEmiTitle(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white focus:outline-hidden focus:border-indigo-500 text-xs"
-                  required
-                />
-              </div>
+            {/* Tab Switcher - Same Modal as requested */}
+            <div className="grid grid-cols-2 gap-1.5 p-1 bg-slate-950/80 border border-white/[0.08] rounded-xl my-3.5">
+              <button
+                type="button"
+                onClick={() => setModalTab('transaction')}
+                className={`py-2 px-3 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                  modalTab === 'transaction'
+                    ? 'bg-indigo-600 text-white shadow-md font-bold'
+                    : 'text-slate-400 hover:text-white hover:bg-white/[0.04]'
+                }`}
+              >
+                <CreditCard className="w-3.5 h-3.5" />
+                <span>💳 Card Entry (Statement Match)</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setModalTab('emi')}
+                className={`py-2 px-3 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                  modalTab === 'emi'
+                    ? 'bg-indigo-600 text-white shadow-md font-bold'
+                    : 'text-slate-400 hover:text-white hover:bg-white/[0.04]'
+                }`}
+              >
+                <Clock className="w-3.5 h-3.5" />
+                <span>📑 Card EMI / Loan</span>
+              </button>
+            </div>
 
-              <div className="grid grid-cols-2 gap-3">
+            {/* TAB 1: Manual Card Transaction for Statement Match */}
+            {modalTab === 'transaction' && (
+              <form onSubmit={handleAddCardTransaction} className="space-y-3.5 text-xs font-mono">
+                {/* Account / Card Selector */}
                 <div>
-                  <label className="block text-slate-300 mb-1">Monthly EMI (₹)</label>
-                  <input
-                    type="number"
-                    placeholder="4500"
-                    value={emiAmount}
-                    onChange={(e) => setEmiAmount(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white focus:outline-hidden focus:border-indigo-500 text-xs"
-                    required
-                  />
+                  <label className="block text-slate-300 mb-1 font-semibold flex items-center justify-between">
+                    <span>Card / Account Chunein</span>
+                    <span className="text-[10px] text-indigo-400 font-normal">Statement Match Target</span>
+                  </label>
+                  <select
+                    value={cardTxAccount}
+                    onChange={(e) => setCardTxAccount(e.target.value as AccountId)}
+                    className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white focus:outline-hidden focus:border-indigo-500 text-xs font-mono"
+                  >
+                    <optgroup label="Credit Cards & RuPay Cards">
+                      {CREDIT_CARDS.map((acc) => (
+                        <option key={acc.id} value={acc.id}>
+                          {acc.name} ({acc.badge})
+                        </option>
+                      ))}
+                    </optgroup>
+                    <optgroup label="Bank Accounts & Cash">
+                      {BANK_ACCOUNTS.map((acc) => (
+                        <option key={acc.id} value={acc.id}>
+                          {acc.name}
+                        </option>
+                      ))}
+                      <option value="Cash">Cash in Hand / Pocket</option>
+                    </optgroup>
+                  </select>
                 </div>
-                <div>
-                  <label className="block text-slate-300 mb-1">Monthly Due Date</label>
-                  <input
-                    type="number"
-                    min="1"
-                    max="31"
-                    value={emiDueDay}
-                    onChange={(e) => setEmiDueDay(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white focus:outline-hidden focus:border-indigo-500 text-xs"
-                    required
-                  />
-                </div>
-              </div>
 
-              <div className="grid grid-cols-2 gap-3">
+                {/* Entry Type Toggle (Debit vs Credit) */}
                 <div>
-                  <label className="block text-slate-300 mb-1">Total Months (Tenure)</label>
-                  <input
-                    type="number"
-                    min="1"
-                    max="60"
-                    value={emiTotalMonths}
-                    onChange={(e) => setEmiTotalMonths(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white focus:outline-hidden focus:border-indigo-500 text-xs"
-                    required
-                  />
+                  <label className="block text-slate-300 mb-1 font-semibold">Entry Type</label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setCardTxType('expense');
+                        if (cardTxCategory === 'Cashback & Rewards' || cardTxCategory === 'Refund') {
+                          setCardTxCategory('Shopping & Apparel');
+                        }
+                      }}
+                      className={`py-2 px-3 rounded-xl border text-xs font-semibold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                        cardTxType === 'expense'
+                          ? 'bg-rose-500/20 border-rose-500/60 text-rose-300 ring-1 ring-rose-500/50'
+                          : 'bg-slate-950/60 border-white/[0.08] text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      <ArrowUpRight className="w-3.5 h-3.5 text-rose-400" />
+                      <span>Kharcha / Spend (Debit)</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setCardTxType('income');
+                        setCardTxCategory('Cashback & Rewards');
+                      }}
+                      className={`py-2 px-3 rounded-xl border text-xs font-semibold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                        cardTxType === 'income'
+                          ? 'bg-emerald-500/20 border-emerald-500/60 text-emerald-300 ring-1 ring-emerald-500/50'
+                          : 'bg-slate-950/60 border-white/[0.08] text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      <ArrowDownLeft className="w-3.5 h-3.5 text-emerald-400" />
+                      <span>Refund / Cashback (Credit)</span>
+                    </button>
+                  </div>
                 </div>
-                <div>
-                  <label className="block text-slate-300 mb-1">Already Paid Months</label>
-                  <input
-                    type="number"
-                    min="0"
-                    max="60"
-                    value={emiPaidMonths}
-                    onChange={(e) => setEmiPaidMonths(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white focus:outline-hidden focus:border-indigo-500 text-xs"
-                    required
-                  />
-                </div>
-              </div>
 
-              <div className="pt-2 flex justify-end gap-2">
-                <button
-                  type="button"
-                  onClick={() => setIsAddEmiOpen(false)}
-                  className="px-3 py-1.5 rounded-xl text-slate-300 hover:bg-slate-800 cursor-pointer"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="px-4 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold cursor-pointer"
-                >
-                  Save EMI
-                </button>
-              </div>
-            </form>
+                {/* Amount & Category */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-slate-300 mb-1 font-semibold">Amount (₹)</label>
+                    <div className="relative">
+                      <span className="absolute left-3 top-2 text-slate-400 font-bold">₹</span>
+                      <input
+                        type="number"
+                        step="any"
+                        min="0.01"
+                        placeholder="0.00"
+                        value={cardTxAmount}
+                        onChange={(e) => setCardTxAmount(e.target.value)}
+                        className="w-full bg-slate-950 border border-slate-700 rounded-xl pl-7 pr-3 py-2 text-white font-bold focus:outline-hidden focus:border-indigo-500 text-xs"
+                        required
+                        autoFocus
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-slate-300 mb-1 font-semibold">Category</label>
+                    <select
+                      value={cardTxCategory}
+                      onChange={(e) => setCardTxCategory(e.target.value)}
+                      className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white focus:outline-hidden focus:border-indigo-500 text-xs font-mono"
+                    >
+                      {cardTxType === 'expense' ? (
+                        <>
+                          {categories.map((c) => (
+                            <option key={c.id} value={c.name}>
+                              {c.name}
+                            </option>
+                          ))}
+                        </>
+                      ) : (
+                        <>
+                          <option value="Cashback & Rewards">Cashback & Rewards</option>
+                          <option value="Refund">Refund / Reversal</option>
+                          <option value="Salary & Employment">Salary & Employment</option>
+                          <option value="Freelance & Side Hustles">Freelance & Side Hustles</option>
+                          <option value="Business & Sales">Business & Sales</option>
+                          <option value="Other Income">Other Income</option>
+                        </>
+                      )}
+                    </select>
+                  </div>
+                </div>
+
+                {/* Description / Merchant Name */}
+                <div>
+                  <label className="block text-slate-300 mb-1 font-semibold">Merchant / Description (Vivran)</label>
+                  <input
+                    type="text"
+                    placeholder="e.g. Amazon IN, Indian Oil Petrol, Zomato, Card Annual Fee, Forex..."
+                    value={cardTxDesc}
+                    onChange={(e) => setCardTxDesc(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white focus:outline-hidden focus:border-indigo-500 text-xs"
+                    required
+                  />
+                </div>
+
+                {/* Date & Time */}
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-slate-300 mb-1 font-semibold flex items-center gap-1">
+                      <Calendar className="w-3 h-3 text-slate-400" />
+                      Statement Date
+                    </label>
+                    <input
+                      type="date"
+                      value={cardTxDate}
+                      onChange={(e) => setCardTxDate(e.target.value)}
+                      className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white focus:outline-hidden focus:border-indigo-500 text-xs"
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-slate-300 mb-1 font-semibold flex items-center gap-1">
+                      <Clock className="w-3 h-3 text-slate-400" />
+                      Time (Optional)
+                    </label>
+                    <input
+                      type="time"
+                      value={cardTxTime}
+                      onChange={(e) => setCardTxTime(e.target.value)}
+                      className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white focus:outline-hidden focus:border-indigo-500 text-xs"
+                    />
+                  </div>
+                </div>
+
+                {/* Statement Reference / Auth Code (Optional) */}
+                <div>
+                  <label className="block text-slate-300 mb-1 font-semibold flex items-center justify-between">
+                    <span>Reference / Auth Code (Optional)</span>
+                    <span className="text-[10px] text-slate-500 font-normal">Statement RRN / Note</span>
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="e.g. RRN: 428910284910 / Auth: 829103"
+                    value={cardTxRef}
+                    onChange={(e) => setCardTxRef(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white focus:outline-hidden focus:border-indigo-500 text-xs"
+                  />
+                </div>
+
+                {/* Buttons */}
+                <div className="pt-2 flex items-center justify-end gap-2 border-t border-white/[0.06]">
+                  <button
+                    type="button"
+                    onClick={() => setIsAddEmiOpen(false)}
+                    className="px-3.5 py-2 rounded-xl text-slate-300 hover:bg-slate-800 text-xs font-semibold cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isSubmittingTx}
+                    className="px-4 py-2 rounded-xl bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 text-white font-bold text-xs flex items-center gap-1.5 shadow-md shadow-indigo-900/30 cursor-pointer disabled:opacity-50"
+                  >
+                    {isSubmittingTx ? (
+                      <span>Saving Entry...</span>
+                    ) : (
+                      <>
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                        <span>💾 Statement Entry Save Karein</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </form>
+            )}
+
+            {/* TAB 2: Underlying Card EMI Form */}
+            {modalTab === 'emi' && (
+              <form onSubmit={handleAddEmi} className="space-y-3.5 text-xs font-mono">
+                {/* Select Card for EMI */}
+                <div>
+                  <label className="block text-slate-300 mb-1 font-semibold">Underlying Card Chunein</label>
+                  <select
+                    value={selectedAccountId !== 'all' ? selectedAccountId : emiCardAccount}
+                    onChange={(e) => setEmiCardAccount(e.target.value as AccountId)}
+                    disabled={selectedAccountId !== 'all'}
+                    className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white focus:outline-hidden focus:border-indigo-500 text-xs font-mono disabled:opacity-60"
+                  >
+                    {CREDIT_CARDS.map((acc) => (
+                      <option key={acc.id} value={acc.id}>
+                        {acc.name} ({acc.badge})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-slate-300 mb-1 font-semibold">EMI Item / Gadget Name</label>
+                  <input
+                    type="text"
+                    placeholder="e.g. iPhone 16 Pro EMI / MacBook / AC"
+                    value={emiTitle}
+                    onChange={(e) => setEmiTitle(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white focus:outline-hidden focus:border-indigo-500 text-xs"
+                    required
+                    autoFocus
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-slate-300 mb-1 font-semibold">Monthly EMI (₹)</label>
+                    <input
+                      type="number"
+                      placeholder="4500"
+                      value={emiAmount}
+                      onChange={(e) => setEmiAmount(e.target.value)}
+                      className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white focus:outline-hidden focus:border-indigo-500 text-xs font-bold"
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-slate-300 mb-1 font-semibold">Monthly Due Date</label>
+                    <input
+                      type="number"
+                      min="1"
+                      max="31"
+                      value={emiDueDay}
+                      onChange={(e) => setEmiDueDay(e.target.value)}
+                      className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white focus:outline-hidden focus:border-indigo-500 text-xs"
+                      required
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-slate-300 mb-1 font-semibold">Total Months (Tenure)</label>
+                    <input
+                      type="number"
+                      min="1"
+                      max="60"
+                      value={emiTotalMonths}
+                      onChange={(e) => setEmiTotalMonths(e.target.value)}
+                      className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white focus:outline-hidden focus:border-indigo-500 text-xs"
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-slate-300 mb-1 font-semibold">Already Paid Months</label>
+                    <input
+                      type="number"
+                      min="0"
+                      max="60"
+                      value={emiPaidMonths}
+                      onChange={(e) => setEmiPaidMonths(e.target.value)}
+                      className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white focus:outline-hidden focus:border-indigo-500 text-xs"
+                      required
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-slate-300 mb-1 font-semibold">Notes (Optional)</label>
+                  <input
+                    type="text"
+                    placeholder="e.g. 0% No Cost EMI Amazon / 9 months remaining"
+                    value={emiNotes}
+                    onChange={(e) => setEmiNotes(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white focus:outline-hidden focus:border-indigo-500 text-xs"
+                  />
+                </div>
+
+                <div className="pt-2 flex justify-end gap-2 border-t border-white/[0.06]">
+                  <button
+                    type="button"
+                    onClick={() => setIsAddEmiOpen(false)}
+                    className="px-3.5 py-2 rounded-xl text-slate-300 hover:bg-slate-800 text-xs font-semibold cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs cursor-pointer shadow-md shadow-indigo-900/30"
+                  >
+                    Save EMI
+                  </button>
+                </div>
+              </form>
+            )}
           </div>
         </div>
       )}

@@ -940,15 +940,46 @@ export const TransactionList: React.FC<TransactionListProps> = ({
                   </div>
                 </div>
 
-                {/* Category Badge */}
+                {/* Category Inline Dropdown directly on row */}
                 <div className="md:col-span-2">
-                  <span className="inline-flex items-center space-x-1.5 px-2 py-0.5 rounded-md text-[11px] bg-white/[0.04] text-slate-300 border border-white/[0.08]">
+                  <div className="relative inline-flex items-center group max-w-full">
+                    <select
+                      value={tx.category}
+                      onChange={(e) => {
+                        const newCat = e.target.value;
+                        if (onUpdateTransactionCategory) {
+                          onUpdateTransactionCategory(tx.id, newCat);
+                        }
+                      }}
+                      className={`appearance-none bg-slate-900 border rounded-lg pl-6 pr-6 py-1 text-[11px] font-medium cursor-pointer focus:outline-hidden transition-all max-w-[145px] truncate ${
+                        isUncategorized
+                          ? 'border-amber-500/60 text-amber-300 bg-amber-950/40 ring-1 ring-amber-500/30 font-bold shadow-xs'
+                          : 'border-white/[0.1] text-slate-200 hover:border-indigo-400/50'
+                      }`}
+                      title="Click karein category turant badalne ke liye"
+                    >
+                      {isUncategorized && (
+                        <option value="Uncategorized" className="bg-slate-900 text-amber-400 font-bold">
+                          ⚠️ Uncategorized
+                        </option>
+                      )}
+                      {categories.map((c) => (
+                        <option key={c.id || c.name} value={c.name} className="bg-slate-900 text-slate-200">
+                          {c.name}
+                        </option>
+                      ))}
+                      {!categories.some((c) => c.name.toLowerCase() === tx.category.toLowerCase()) && !isUncategorized && (
+                        <option value={tx.category} className="bg-slate-900 text-slate-200">
+                          {tx.category}
+                        </option>
+                      )}
+                    </select>
                     <span 
-                      className="w-2 h-2 rounded-full shrink-0" 
-                      style={{ backgroundColor: catDef.color || '#6366F1' }}
+                      className="w-2 h-2 rounded-full absolute left-2 top-1/2 -translate-y-1/2 pointer-events-none" 
+                      style={{ backgroundColor: isUncategorized ? '#F59E0B' : (catDef.color || '#6366F1') }}
                     />
-                    <span className="truncate max-w-[110px]">{tx.category}</span>
-                  </span>
+                    <ChevronDown className="w-3 h-3 text-slate-400 absolute right-1.5 top-1/2 -translate-y-1/2 pointer-events-none group-hover:text-white" />
+                  </div>
                 </div>
 
                 {/* Card / Bank Account Inline Dropdown (Point 2) */}

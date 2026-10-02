@@ -523,13 +523,22 @@ export default function App() {
   };
 
   const handleUpdateTransactionCategory = async (id: string, newCategory: string) => {
-    const { data } = await safeFetchJson<{ success?: boolean }>(`/api/transactions/${id}`, {
+    // Optimistic UI update in transaction state
+    setTransactions((prev) =>
+      prev.map((t) => (t.id === id ? { ...t, category: newCategory } : t))
+    );
+
+    const { data } = await safeFetchJson<{ success?: boolean; summary?: FinancialSummary }>(`/api/transactions/${id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ category: newCategory }),
     });
     if (data?.success) {
+      if (data.summary) {
+        setSummary(data.summary);
+      }
       await fetchTransactions();
+      await fetchBudgets();
     }
   };
 
@@ -935,6 +944,7 @@ export default function App() {
         {activeTab === 'accounts' && (
           <AccountsLedgerView
             transactions={transactions}
+            categories={categories}
             onUpdateTransaction={handleUpdateTransaction}
             onRefreshTransactions={fetchTransactions}
             userRole={userRole}

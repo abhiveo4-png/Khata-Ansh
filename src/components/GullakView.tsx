@@ -299,6 +299,11 @@ export const GullakView: React.FC<GullakViewProps> = ({ authToken, currentUser, 
                   </h4>
                   <p className="text-xs text-slate-400 mt-0.5">
                     Kul Set Budget: ₹{currentMonthData.totalBudget.toLocaleString('en-IN')} • Kharcha: ₹{currentMonthData.totalSpent.toLocaleString('en-IN')}
+                    {currentMonthData.uncategorizedSpent && currentMonthData.uncategorizedSpent > 0 ? (
+                      <span className="text-amber-400 font-medium ml-1.5">
+                        (incl. ₹{currentMonthData.uncategorizedSpent.toLocaleString('en-IN')} Uncategorized)
+                      </span>
+                    ) : null}
                   </p>
                 </div>
 
@@ -311,6 +316,23 @@ export const GullakView: React.FC<GullakViewProps> = ({ authToken, currentUser, 
                   </span>
                 </div>
               </div>
+
+              {/* Uncategorized Kharcha Warning Banner */}
+              {Boolean(currentMonthData.uncategorizedSpent && currentMonthData.uncategorizedSpent > 0) && (
+                <div className="p-3.5 rounded-2xl bg-amber-950/40 border border-amber-500/30 flex flex-wrap items-center justify-between gap-3 text-xs text-amber-200 shadow-sm animate-in fade-in">
+                  <div className="flex items-center gap-2">
+                    <span className="px-2 py-0.5 rounded-md bg-amber-500/20 text-amber-300 font-bold border border-amber-500/30 text-[11px]">
+                      ⚠️ Uncategorized Kharcha
+                    </span>
+                    <span>
+                      Is mahine <b>₹{currentMonthData.uncategorizedSpent?.toLocaleString('en-IN')}</b> bina category ke kharch hue hain, jo Gullak bachat me se minus ho gaye hain.
+                    </span>
+                  </div>
+                  <span className="font-mono text-rose-300 font-bold shrink-0 bg-rose-950/60 px-2.5 py-1 rounded-xl border border-rose-500/30">
+                    -₹{currentMonthData.uncategorizedSpent?.toLocaleString('en-IN')} deducted
+                  </span>
+                </div>
+              )}
 
               {/* Category savings rows */}
               {currentMonthData.categories.length === 0 ? (

@@ -215,6 +215,23 @@ export const BudgetManager: React.FC<BudgetManagerProps> = ({
       });
     });
 
+    const uncatSpent = spentMap['uncategorized'] || 0;
+    if (uncatSpent > 0 && !categories.some((c) => c.name.toLowerCase() === 'uncategorized')) {
+      merged.unshift({
+        category: 'Uncategorized',
+        limit: 0,
+        spent: uncatSpent,
+        categoryDef: {
+          id: 'cat_uncategorized',
+          name: 'Uncategorized',
+          icon: 'HelpCircle',
+          color: '#F59E0B',
+          type: 'expense',
+          keywords: ['uncategorized'],
+        },
+      });
+    }
+
     return merged;
   }, [categories, budgets, bulkInputValues, isBulkEditing, spentMap]);
 
