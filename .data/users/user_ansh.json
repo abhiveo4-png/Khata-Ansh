@@ -496,12 +496,18 @@
   "goals": [],
   "udhaars": [],
   "fuelLogs": [],
-  "dataVersion": 35606,
+  "dataVersion": 35611,
   "accountBaseBalances": {
     "IC Bank": 45000,
     "AX Bank": 80000,
     "Cash": 5000
   },
   "wifeBaseBalance": 25000,
-  "savingsTransfers": []
+  "savingsTransfers": [],
+  "accountBalanceSetTimestamps": {
+    "IC Bank": "2026-10-05T15:36:00.405Z",
+    "AX Bank": "2026-10-05T15:36:00.405Z",
+    "Cash": "2026-10-05T15:36:00.405Z"
+  },
+  "wifeBalanceSetTimestamp": "2026-10-05T15:36:00.405Z"
 }

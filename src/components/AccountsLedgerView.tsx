@@ -103,6 +103,7 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
   const [balancesData, setBalancesData] = useState<AccountBalancesData | null>(null);
   const [isBalancesModalOpen, setIsBalancesModalOpen] = useState(false);
   const [editBaseBalances, setEditBaseBalances] = useState<Record<string, string>>({});
+  const [editCardLimits, setEditCardLimits] = useState<Record<string, string>>({});
   const [editWifeBalance, setEditWifeBalance] = useState('');
   const [isSavingBalances, setIsSavingBalances] = useState(false);
 
@@ -111,10 +112,15 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
     if (data) {
       setBalancesData(data);
       const initialMap: Record<string, string> = {};
+      const initialLimits: Record<string, string> = {};
       for (const acc of ALL_ACCOUNTS) {
         initialMap[acc.id] = String(data.accountBaseBalances?.[acc.id] ?? '');
+        if (acc.type === 'credit_card' || acc.type === 'rupay_card') {
+          initialLimits[acc.id] = String(data.cardCreditLimits?.[acc.id] || acc.creditLimit || 100000);
+        }
       }
       setEditBaseBalances(initialMap);
+      setEditCardLimits(initialLimits);
       setEditWifeBalance(String(data.wifeBaseBalance ?? ''));
     }
   };
@@ -131,19 +137,25 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
       for (const [k, v] of Object.entries(editBaseBalances)) {
         payloadBalances[k] = parseFloat(String(v || '')) || 0;
       }
+      const payloadLimits: Record<string, number> = {};
+      for (const [k, v] of Object.entries(editCardLimits)) {
+        const lim = parseFloat(String(v || ''));
+        if (!isNaN(lim) && lim > 0) payloadLimits[k] = lim;
+      }
       const { data } = await safeFetchJson<AccountBalancesData>('/api/accounts/balances', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           accountBaseBalances: payloadBalances,
           wifeBaseBalance: parseFloat(editWifeBalance) || 0,
+          cardCreditLimits: payloadLimits,
         }),
       });
       if (data) {
         setBalancesData(data);
       }
       setIsBalancesModalOpen(false);
-      setToastMessage('✅ Sabhi accounts ke opening balances successfully save ho gaye!');
+      setToastMessage('✅ Balances & Card Limits successfully save ho gaye!');
       setTimeout(() => setToastMessage(null), 3500);
       if (onRefreshTransactions) await onRefreshTransactions();
     } catch (err) {
@@ -642,15 +654,29 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
                 <div className="text-xl font-bold text-sky-300 font-mono mt-1">
                   {isFamily || isPrivacyMode 
                     ? '••••••' 
-                    : `₹${(balancesData?.accounts[selectedAccountId]?.availableLimit ?? Math.max(0, (selectedMeta.creditLimit || 100000) - currentMonthExpense)).toLocaleString('en-IN')}`}
+                    : `₹${(balancesData?.accounts[selectedAccountId]?.availableLimit ?? Math.max(0, (balancesData?.cardCreditLimits?.[selectedAccountId] || selectedMeta.creditLimit || 100000) - currentMonthExpense)).toLocaleString('en-IN')}`}
                 </div>
-                <div className="text-[11px] text-slate-400 mt-1">
-                  Total Limit: ₹{(selectedMeta.creditLimit || 100000).toLocaleString('en-IN')}
+                <div className="text-[11px] text-slate-400 mt-1 flex items-center justify-between">
+                  <span>Total Limit: ₹{(balancesData?.accounts[selectedAccountId]?.creditLimit || balancesData?.cardCreditLimits?.[selectedAccountId] || selectedMeta.creditLimit || 100000).toLocaleString('en-IN')}</span>
+                  <button
+                    onClick={() => setIsBalancesModalOpen(true)}
+                    className="text-sky-400 hover:text-sky-300 text-[10px] font-semibold underline cursor-pointer"
+                  >
+                    ✏️ Limit / Due Badlein
+                  </button>
                 </div>
               </div>
 
               <div className="bg-slate-900/50 border border-white/[0.08] rounded-2xl p-4">
-                <div className="text-xs text-slate-400">Current Spends / Outstanding</div>
+                <div className="text-xs text-slate-400 flex items-center justify-between">
+                  <span>Current Spends / Outstanding</span>
+                  <button
+                    onClick={() => setIsBalancesModalOpen(true)}
+                    className="text-rose-400 hover:text-rose-300 text-[10px] font-semibold underline cursor-pointer"
+                  >
+                    ✏️ Due Set Karein
+                  </button>
+                </div>
                 <div className="text-xl font-bold text-rose-400 font-mono mt-1">
                   {isFamily || isPrivacyMode 
                     ? '••••••' 
@@ -1700,42 +1726,73 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
                   </div>
                 </div>
 
-                {/* Section 3: Credit Cards Unpaid / Opening Balance */}
+                {/* Section 3: Credit Cards Limits & Current Spends/Due */}
                 <div className="space-y-3">
                   <div className="flex items-center justify-between pb-1.5 border-b border-slate-800">
                     <span className="font-bold text-sm text-sky-400 font-sans flex items-center gap-1.5">
                       <CreditCard className="w-4 h-4" />
-                      3. Credit Cards (Opening Unpaid / Outstanding - Optional)
+                      3. Credit Cards (Credit Limit & Aaj Ka Due / Kharcha)
                     </span>
-                    <span className="text-[10px] text-slate-400">Pehle Ka Baki Due</span>
+                    <span className="text-[10px] text-slate-400">Limit & Today's Due</span>
                   </div>
                   <p className="text-[11px] text-slate-400 font-sans">
-                    Agar tracking start karne se pehle kisi card ka bill unpaid tha ya starting spends the, to yahan dalein (warna 0 chhod dein):
+                    Har card ki total credit limit set/change karein, aur aaj ke hisab se jo current unpaid due/kharcha hai wo dalein. Iske baad hone wale naye transactions hi add/minus honge (purane transactions dobara add nahi honge):
                   </p>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    {CREDIT_CARDS.map((card) => (
-                      <div key={card.id} className="p-3 bg-slate-950/70 border border-slate-800 rounded-xl space-y-1.5">
-                        <div className="flex items-center justify-between">
-                          <label className="text-slate-300 font-semibold font-sans text-[11px] truncate" title={card.name}>
-                            {card.shortName}
-                          </label>
-                          <span className="text-[10px] text-sky-300 font-mono">
-                            Limit: ₹{(card.creditLimit || 100000) / 1000}k
-                          </span>
+                  <div className="space-y-3">
+                    {CREDIT_CARDS.map((card) => {
+                      const currentDueVal = parseFloat(editBaseBalances[card.id] || '0') || 0;
+                      const currentLimitVal = parseFloat(editCardLimits[card.id] || String(balancesData?.cardCreditLimits?.[card.id] || card.creditLimit || 100000)) || (card.creditLimit || 100000);
+                      const calculatedAvl = Math.max(0, currentLimitVal - currentDueVal);
+
+                      return (
+                        <div key={card.id} className="p-3.5 bg-slate-950/70 border border-slate-800 rounded-xl space-y-2.5">
+                          <div className="flex items-center justify-between">
+                            <span className="font-bold text-white text-xs flex items-center gap-1.5">
+                              <CreditCard className="w-3.5 h-3.5 text-sky-400" />
+                              {card.name}
+                            </span>
+                            <span className="text-[10px] font-mono text-emerald-400 font-semibold">
+                              Available Bacha: ₹{calculatedAvl.toLocaleString('en-IN')}
+                            </span>
+                          </div>
+
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                            <div>
+                              <label className="text-[11px] text-slate-300 font-medium block mb-1">
+                                💳 Total Credit Limit (₹)
+                              </label>
+                              <div className="relative">
+                                <span className="absolute left-3 top-2 text-slate-400 font-bold">₹</span>
+                                <input
+                                  type="number"
+                                  placeholder={String(card.creditLimit || 100000)}
+                                  value={editCardLimits[card.id] || ''}
+                                  onChange={(e) => setEditCardLimits({ ...editCardLimits, [card.id]: e.target.value })}
+                                  className="w-full bg-slate-900 border border-slate-700 rounded-xl pl-8 pr-3 py-1.5 text-white font-mono text-xs focus:border-sky-500 focus:outline-hidden"
+                                />
+                              </div>
+                            </div>
+
+                            <div>
+                              <label className="text-[11px] text-rose-300 font-medium block mb-1">
+                                🔴 Aaj Ka Due / Unpaid Spends (₹)
+                              </label>
+                              <div className="relative">
+                                <span className="absolute left-3 top-2 text-slate-400 font-bold">₹</span>
+                                <input
+                                  type="number"
+                                  placeholder="0"
+                                  value={editBaseBalances[card.id] || ''}
+                                  onChange={(e) => setEditBaseBalances({ ...editBaseBalances, [card.id]: e.target.value })}
+                                  className="w-full bg-slate-900 border border-slate-700 rounded-xl pl-8 pr-3 py-1.5 text-white font-mono text-xs focus:border-rose-500 focus:outline-hidden"
+                                />
+                              </div>
+                            </div>
+                          </div>
                         </div>
-                        <div className="relative">
-                          <span className="absolute left-3 top-2 text-slate-400 font-bold">₹</span>
-                          <input
-                            type="number"
-                            placeholder="0"
-                            value={editBaseBalances[card.id] || ''}
-                            onChange={(e) => setEditBaseBalances({ ...editBaseBalances, [card.id]: e.target.value })}
-                            className="w-full bg-slate-900 border border-slate-700 rounded-xl pl-8 pr-3 py-1.5 text-white font-mono focus:outline-hidden focus:border-sky-500 text-xs"
-                          />
-                        </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
               </div>

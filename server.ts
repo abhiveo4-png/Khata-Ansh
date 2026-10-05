@@ -580,7 +580,10 @@ interface UserDataStore {
   fuelLogs?: FuelLog[];
   dataVersion?: number;
   accountBaseBalances?: Record<string, number>;
+  accountBalanceSetTimestamps?: Record<string, string>;
   wifeBaseBalance?: number;
+  wifeBalanceSetTimestamp?: string;
+  cardCreditLimits?: Record<string, number>;
 }
 
 let users: UserProfile[] = loadJson<UserProfile[]>(USERS_FILE, []);
@@ -2542,7 +2545,10 @@ const ACCOUNTS_META: Record<string, {
 export function calculateAccountsBalances(userId: string) {
   const store = getUserData(userId);
   const baseBalances = store.accountBaseBalances || {};
+  const baseTimestamps = store.accountBalanceSetTimestamps || {};
+  const cardLimits = store.cardCreditLimits || {};
   const wifeBase = Number(store.wifeBaseBalance) || 0;
+  const wifeBaseTimestamp = store.wifeBalanceSetTimestamp;
   const txs = store.transactions || [];
   const savingsTransfers = store.savingsTransfers || [];
 
@@ -2551,9 +2557,23 @@ export function calculateAccountsBalances(userId: string) {
   let totalCardAvailableLimit = 0;
   let totalCardOutstanding = 0;
 
+  let needsSave = false;
+
   for (const [accId, meta] of Object.entries(ACCOUNTS_META)) {
     const isCard = meta.type === 'credit_card' || meta.type === 'rupay_card';
     const base = Number(baseBalances[accId]) || 0;
+    let setTimeStr = baseTimestamps[accId];
+
+    // If an account has a base balance set but no timestamp recorded yet,
+    // initialize timestamp to now so historical transactions are not double-counted on top of today's balance!
+    if (!setTimeStr && baseBalances[accId] !== undefined) {
+      setTimeStr = new Date().toISOString();
+      if (!store.accountBalanceSetTimestamps) store.accountBalanceSetTimestamps = {};
+      store.accountBalanceSetTimestamps[accId] = setTimeStr;
+      needsSave = true;
+    }
+
+    const setTimeMs = setTimeStr ? new Date(setTimeStr).getTime() : 0;
 
     let credits = 0;
     let debits = 0;
@@ -2561,6 +2581,14 @@ export function calculateAccountsBalances(userId: string) {
     for (const t of txs) {
       const tAcc = t.account || 'ICICI CC 0000';
       if (tAcc === accId) {
+        // Skip transactions that existed on or before this baseline was set as of today
+        if (setTimeMs > 0) {
+          const tTimeMs = t.createdAt ? new Date(t.createdAt).getTime() : 0;
+          if (tTimeMs > 0 && tTimeMs <= setTimeMs) {
+            continue;
+          }
+        }
+
         const amt = Number(t.amount) || 0;
         if (t.type === 'income') {
           credits += amt;
@@ -2574,6 +2602,13 @@ export function calculateAccountsBalances(userId: string) {
     if (!isCard) {
       for (const s of savingsTransfers) {
         if (s.fromAccount === accId) {
+          if (setTimeMs > 0) {
+            const sTimeMs = s.createdAt ? new Date(s.createdAt).getTime() : 0;
+            if (sTimeMs > 0 && sTimeMs <= setTimeMs) {
+              continue;
+            }
+          }
+
           const sAmt = Number(s.amount) || 0;
           const isDupe = txs.some(
             t => t.account === accId &&
@@ -2589,7 +2624,8 @@ export function calculateAccountsBalances(userId: string) {
     }
 
     if (isCard) {
-      const creditLimit = meta.creditLimit || 100000;
+      const customLimit = Number(cardLimits[accId]);
+      const creditLimit = (customLimit && customLimit > 0) ? customLimit : (meta.creditLimit || 100000);
       const currentOutstanding = Math.max(0, base + debits - credits);
       const availableLimit = Math.max(0, creditLimit - currentOutstanding);
 
@@ -2632,12 +2668,32 @@ export function calculateAccountsBalances(userId: string) {
   }
 
   // Calculate Wife Savings Balance:
+  let wifeSetTimeStr = wifeBaseTimestamp;
+  if (!wifeSetTimeStr && store.wifeBaseBalance !== undefined && store.wifeBaseBalance > 0) {
+    wifeSetTimeStr = new Date().toISOString();
+    store.wifeBalanceSetTimestamp = wifeSetTimeStr;
+    needsSave = true;
+  }
+  const wifeSetTimeMs = wifeSetTimeStr ? new Date(wifeSetTimeStr).getTime() : 0;
+
   let totalTransferred = 0;
   for (const s of savingsTransfers) {
+    if (wifeSetTimeMs > 0) {
+      const sTimeMs = s.createdAt ? new Date(s.createdAt).getTime() : 0;
+      if (sTimeMs > 0 && sTimeMs <= wifeSetTimeMs) {
+        continue;
+      }
+    }
     totalTransferred += (Number(s.amount) || 0);
   }
   for (const t of txs) {
     if (t.isSavingsTransfer) {
+      if (wifeSetTimeMs > 0) {
+        const tTimeMs = t.createdAt ? new Date(t.createdAt).getTime() : 0;
+        if (tTimeMs > 0 && tTimeMs <= wifeSetTimeMs) {
+          continue;
+        }
+      }
       const tAmt = Number(t.amount) || 0;
       const isDupe = savingsTransfers.some(
         s => Number(s.amount) === tAmt && s.date === t.date
@@ -2650,9 +2706,16 @@ export function calculateAccountsBalances(userId: string) {
 
   const wifeCurrentBalance = wifeBase + totalTransferred;
 
+  if (needsSave) {
+    saveUserData(userId, store);
+  }
+
   return {
     accountBaseBalances: baseBalances,
+    accountBalanceSetTimestamps: store.accountBalanceSetTimestamps || {},
     wifeBaseBalance: wifeBase,
+    wifeBalanceSetTimestamp: store.wifeBalanceSetTimestamp,
+    cardCreditLimits: cardLimits,
     accounts,
     totalBankCashBalance,
     totalCardAvailableLimit,
@@ -5272,12 +5335,13 @@ Aap apne bank accounts, cash, credit cards ya wife ke account ka one-time openin
     // Check if target is wife's account
     if (targetPart.includes('wife') || targetPart.includes('patni') || targetPart.includes('saving')) {
       userStore.wifeBaseBalance = Math.max(0, amountNum);
+      userStore.wifeBalanceSetTimestamp = new Date().toISOString();
       saveUserData(userId, userStore);
       const updatedBal = calculateAccountsBalances(userId);
       await sendTelegramReply(
         botToken,
         chatId,
-        `✅ <b>Wife's Account Base Balance Updated!</b>\n\n🌸 <b>Base Balance:</b> ₹${amountNum.toLocaleString('en-IN')}\n💰 <b>Ab Kul Live Balance:</b> <b>₹${updatedBal.wifeSavings.currentBalance.toLocaleString('en-IN')}</b>\n<i>(Base: ₹${amountNum.toLocaleString('en-IN')} + Transfers: ₹${updatedBal.wifeSavings.totalTransferred.toLocaleString('en-IN')})</i>`,
+        `✅ <b>Wife's Account Live Balance Updated!</b>\n\n🌸 <b>Aaj Ka Live Balance:</b> <b>₹${updatedBal.wifeSavings.currentBalance.toLocaleString('en-IN')}</b>\n<i>(Iske baad aane wale naye transfers hi add honge, purane transactions add nahi honge.)</i>`,
         {
           inline_keyboard: [[{ text: '🏦 Sabhi Balances Dekhein', callback_data: 'cmd_balance' }]]
         }
@@ -5317,6 +5381,8 @@ Aap apne bank accounts, cash, credit cards ya wife ke account ka one-time openin
     }
 
     userStore.accountBaseBalances[matchedAccId] = Math.max(0, amountNum);
+    if (!userStore.accountBalanceSetTimestamps) userStore.accountBalanceSetTimestamps = {};
+    userStore.accountBalanceSetTimestamps[matchedAccId] = new Date().toISOString();
     saveUserData(userId, userStore);
     const updatedBal = calculateAccountsBalances(userId);
     const accInfo = updatedBal.accounts[matchedAccId];
@@ -5324,7 +5390,108 @@ Aap apne bank accounts, cash, credit cards ya wife ke account ka one-time openin
     await sendTelegramReply(
       botToken,
       chatId,
-      `✅ <b>${accInfo.name} Base Balance Saved!</b>\n\n📌 <b>Starting Base Balance:</b> ₹${amountNum.toLocaleString('en-IN')}\n💳 <b>Ab Live Remaining Balance / Available Limit:</b> <b>₹${(accInfo.currentBalance || 0).toLocaleString('en-IN')}</b>`,
+      `✅ <b>${accInfo.name} Live Balance / Due Set Ho Gaya!</b>\n\n📌 <b>Aaj Ka Balance/Due:</b> ₹${amountNum.toLocaleString('en-IN')}\n💳 <b>Live Available Limit / Remaining:</b> <b>₹${(accInfo.currentBalance || 0).toLocaleString('en-IN')}</b>\n\n💡 <i>Ab se aane wale naye transactions hi isme minus/plus honge, purane transactions dobara add nahi honge.</i>`,
+      {
+        inline_keyboard: [[{ text: '🏦 Sabhi Balances Dekhein', callback_data: 'cmd_balance' }]]
+      }
+    );
+    return;
+  }
+
+  // 6.37. Set Card Limit (/setlimit <card> <limit>)
+  const isSetLimit =
+    cleanCmd === '/setlimit' ||
+    cleanCmd === '/cardlimit' ||
+    cleanCmd === '/limit' ||
+    lowerText.startsWith('/setlimit') ||
+    lowerText.startsWith('/cardlimit') ||
+    lowerText.startsWith('set limit') ||
+    lowerText.startsWith('card limit');
+
+  if (isSetLimit) {
+    if (isFamilyMemberSender) {
+      await sendTelegramReply(botToken, chatId, `🔒 <b>Permission Denied:</b> Sirf Khata Owner card limit change kar sakte hain.`);
+      return;
+    }
+
+    let rawArg = '';
+    if (lowerText.startsWith('/setlimit')) {
+      rawArg = rawText.replace(/^\/setlimit(@\w+)?/i, '').trim();
+    } else if (lowerText.startsWith('/cardlimit')) {
+      rawArg = rawText.replace(/^\/cardlimit(@\w+)?/i, '').trim();
+    } else if (lowerText.startsWith('set limit')) {
+      rawArg = rawText.replace(/^set limit/i, '').trim();
+    } else if (lowerText.startsWith('card limit')) {
+      rawArg = rawText.replace(/^card limit/i, '').trim();
+    } else {
+      rawArg = commandArg;
+    }
+
+    const userStore = getUserData(userId);
+    if (!userStore.cardCreditLimits) userStore.cardCreditLimits = {};
+
+    if (!rawArg) {
+      const helpMsg = `💳 <b>CREDIT CARD KI LIMIT KAISE CHANGE KAREIN:</b>
+━━━━━━━━━━━━━━━━━━━━
+Aap apne kisi bhi credit card ki total credit limit change kar sakte hain:
+
+📝 <b>Examples:</b>
+• <code>/setlimit rupay 150000</code> <i>(ICICI RuPay UPI CC 0000)</i>
+• <code>/setlimit sbi 200000</code> <i>(SBI CC 5733)</i>
+• <code>/setlimit 6526 120000</code> <i>(SBI CC 6526)</i>
+• <code>/setlimit axis 200000</code> <i>(Axis CC 8210)</i>
+• <code>/setlimit 5376 100000</code> <i>(Axis CC 5376)</i>
+
+💡 <i>Web Dashboard par "Accounts & Cards Ledger" me "Balances Set Karein" se bhi limits set kar sakte hain!</i>`;
+
+      await sendTelegramReply(botToken, chatId, helpMsg, {
+        inline_keyboard: [[{ text: '🏦 Live Balances Dekhein', callback_data: 'cmd_balance' }]]
+      });
+      return;
+    }
+
+    const parts = rawArg.split(/\s+/);
+    const lastPart = parts[parts.length - 1];
+    const amountNum = parseFloat(lastPart.replace(/[^0-9.]/g, ''));
+
+    if (isNaN(amountNum) || amountNum <= 0) {
+      await sendTelegramReply(botToken, chatId, `⚠️ Kripya sahi credit limit dalein.\n<i>Udaharan:</i> <code>/setlimit rupay 150000</code>`);
+      return;
+    }
+
+    const targetPart = parts.slice(0, parts.length - 1).join(' ').toLowerCase();
+    let matchedCardId: string | undefined;
+
+    if (targetPart.includes('0000') || targetPart.includes('rupay') || (targetPart.includes('icici') && (targetPart.includes('cc') || targetPart.includes('card')))) {
+      matchedCardId = 'ICICI CC 0000';
+    } else if (targetPart.includes('5733') || targetPart.includes('simplyclick')) {
+      matchedCardId = 'SBI CC 5733';
+    } else if (targetPart.includes('6526') || targetPart.includes('pulse')) {
+      matchedCardId = 'SBI CC 6526';
+    } else if (targetPart.includes('sbi')) {
+      matchedCardId = 'SBI CC 5733';
+    } else if (targetPart.includes('8210') || targetPart.includes('flipkart') || targetPart.includes('ace')) {
+      matchedCardId = 'AX CC 8210';
+    } else if (targetPart.includes('5376') || targetPart.includes('neo') || targetPart.includes('privilege')) {
+      matchedCardId = 'AX CC 5376';
+    } else if (targetPart.includes('axis') && (targetPart.includes('cc') || targetPart.includes('card'))) {
+      matchedCardId = 'AX CC 8210';
+    }
+
+    if (!matchedCardId) {
+      await sendTelegramReply(botToken, chatId, `⚠️ Card samajh nahi aaya. Kripya card specify karein:\n• <code>/setlimit rupay ${amountNum}</code>\n• <code>/setlimit 5733 ${amountNum}</code>\n• <code>/setlimit 6526 ${amountNum}</code>\n• <code>/setlimit 8210 ${amountNum}</code>\n• <code>/setlimit 5376 ${amountNum}</code>`);
+      return;
+    }
+
+    userStore.cardCreditLimits[matchedCardId] = amountNum;
+    saveUserData(userId, userStore);
+    const updatedBal = calculateAccountsBalances(userId);
+    const cardInfo = updatedBal.accounts[matchedCardId];
+
+    await sendTelegramReply(
+      botToken,
+      chatId,
+      `✅ <b>${cardInfo.name} Ki Limit Update Ho Gayi!</b>\n\n💳 <b>Nayi Total Limit:</b> <b>₹${amountNum.toLocaleString('en-IN')}</b>\n🔴 <b>Current Spends/Due:</b> ₹${(cardInfo.currentOutstanding || 0).toLocaleString('en-IN')}\n🟢 <b>Ab Available Limit Bacha:</b> <b>₹${(cardInfo.availableLimit || 0).toLocaleString('en-IN')}</b>`,
       {
         inline_keyboard: [[{ text: '🏦 Sabhi Balances Dekhein', callback_data: 'cmd_balance' }]]
       }
@@ -7720,14 +7887,27 @@ app.get('/api/accounts/balances', (req, res) => {
 app.post('/api/accounts/balances', (req, res) => {
   const user = getRequestUser(req);
   const store = getUserData(user.id);
-  const { accountBaseBalances, wifeBaseBalance } = req.body;
+  const { accountBaseBalances, wifeBaseBalance, cardCreditLimits } = req.body;
+  const nowIso = new Date().toISOString();
 
   if (accountBaseBalances && typeof accountBaseBalances === 'object') {
     if (!store.accountBaseBalances) store.accountBaseBalances = {};
+    if (!store.accountBalanceSetTimestamps) store.accountBalanceSetTimestamps = {};
     for (const [acc, val] of Object.entries(accountBaseBalances)) {
       const num = Number(val);
       if (!isNaN(num)) {
         store.accountBaseBalances[acc] = Math.max(0, num);
+        store.accountBalanceSetTimestamps[acc] = nowIso;
+      }
+    }
+  }
+
+  if (cardCreditLimits && typeof cardCreditLimits === 'object') {
+    if (!store.cardCreditLimits) store.cardCreditLimits = {};
+    for (const [cardId, lim] of Object.entries(cardCreditLimits)) {
+      const num = Number(lim);
+      if (!isNaN(num) && num > 0) {
+        store.cardCreditLimits[cardId] = num;
       }
     }
   }
@@ -7736,6 +7916,7 @@ app.post('/api/accounts/balances', (req, res) => {
     const num = Number(wifeBaseBalance);
     if (!isNaN(num)) {
       store.wifeBaseBalance = Math.max(0, num);
+      store.wifeBalanceSetTimestamp = nowIso;
     }
   }
 

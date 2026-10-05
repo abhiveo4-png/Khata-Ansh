@@ -163,7 +163,10 @@ export interface AccountBalanceInfo {
 
 export interface AccountBalancesData {
   accountBaseBalances: Record<string, number>;
+  accountBalanceSetTimestamps?: Record<string, string>;
   wifeBaseBalance: number;
+  wifeBalanceSetTimestamp?: string;
+  cardCreditLimits?: Record<string, number>;
   accounts: Record<string, AccountBalanceInfo>;
   totalBankCashBalance: number;
   totalCardAvailableLimit: number;
