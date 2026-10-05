@@ -146,6 +146,35 @@ export interface BotConfig {
   lastError?: string;
 }
 
+export interface AccountBalanceInfo {
+  accountId: AccountId;
+  name: string;
+  shortName: string;
+  type: 'rupay_card' | 'credit_card' | 'bank_account' | 'cash';
+  badge: string;
+  baseBalance: number;
+  credits: number;
+  debits: number;
+  currentBalance: number;
+  creditLimit?: number;
+  availableLimit?: number;
+  currentOutstanding?: number;
+}
+
+export interface AccountBalancesData {
+  accountBaseBalances: Record<string, number>;
+  wifeBaseBalance: number;
+  accounts: Record<string, AccountBalanceInfo>;
+  totalBankCashBalance: number;
+  totalCardAvailableLimit: number;
+  totalCardOutstanding: number;
+  wifeSavings: {
+    baseBalance: number;
+    totalTransferred: number;
+    currentBalance: number;
+  };
+}
+
 export interface FinancialSummary {
   totalIncome: number;
   totalExpense: number;

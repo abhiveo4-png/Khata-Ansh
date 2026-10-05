@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import { 
   TrendingUp, 
   HeartHandshake, 
@@ -18,14 +19,16 @@ import {
   Calculator,
   Clock,
   CheckCircle2,
-  AlertCircle
+  AlertCircle,
+  Settings
 } from 'lucide-react';
-import { InvestmentRecord, SavingsTransfer, UdhaarRecord, AccountId } from '../types';
+import { InvestmentRecord, SavingsTransfer, UdhaarRecord, AccountId, AccountBalancesData, Transaction } from '../types';
 import { safeFetchJson } from '../utils/api';
 import { calculateInvestmentMetrics } from '../utils/investmentCalculator';
 import { UdhaarKhataView } from './UdhaarKhataView';
 
 interface WealthKhataHubProps {
+  transactions?: Transaction[];
   udhaars?: UdhaarRecord[];
   isPrivacyMode?: boolean;
   onAddUdhaar?: (record: Omit<UdhaarRecord, 'id' | 'createdAt'>) => Promise<void>;
@@ -36,6 +39,7 @@ interface WealthKhataHubProps {
 }
 
 export const WealthKhataHub: React.FC<WealthKhataHubProps> = ({
+  transactions = [],
   udhaars = [],
   isPrivacyMode = false,
   onAddUdhaar,
@@ -72,11 +76,19 @@ export const WealthKhataHub: React.FC<WealthKhataHubProps> = ({
   const [transDate, setTransDate] = useState(new Date().toISOString().split('T')[0]);
   const [transNotes, setTransNotes] = useState('');
 
-  // Fetch investments and savings transfers
+  // Wife's Account Base & Live Balance states
+  const [balancesData, setBalancesData] = useState<AccountBalancesData | null>(null);
+  const [wifeBaseBalance, setWifeBaseBalance] = useState<number>(0);
+  const [isEditWifeBaseOpen, setIsEditWifeBaseOpen] = useState(false);
+  const [newWifeBaseInput, setNewWifeBaseInput] = useState('');
+  const [isSavingWifeBase, setIsSavingWifeBase] = useState(false);
+
+  // Fetch investments, savings transfers, and live account balances
   const fetchWealthData = async () => {
-    const [invRes, savRes] = await Promise.all([
+    const [invRes, savRes, balRes] = await Promise.all([
       safeFetchJson<{ investments?: InvestmentRecord[] }>('/api/investments'),
       safeFetchJson<{ savingsTransfers?: SavingsTransfer[] }>('/api/savings-transfers'),
+      safeFetchJson<AccountBalancesData>('/api/accounts/balances'),
     ]);
     if (invRes.data?.investments) {
       setInvestments(invRes.data.investments);
@@ -84,11 +96,38 @@ export const WealthKhataHub: React.FC<WealthKhataHubProps> = ({
     if (savRes.data?.savingsTransfers) {
       setSavingsTransfers(savRes.data.savingsTransfers);
     }
+    if (balRes.data) {
+      setBalancesData(balRes.data);
+      setWifeBaseBalance(Number(balRes.data.wifeBaseBalance) || 0);
+    }
   };
 
   useEffect(() => {
     fetchWealthData();
-  }, []);
+  }, [transactions]);
+
+  const handleSaveWifeBase = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsSavingWifeBase(true);
+    try {
+      const val = parseFloat(newWifeBaseInput) || 0;
+      const { data } = await safeFetchJson<AccountBalancesData>('/api/accounts/balances', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ wifeBaseBalance: Math.max(0, val) }),
+      });
+      if (data) {
+        setBalancesData(data);
+        setWifeBaseBalance(Number(data.wifeBaseBalance) || 0);
+      }
+      setIsEditWifeBaseOpen(false);
+      if (onRefreshTransactions) await onRefreshTransactions();
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setIsSavingWifeBase(false);
+    }
+  };
 
   // Open modal to add new investment
   const handleOpenAddInvestment = () => {
@@ -244,7 +283,27 @@ export const WealthKhataHub: React.FC<WealthKhataHubProps> = ({
 
   const totalEarnedInterest = Math.max(0, totalInvestments - totalInvestedPrincipal);
 
-  const totalSavingsTransferred = savingsTransfers.reduce((sum, s) => sum + (s.amount || 0), 0);
+  // Total savings transferred to wife (combining dedicated transfers and any transactions marked isSavingsTransfer)
+  const totalSavingsTransferred = useMemo(() => {
+    let total = savingsTransfers.reduce((sum, s) => sum + (Number(s.amount) || 0), 0);
+    if (transactions && transactions.length > 0) {
+      for (const t of transactions) {
+        if (t.isSavingsTransfer) {
+          const tAmt = Number(t.amount) || 0;
+          const isDupe = savingsTransfers.some(
+            s => Number(s.amount) === tAmt && s.date === t.date
+          );
+          if (!isDupe) {
+            total += tAmt;
+          }
+        }
+      }
+    }
+    return total;
+  }, [savingsTransfers, transactions]);
+
+  const wifeCurrentLiveBalance = wifeBaseBalance + totalSavingsTransferred;
+
   const pendingLent = udhaars
     .filter((u) => u.type === 'lent' && u.status !== 'settled')
     .reduce((sum, u) => sum + (Number(u.amount) || 0), 0);
@@ -310,27 +369,44 @@ export const WealthKhataHub: React.FC<WealthKhataHubProps> = ({
         >
           <div className="flex items-center justify-between">
             <span className="text-xs font-semibold text-rose-300 flex items-center gap-1.5">
-              <HeartHandshake className="w-4 h-4" />
-              Savings to Wife's A/c
+              <HeartHandshake className="w-4 h-4 text-rose-400" />
+              Wife's Savings A/c (Live Balance)
             </span>
-            <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-rose-500/20 text-rose-300 border border-rose-500/30">
+            <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-rose-500/20 text-rose-300 border border-rose-500/30 font-bold">
               {savingsTransfers.length} Transfers
             </span>
           </div>
 
           <div className="mt-3">
-            <div className="text-2xl font-bold font-mono text-white">
-              ₹{isPrivacyMode ? '••••••' : totalSavingsTransferred.toLocaleString('en-IN')}
+            <div className="text-2xl font-bold font-mono text-white flex items-baseline gap-2">
+              <span>₹{isPrivacyMode ? '••••••' : wifeCurrentLiveBalance.toLocaleString('en-IN')}</span>
+              {wifeBaseBalance > 0 && !isPrivacyMode && (
+                <span className="text-[11px] font-semibold text-rose-300 font-mono">
+                  (Base: ₹{wifeBaseBalance.toLocaleString('en-IN')})
+                </span>
+              )}
             </div>
             <p className="text-[11px] text-slate-400 mt-1 line-clamp-2">
-              Wife ke khate me bheja savings fund personal expense nahi hai — isliye monthly budget se minus nahi hota!
+              {isPrivacyMode
+                ? 'Wife savings masked in privacy mode'
+                : `Starting Base: ₹${wifeBaseBalance.toLocaleString('en-IN')} · Bheja: +₹${totalSavingsTransferred.toLocaleString('en-IN')} · Real-time live update`}
             </p>
           </div>
 
           <div className="mt-4 pt-3 border-t border-white/[0.06] flex items-center justify-between text-xs">
             <span className="text-rose-400 font-semibold flex items-center gap-1">
-              Click to manage savings transfers &rarr;
+              Click to view reserve & transfers &rarr;
             </span>
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                setNewWifeBaseInput(String(wifeBaseBalance || ''));
+                setIsEditWifeBaseOpen(true);
+              }}
+              className="text-[11px] text-rose-300 hover:text-white bg-rose-500/20 hover:bg-rose-500/40 border border-rose-500/30 px-2 py-0.5 rounded-lg cursor-pointer transition-colors"
+            >
+              ✏️ Set Base
+            </button>
           </div>
         </div>
 
@@ -544,25 +620,108 @@ export const WealthKhataHub: React.FC<WealthKhataHubProps> = ({
 
       {/* Savings to Wife Sub-Tab View */}
       {activeSubTab === 'savings' && (
-        <div className="bg-slate-900/60 border border-white/[0.08] rounded-2xl p-5 backdrop-blur-xl shadow-lg space-y-4">
-          <div className="flex items-center justify-between pb-3 border-b border-white/[0.06] flex-wrap gap-2">
-            <div>
-              <h3 className="text-base font-bold text-white flex items-center gap-2">
-                <HeartHandshake className="w-4 h-4 text-rose-400" />
-                Wife's Account Savings Reserve
-              </h3>
-              <p className="text-xs text-slate-400 mt-0.5">
-                Aapne jo savings ka paisa apni wife ke account me transfer kiya hai, yeh personal kharcha nahi hai aur monthly budget limit se deduct nahi hota.
-              </p>
+        <div className="space-y-4">
+          {/* Real-Time Live Balance Tracker Banner */}
+          <div className="bg-gradient-to-r from-rose-950/60 via-purple-950/40 to-slate-900/80 border border-rose-500/30 rounded-2xl p-5 backdrop-blur-xl shadow-xl">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-rose-500/20">
+              <div>
+                <span className="text-[10px] font-mono font-bold tracking-wider uppercase px-2 py-0.5 rounded bg-rose-500/20 text-rose-300 border border-rose-500/30">
+                  🌸 Real-Time Balance Tracker
+                </span>
+                <h3 className="text-lg font-bold text-white mt-1.5 flex items-center gap-2">
+                  <HeartHandshake className="w-5 h-5 text-rose-400" />
+                  Wife's Account Savings & Live Balance
+                </h3>
+                <p className="text-xs text-slate-300 mt-0.5">
+                  Jab bhi aap wife ke account me paise bhejte hain, wo yahan real-time update hota hai aur initial opening balance ke saath live bachat dikhata hai.
+                </p>
+              </div>
+
+              <div className="flex items-center gap-2 flex-wrap">
+                <button
+                  onClick={() => {
+                    setNewWifeBaseInput(String(wifeBaseBalance || ''));
+                    setIsEditWifeBaseOpen(true);
+                  }}
+                  className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-rose-300 border border-rose-500/30 font-semibold text-xs flex items-center gap-1.5 shadow-md cursor-pointer transition-all"
+                >
+                  <Settings className="w-3.5 h-3.5" />
+                  <span>✏️ Set / Edit Base Balance</span>
+                </button>
+                <button
+                  onClick={() => setIsAddTransferOpen(true)}
+                  className="px-3.5 py-2 rounded-xl bg-gradient-to-r from-rose-600 to-pink-600 hover:from-rose-500 hover:to-pink-500 text-white font-semibold text-xs flex items-center gap-1.5 shadow-md cursor-pointer transition-all"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>+ Savings Transfer Record Karein</span>
+                </button>
+              </div>
             </div>
-            <button
-              onClick={() => setIsAddTransferOpen(true)}
-              className="px-3.5 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-semibold text-xs flex items-center gap-1.5 shadow-md cursor-pointer transition-all"
-            >
-              <Plus className="w-4 h-4" />
-              + Savings Transfer Record Karein
-            </button>
+
+            {/* 3 Metric Cards for Wife's Account */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5 mt-4">
+              <div className="p-3.5 bg-slate-950/70 border border-rose-500/20 rounded-xl">
+                <div className="flex items-center justify-between text-xs text-rose-300 font-medium">
+                  <span>📌 Starting / Opening Base</span>
+                  <button
+                    onClick={() => {
+                      setNewWifeBaseInput(String(wifeBaseBalance || ''));
+                      setIsEditWifeBaseOpen(true);
+                    }}
+                    className="text-[10px] text-rose-400 hover:underline cursor-pointer"
+                  >
+                    Edit
+                  </button>
+                </div>
+                <div className="text-xl font-bold font-mono text-white mt-1">
+                  ₹{isPrivacyMode ? '••••••' : wifeBaseBalance.toLocaleString('en-IN')}
+                </div>
+                <p className="text-[10px] text-slate-400 mt-1">
+                  Tracking start karte samay wife ke account me tha
+                </p>
+              </div>
+
+              <div className="p-3.5 bg-slate-950/70 border border-purple-500/20 rounded-xl">
+                <div className="text-xs text-purple-300 font-medium">
+                  💸 Kul Transfers Bheje
+                </div>
+                <div className="text-xl font-bold font-mono text-emerald-400 mt-1">
+                  +₹{isPrivacyMode ? '••••••' : totalSavingsTransferred.toLocaleString('en-IN')}
+                </div>
+                <p className="text-[10px] text-slate-400 mt-1">
+                  {savingsTransfers.length} dedicated transfers recorded
+                </p>
+              </div>
+
+              <div className="p-3.5 bg-gradient-to-br from-rose-900/40 to-slate-950/90 border border-rose-500/40 rounded-xl shadow-inner">
+                <div className="text-xs text-rose-200 font-semibold flex items-center justify-between">
+                  <span>💎 Kul Live Balance (Real-Time)</span>
+                  <span className="text-[9px] bg-rose-500/30 text-rose-200 px-1.5 py-0.2 rounded font-mono">
+                    Live Synced
+                  </span>
+                </div>
+                <div className="text-2xl font-extrabold font-mono text-white mt-1">
+                  ₹{isPrivacyMode ? '••••••' : wifeCurrentLiveBalance.toLocaleString('en-IN')}
+                </div>
+                <p className="text-[10px] text-rose-300/80 mt-1">
+                  Base (₹{wifeBaseBalance.toLocaleString('en-IN')}) + Bheja (₹{totalSavingsTransferred.toLocaleString('en-IN')})
+                </p>
+              </div>
+            </div>
           </div>
+
+          <div className="bg-slate-900/60 border border-white/[0.08] rounded-2xl p-5 backdrop-blur-xl shadow-lg space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-white/[0.06] flex-wrap gap-2">
+              <div>
+                <h4 className="text-sm font-bold text-white flex items-center gap-2">
+                  <HeartHandshake className="w-4 h-4 text-rose-400" />
+                  Wife Ko Bheje Gaye Transfers Ki History
+                </h4>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  Har transfer personal kharcha nahi mana jata aur monthly budget se deduct nahi hota.
+                </p>
+              </div>
+            </div>
 
           {savingsTransfers.length === 0 ? (
             <div className="text-center py-12 text-xs text-slate-400 border border-dashed border-white/[0.08] rounded-xl">
@@ -613,6 +772,7 @@ export const WealthKhataHub: React.FC<WealthKhataHubProps> = ({
               ))}
             </div>
           )}
+          </div>
         </div>
       )}
 
@@ -1009,6 +1169,96 @@ export const WealthKhataHub: React.FC<WealthKhataHubProps> = ({
             </form>
           </div>
         </div>
+      )}
+      {/* Modal to Set / Edit Wife's Starting Base Balance */}
+      {isEditWifeBaseOpen && typeof document !== 'undefined' && createPortal(
+        <div
+          className="fixed inset-0 z-[9999] flex items-center justify-center p-3 sm:p-4 bg-black/80 backdrop-blur-md overflow-y-auto"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setIsEditWifeBaseOpen(false);
+          }}
+        >
+          <div
+            className="relative bg-[#0f172a] border border-rose-500/40 rounded-2xl w-full max-w-md shadow-2xl overflow-hidden flex flex-col my-auto animate-in fade-in zoom-in duration-150"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800 bg-slate-900/90 shrink-0">
+              <div className="flex items-center space-x-3">
+                <div className="w-9 h-9 rounded-xl bg-rose-500/20 text-rose-400 flex items-center justify-center shrink-0">
+                  <HeartHandshake className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-white font-sans">
+                    Wife's Account Base Balance
+                  </h3>
+                  <p className="text-xs text-slate-400 font-sans">
+                    Starting / Opening balance update karein
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsEditWifeBaseOpen(false)}
+                className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveWifeBase} className="p-5 space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-rose-300 mb-1.5 font-sans">
+                  Starting / Opening Base Balance (₹)
+                </label>
+                <div className="relative">
+                  <span className="absolute left-3 top-2.5 text-slate-400 font-bold font-mono">₹</span>
+                  <input
+                    type="number"
+                    placeholder="e.g. 25000"
+                    value={newWifeBaseInput}
+                    onChange={(e) => setNewWifeBaseInput(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-700 rounded-xl pl-8 pr-3 py-2.5 text-white font-mono focus:outline-hidden focus:border-rose-500 text-sm"
+                    autoFocus
+                  />
+                </div>
+                <p className="text-[11px] text-slate-400 mt-2 font-sans">
+                  Yeh wife ke account ka initial starting balance hai. Iske baad jo bhi transfers aap bhejenge, wo real time isme judte rahenge.
+                </p>
+              </div>
+
+              <div className="p-3.5 bg-rose-950/30 border border-rose-500/20 rounded-xl text-xs text-rose-200 space-y-1.5 font-mono">
+                <div className="flex justify-between">
+                  <span>Transfers Sent to Wife:</span>
+                  <span className="font-bold text-emerald-400">+₹{totalSavingsTransferred.toLocaleString('en-IN')}</span>
+                </div>
+                <div className="flex justify-between font-bold text-white pt-1.5 border-t border-rose-500/20 text-sm">
+                  <span>Naya Total Live Balance:</span>
+                  <span className="text-pink-400">
+                    ₹{((parseFloat(newWifeBaseInput) || 0) + totalSavingsTransferred).toLocaleString('en-IN')}
+                  </span>
+                </div>
+              </div>
+
+              <div className="pt-2 flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsEditWifeBaseOpen(false)}
+                  className="px-4 py-2 rounded-xl border border-slate-700 text-slate-400 hover:text-white cursor-pointer text-xs font-sans"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSavingWifeBase}
+                  className="px-5 py-2 bg-gradient-to-r from-rose-600 to-pink-600 hover:from-rose-500 hover:to-pink-500 text-white font-bold rounded-xl shadow-md transition-all cursor-pointer text-xs font-sans"
+                >
+                  {isSavingWifeBase ? 'Save ho raha hai...' : '💾 Base Balance Save Karein'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>,
+        document.body
       )}
     </div>
   );

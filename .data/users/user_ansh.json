@@ -496,5 +496,12 @@
   "goals": [],
   "udhaars": [],
   "fuelLogs": [],
-  "dataVersion": 35597
+  "dataVersion": 35606,
+  "accountBaseBalances": {
+    "IC Bank": 45000,
+    "AX Bank": 80000,
+    "Cash": 5000
+  },
+  "wifeBaseBalance": 25000,
+  "savingsTransfers": []
 }

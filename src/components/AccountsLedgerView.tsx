@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { 
   CreditCard, 
   Building2, 
@@ -19,9 +20,13 @@ import {
   Download,
   FileSpreadsheet,
   Filter,
-  Sparkles
+  Sparkles,
+  Settings,
+  Coins,
+  HeartHandshake,
+  RefreshCw
 } from 'lucide-react';
-import { Transaction, AccountId, CardEmi, UserRole, CategoryDef } from '../types';
+import { Transaction, AccountId, CardEmi, UserRole, CategoryDef, AccountBalancesData } from '../types';
 import { ACCOUNTS_CONFIG, ALL_ACCOUNTS, CREDIT_CARDS, BANK_ACCOUNTS } from '../utils/accounts';
 import { safeFetchJson } from '../utils/api';
 import { DEFAULT_CATEGORIES } from '../utils/categories';
@@ -93,6 +98,62 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
   const [exportIncludeEmis, setExportIncludeEmis] = useState(true);
   const [exportIncludeOverview, setExportIncludeOverview] = useState(true);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  // Accounts & Cards Live Balance State
+  const [balancesData, setBalancesData] = useState<AccountBalancesData | null>(null);
+  const [isBalancesModalOpen, setIsBalancesModalOpen] = useState(false);
+  const [editBaseBalances, setEditBaseBalances] = useState<Record<string, string>>({});
+  const [editWifeBalance, setEditWifeBalance] = useState('');
+  const [isSavingBalances, setIsSavingBalances] = useState(false);
+
+  const fetchBalances = async () => {
+    const { data } = await safeFetchJson<AccountBalancesData>('/api/accounts/balances');
+    if (data) {
+      setBalancesData(data);
+      const initialMap: Record<string, string> = {};
+      for (const acc of ALL_ACCOUNTS) {
+        initialMap[acc.id] = String(data.accountBaseBalances?.[acc.id] ?? '');
+      }
+      setEditBaseBalances(initialMap);
+      setEditWifeBalance(String(data.wifeBaseBalance ?? ''));
+    }
+  };
+
+  useEffect(() => {
+    fetchBalances();
+  }, [transactions]);
+
+  const handleSaveBalances = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsSavingBalances(true);
+    try {
+      const payloadBalances: Record<string, number> = {};
+      for (const [k, v] of Object.entries(editBaseBalances)) {
+        payloadBalances[k] = parseFloat(String(v || '')) || 0;
+      }
+      const { data } = await safeFetchJson<AccountBalancesData>('/api/accounts/balances', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          accountBaseBalances: payloadBalances,
+          wifeBaseBalance: parseFloat(editWifeBalance) || 0,
+        }),
+      });
+      if (data) {
+        setBalancesData(data);
+      }
+      setIsBalancesModalOpen(false);
+      setToastMessage('✅ Sabhi accounts ke opening balances successfully save ho gaye!');
+      setTimeout(() => setToastMessage(null), 3500);
+      if (onRefreshTransactions) await onRefreshTransactions();
+    } catch (err) {
+      console.error(err);
+      setToastMessage('⚠️ Balances save karne me error aaya');
+      setTimeout(() => setToastMessage(null), 3000);
+    } finally {
+      setIsSavingBalances(false);
+    }
+  };
 
   // Form states for Add EMI
   const [emiTitle, setEmiTitle] = useState('');
@@ -355,6 +416,15 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
           </div>
 
           <div className="flex items-center gap-2 flex-wrap">
+            {/* Set Opening Balances Button */}
+            <button
+              onClick={() => setIsBalancesModalOpen(true)}
+              className="px-3.5 py-1.5 rounded-xl bg-gradient-to-r from-sky-600 to-indigo-600 hover:from-sky-500 hover:to-indigo-500 text-white text-xs font-semibold flex items-center gap-1.5 transition-all shadow-md shadow-sky-900/30 cursor-pointer"
+            >
+              <Settings className="w-3.5 h-3.5" />
+              <span>⚙️ Balances Set Karein</span>
+            </button>
+
             {/* Download Statement Button */}
             <button
               onClick={() => {
@@ -411,6 +481,7 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
             const isRuPay = acc.type === 'rupay_card';
             const isCC = acc.type === 'credit_card';
             const isBank = acc.type === 'bank_account';
+            const accBalInfo = balancesData?.accounts[acc.id];
 
             return (
               <button
@@ -432,10 +503,112 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
                   <Wallet className="w-3.5 h-3.5 text-rose-400" />
                 )}
                 <span>{acc.shortName}</span>
+                {accBalInfo && (
+                  <span className={`text-[10px] font-mono px-1.5 py-0.2 rounded-md ${
+                    isBank || acc.type === 'cash'
+                      ? 'bg-emerald-500/20 text-emerald-300'
+                      : 'bg-sky-500/20 text-sky-300'
+                  }`}>
+                    {isBank || acc.type === 'cash'
+                      ? `₹${Math.round(accBalInfo.currentBalance / 1000)}k`
+                      : `₹${Math.round((accBalInfo.availableLimit || 0) / 1000)}k avl`}
+                  </span>
+                )}
                 <span className="text-[10px] opacity-75 font-mono">({count})</span>
               </button>
             );
           })}
+        </div>
+      </div>
+
+      {/* 4-Stat Consolidated Live Balances Banner */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        {/* Stat 1: Bank & Cash Total */}
+        <div className="bg-gradient-to-br from-emerald-950/40 via-slate-900/80 to-slate-900/80 border border-emerald-500/30 rounded-2xl p-4 relative overflow-hidden">
+          <div className="flex items-center justify-between text-xs text-emerald-300 font-medium">
+            <span className="flex items-center gap-1.5">
+              <Building2 className="w-4 h-4 text-emerald-400" />
+              Bank & Cash Total
+            </span>
+            <span className="text-[10px] bg-emerald-500/20 text-emerald-300 px-1.5 py-0.5 rounded font-mono">
+              Live Bacha
+            </span>
+          </div>
+          <div className="text-xl sm:text-2xl font-bold font-mono text-white mt-1.5">
+            {isFamily || isPrivacyMode ? '••••••' : `₹${(balancesData?.totalBankCashBalance || 0).toLocaleString('en-IN')}`}
+          </div>
+          <div className="text-[11px] text-slate-400 mt-1 flex items-center justify-between">
+            <span>ICICI + Axis + Cash</span>
+            <button
+              onClick={() => setIsBalancesModalOpen(true)}
+              className="text-emerald-400 hover:text-emerald-300 text-[10px] font-semibold underline cursor-pointer"
+            >
+              Set Base
+            </button>
+          </div>
+        </div>
+
+        {/* Stat 2: Credit Cards Available Limit */}
+        <div className="bg-gradient-to-br from-sky-950/40 via-slate-900/80 to-slate-900/80 border border-sky-500/30 rounded-2xl p-4 relative overflow-hidden">
+          <div className="flex items-center justify-between text-xs text-sky-300 font-medium">
+            <span className="flex items-center gap-1.5">
+              <CreditCard className="w-4 h-4 text-sky-400" />
+              Cards Available Limit
+            </span>
+            <span className="text-[10px] bg-sky-500/20 text-sky-300 px-1.5 py-0.5 rounded font-mono">
+              5 Cards
+            </span>
+          </div>
+          <div className="text-xl sm:text-2xl font-bold font-mono text-white mt-1.5">
+            {isFamily || isPrivacyMode ? '••••••' : `₹${(balancesData?.totalCardAvailableLimit || 0).toLocaleString('en-IN')}`}
+          </div>
+          <div className="text-[11px] text-slate-400 mt-1">
+            Total Limit: ₹6,40,000
+          </div>
+        </div>
+
+        {/* Stat 3: Cards Spends / Due */}
+        <div className="bg-gradient-to-br from-rose-950/40 via-slate-900/80 to-slate-900/80 border border-rose-500/30 rounded-2xl p-4 relative overflow-hidden">
+          <div className="flex items-center justify-between text-xs text-rose-300 font-medium">
+            <span className="flex items-center gap-1.5">
+              <Zap className="w-4 h-4 text-rose-400" />
+              Cards Spends / Due
+            </span>
+            <span className="text-[10px] bg-rose-500/20 text-rose-300 px-1.5 py-0.5 rounded font-mono">
+              Outstanding
+            </span>
+          </div>
+          <div className="text-xl sm:text-2xl font-bold font-mono text-rose-300 mt-1.5">
+            {isFamily || isPrivacyMode ? '••••••' : `₹${(balancesData?.totalCardOutstanding || 0).toLocaleString('en-IN')}`}
+          </div>
+          <div className="text-[11px] text-slate-400 mt-1">
+            Bills to pay & running spends
+          </div>
+        </div>
+
+        {/* Stat 4: Wife's Savings Reserve */}
+        <div className="bg-gradient-to-br from-pink-950/40 via-slate-900/80 to-purple-950/40 border border-pink-500/30 rounded-2xl p-4 relative overflow-hidden">
+          <div className="flex items-center justify-between text-xs text-pink-300 font-medium">
+            <span className="flex items-center gap-1.5">
+              <HeartHandshake className="w-4 h-4 text-pink-400" />
+              Wife's Savings A/c
+            </span>
+            <span className="text-[10px] bg-pink-500/20 text-pink-300 px-1.5 py-0.5 rounded font-mono">
+              Live Balance
+            </span>
+          </div>
+          <div className="text-xl sm:text-2xl font-bold font-mono text-white mt-1.5">
+            {isFamily || isPrivacyMode ? '••••••' : `₹${(balancesData?.wifeSavings.currentBalance || 0).toLocaleString('en-IN')}`}
+          </div>
+          <div className="text-[11px] text-slate-400 mt-1 flex items-center justify-between">
+            <span>Base + Transfers</span>
+            <button
+              onClick={() => setIsBalancesModalOpen(true)}
+              className="text-pink-400 hover:text-pink-300 text-[10px] font-semibold underline cursor-pointer"
+            >
+              Update
+            </button>
+          </div>
         </div>
       </div>
 
@@ -451,31 +624,40 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
               <span className="px-1.5 py-0.5 rounded bg-white/[0.06] font-mono text-[10px] text-indigo-300">
                 {selectedMeta.type.replace('_', ' ').toUpperCase()}
               </span>
-              {selectedMeta.billingDay && (
+              {selectedMeta.billingDay ? (
                 <span>· Bill Cycle: {selectedMeta.billingDay}th</span>
+              ) : (
+                <span>· {selectedMeta.badge}</span>
               )}
-            </div>
-          </div>
-
-          <div className="bg-slate-900/50 border border-white/[0.08] rounded-2xl p-4">
-            <div className="text-xs text-slate-400">Is Mahine Ka Kharcha</div>
-            <div className="text-xl font-bold text-rose-400 font-mono mt-1">
-              {isFamily || isPrivacyMode ? '••••••' : `₹${currentMonthExpense.toLocaleString('en-IN')}`}
-            </div>
-            <div className="text-[11px] text-slate-400 mt-1">
-              {isFamily ? '🔒 Master Card Spends Masked' : 'Current month active transactions'}
             </div>
           </div>
 
           {(selectedMeta.type === 'credit_card' || selectedMeta.type === 'rupay_card') ? (
             <>
-              <div className="bg-slate-900/50 border border-white/[0.08] rounded-2xl p-4">
-                <div className="text-xs text-slate-400">Active EMIs This Month</div>
-                <div className="text-xl font-bold text-amber-400 font-mono mt-1">
-                  {isFamily || isPrivacyMode ? '••••••' : `₹${totalMonthlyEmiAmount.toLocaleString('en-IN')}`}
+              <div className="bg-gradient-to-br from-sky-950/40 to-slate-900/80 border border-sky-500/30 rounded-2xl p-4">
+                <div className="text-xs text-sky-300 font-medium flex items-center justify-between">
+                  <span>Available Credit Limit</span>
+                  <span className="text-[10px] text-slate-400 font-mono">Bacha Limit</span>
+                </div>
+                <div className="text-xl font-bold text-sky-300 font-mono mt-1">
+                  {isFamily || isPrivacyMode 
+                    ? '••••••' 
+                    : `₹${(balancesData?.accounts[selectedAccountId]?.availableLimit ?? Math.max(0, (selectedMeta.creditLimit || 100000) - currentMonthExpense)).toLocaleString('en-IN')}`}
                 </div>
                 <div className="text-[11px] text-slate-400 mt-1">
-                  {isFamily ? '🔒 EMI Details Masked' : `${cardEmis.length} running installments`}
+                  Total Limit: ₹{(selectedMeta.creditLimit || 100000).toLocaleString('en-IN')}
+                </div>
+              </div>
+
+              <div className="bg-slate-900/50 border border-white/[0.08] rounded-2xl p-4">
+                <div className="text-xs text-slate-400">Current Spends / Outstanding</div>
+                <div className="text-xl font-bold text-rose-400 font-mono mt-1">
+                  {isFamily || isPrivacyMode 
+                    ? '••••••' 
+                    : `₹${(balancesData?.accounts[selectedAccountId]?.currentOutstanding ?? currentMonthExpense).toLocaleString('en-IN')}`}
+                </div>
+                <div className="text-[11px] text-slate-400 mt-1">
+                  {isFamily ? '🔒 Master Card Spends Masked' : 'Debits, Spends & Active EMIs'}
                 </div>
               </div>
 
@@ -491,20 +673,40 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
             </>
           ) : (
             <>
-              <div className="bg-slate-900/50 border border-white/[0.08] rounded-2xl p-4">
-                <div className="text-xs text-slate-400">Is Account Me Inflow (Kamai)</div>
+              <div className="bg-gradient-to-br from-emerald-950/40 to-slate-900/80 border border-emerald-500/30 rounded-2xl p-4">
+                <div className="text-xs text-emerald-300 font-medium flex items-center justify-between">
+                  <span>Current Live Balance</span>
+                  <button
+                    onClick={() => setIsBalancesModalOpen(true)}
+                    className="text-[10px] text-emerald-400 hover:underline cursor-pointer"
+                  >
+                    ✏️ Set Base
+                  </button>
+                </div>
                 <div className="text-xl font-bold text-emerald-400 font-mono mt-1">
-                  {isFamily || isPrivacyMode ? '••••••' : `₹${totalAccountIncome.toLocaleString('en-IN')}`}
+                  {isFamily || isPrivacyMode 
+                    ? '••••••' 
+                    : `₹${(balancesData?.accounts[selectedAccountId]?.currentBalance ?? (totalAccountIncome - totalAccountExpense)).toLocaleString('en-IN')}`}
                 </div>
                 <div className="text-[11px] text-slate-400 mt-1">
-                  {isFamily ? '🔒 Balance Inflow Masked' : 'Direct credits & salary'}
+                  Base: ₹{(balancesData?.accounts[selectedAccountId]?.baseBalance || 0).toLocaleString('en-IN')} | Real-time synced
+                </div>
+              </div>
+
+              <div className="bg-slate-900/50 border border-white/[0.08] rounded-2xl p-4">
+                <div className="text-xs text-slate-400">Is Account Me Inflow (Kamai)</div>
+                <div className="text-xl font-bold text-emerald-300 font-mono mt-1">
+                  {isFamily || isPrivacyMode ? '••••••' : `+₹${totalAccountIncome.toLocaleString('en-IN')}`}
+                </div>
+                <div className="text-[11px] text-slate-400 mt-1">
+                  {isFamily ? '🔒 Balance Inflow Masked' : 'Direct credits, salary & transfers'}
                 </div>
               </div>
 
               <div className="bg-slate-900/50 border border-white/[0.08] rounded-2xl p-4">
                 <div className="text-xs text-slate-400">Net Outflow / Lifetime</div>
-                <div className="text-xl font-bold text-slate-200 font-mono mt-1">
-                  {isFamily || isPrivacyMode ? '••••••' : `₹${totalAccountExpense.toLocaleString('en-IN')}`}
+                <div className="text-xl font-bold text-rose-400 font-mono mt-1">
+                  {isFamily || isPrivacyMode ? '••••••' : `-₹${totalAccountExpense.toLocaleString('en-IN')}`}
                 </div>
                 <div className="text-[11px] text-slate-400 mt-1">
                   {isFamily ? '🔒 Total Outflow Masked' : 'Kul kharcha from this account'}
@@ -1383,6 +1585,182 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
             </form>
           </div>
         </div>
+      )}
+
+      {/* Set Account & Cards Opening Balances Modal */}
+      {isBalancesModalOpen && typeof document !== 'undefined' && createPortal(
+        <div
+          className="fixed inset-0 z-[9999] flex items-center justify-center p-3 sm:p-4 bg-black/80 backdrop-blur-md overflow-y-auto"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setIsBalancesModalOpen(false);
+          }}
+        >
+          <div
+            className="relative bg-[#0f172a] border border-slate-700/80 rounded-2xl w-full max-w-xl shadow-2xl overflow-hidden flex flex-col max-h-[92dvh] sm:max-h-[88dvh] my-auto animate-in fade-in zoom-in duration-150"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Modal Header */}
+            <div className="flex items-center justify-between px-5 sm:px-6 py-4 border-b border-slate-800 bg-slate-900/90 shrink-0">
+              <div className="flex items-center space-x-3">
+                <div className="w-9 h-9 rounded-xl bg-sky-500/20 text-sky-400 flex items-center justify-center shrink-0">
+                  <Coins className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-white font-sans">
+                    Accounts Opening Balances (One-Time Setup)
+                  </h3>
+                  <p className="text-xs text-slate-400 font-sans">
+                    Starting balance set karein. Uske baad sabhi transactions se auto-deduct / add hota rahega!
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsBalancesModalOpen(false)}
+                className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Modal Form */}
+            <form onSubmit={handleSaveBalances} className="flex flex-col flex-1 overflow-hidden min-h-0">
+              <div className="overflow-y-auto flex-1 p-5 sm:p-6 space-y-6 text-xs font-mono overscroll-contain">
+                {/* Section 1: Bank Accounts & Cash */}
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between pb-1.5 border-b border-slate-800">
+                    <span className="font-bold text-sm text-emerald-400 font-sans flex items-center gap-1.5">
+                      <Building2 className="w-4 h-4" />
+                      1. Bank Accounts & Cash (Available Liquid Funds)
+                    </span>
+                    <span className="text-[10px] text-slate-400">Current Starting Balance</span>
+                  </div>
+
+                  {BANK_ACCOUNTS.concat(ALL_ACCOUNTS.filter(a => a.type === 'cash')).map((acc) => (
+                    <div key={acc.id} className="p-3 bg-slate-950/70 border border-slate-800 rounded-xl space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <label className="text-slate-300 font-semibold font-sans flex items-center gap-1.5">
+                          {acc.type === 'cash' ? <Wallet className="w-3.5 h-3.5 text-emerald-400" /> : <Building2 className="w-3.5 h-3.5 text-sky-400" />}
+                          {acc.name} ({acc.badge})
+                        </label>
+                        {balancesData?.accounts[acc.id] && (
+                          <span className="text-[10px] text-slate-400 font-mono">
+                            Live abhi: ₹{(balancesData.accounts[acc.id].currentBalance || 0).toLocaleString('en-IN')}
+                          </span>
+                        )}
+                      </div>
+                      <div className="relative">
+                        <span className="absolute left-3 top-2.5 text-slate-400 font-bold">₹</span>
+                        <input
+                          type="number"
+                          placeholder="e.g. 50000"
+                          value={editBaseBalances[acc.id] || ''}
+                          onChange={(e) => setEditBaseBalances({ ...editBaseBalances, [acc.id]: e.target.value })}
+                          className="w-full bg-slate-900 border border-slate-700 rounded-xl pl-8 pr-3 py-2 text-white font-mono focus:outline-hidden focus:border-sky-500 text-xs"
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Section 2: Wife's Savings Account */}
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between pb-1.5 border-b border-slate-800">
+                    <span className="font-bold text-sm text-rose-400 font-sans flex items-center gap-1.5">
+                      <HeartHandshake className="w-4 h-4" />
+                      2. Wife's Savings Account (Starting Reserve)
+                    </span>
+                    <span className="text-[10px] text-slate-400">Wealth Section Sync</span>
+                  </div>
+
+                  <div className="p-3 bg-slate-950/70 border border-rose-500/20 rounded-xl space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <label className="text-rose-200 font-semibold font-sans">
+                        Wife's Account Opening / Starting Balance
+                      </label>
+                      {balancesData?.wifeSavings && (
+                        <span className="text-[10px] text-rose-300 font-mono">
+                          Live abhi: ₹{balancesData.wifeSavings.currentBalance.toLocaleString('en-IN')}
+                        </span>
+                      )}
+                    </div>
+                    <div className="relative">
+                      <span className="absolute left-3 top-2.5 text-rose-400 font-bold">₹</span>
+                      <input
+                        type="number"
+                        placeholder="e.g. 25000"
+                        value={editWifeBalance}
+                        onChange={(e) => setEditWifeBalance(e.target.value)}
+                        className="w-full bg-slate-900 border border-slate-700 rounded-xl pl-8 pr-3 py-2 text-white font-mono focus:outline-hidden focus:border-rose-500 text-xs"
+                      />
+                    </div>
+                    <p className="text-[11px] text-slate-400 mt-1 font-sans">
+                      Wife ke khate me pehle se kitna balance tha. Iske baad jab bhi aap wife ko paise bhejenge wo live add hota rahega!
+                    </p>
+                  </div>
+                </div>
+
+                {/* Section 3: Credit Cards Unpaid / Opening Balance */}
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between pb-1.5 border-b border-slate-800">
+                    <span className="font-bold text-sm text-sky-400 font-sans flex items-center gap-1.5">
+                      <CreditCard className="w-4 h-4" />
+                      3. Credit Cards (Opening Unpaid / Outstanding - Optional)
+                    </span>
+                    <span className="text-[10px] text-slate-400">Pehle Ka Baki Due</span>
+                  </div>
+                  <p className="text-[11px] text-slate-400 font-sans">
+                    Agar tracking start karne se pehle kisi card ka bill unpaid tha ya starting spends the, to yahan dalein (warna 0 chhod dein):
+                  </p>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    {CREDIT_CARDS.map((card) => (
+                      <div key={card.id} className="p-3 bg-slate-950/70 border border-slate-800 rounded-xl space-y-1.5">
+                        <div className="flex items-center justify-between">
+                          <label className="text-slate-300 font-semibold font-sans text-[11px] truncate" title={card.name}>
+                            {card.shortName}
+                          </label>
+                          <span className="text-[10px] text-sky-300 font-mono">
+                            Limit: ₹{(card.creditLimit || 100000) / 1000}k
+                          </span>
+                        </div>
+                        <div className="relative">
+                          <span className="absolute left-3 top-2 text-slate-400 font-bold">₹</span>
+                          <input
+                            type="number"
+                            placeholder="0"
+                            value={editBaseBalances[card.id] || ''}
+                            onChange={(e) => setEditBaseBalances({ ...editBaseBalances, [card.id]: e.target.value })}
+                            className="w-full bg-slate-900 border border-slate-700 rounded-xl pl-8 pr-3 py-1.5 text-white font-mono focus:outline-hidden focus:border-sky-500 text-xs"
+                          />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {/* Fixed Footer Buttons */}
+              <div className="p-4 border-t border-slate-800 bg-slate-900/95 shrink-0 flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsBalancesModalOpen(false)}
+                  className="px-4 py-2 rounded-xl border border-slate-700 text-slate-400 hover:text-white cursor-pointer font-sans"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSavingBalances}
+                  className="px-5 py-2 bg-gradient-to-r from-sky-600 to-indigo-600 hover:from-sky-500 hover:to-indigo-500 text-white font-bold rounded-xl shadow-md transition-all cursor-pointer font-sans"
+                >
+                  {isSavingBalances ? 'Save ho raha hai...' : '💾 Balances Save Karein'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>,
+        document.body
       )}
     </div>
   );

@@ -579,6 +579,8 @@ interface UserDataStore {
   investments?: InvestmentRecord[];
   fuelLogs?: FuelLog[];
   dataVersion?: number;
+  accountBaseBalances?: Record<string, number>;
+  wifeBaseBalance?: number;
 }
 
 let users: UserProfile[] = loadJson<UserProfile[]>(USERS_FILE, []);
@@ -2453,6 +2455,279 @@ ${topSavedLifetime ? `\n━━━━━━━━━━━━━━━━━━�
 
 ━━━━━━━━━━━━━━━━━━━━
 💡 <i>Tip: Har mahine category budget se jitna paisa bachta hai, wo automatically aapke Gullak me jama hota rehta hai!</i>`;
+}
+
+// ---------------- Accounts & Cards Balance Tracker ----------------
+
+const ACCOUNTS_META: Record<string, {
+  id: string;
+  name: string;
+  shortName: string;
+  type: 'rupay_card' | 'credit_card' | 'bank_account' | 'cash';
+  badge: string;
+  color: string;
+  creditLimit?: number;
+}> = {
+  'ICICI CC 0000': {
+    id: 'ICICI CC 0000',
+    name: 'ICICI RuPay UPI CC (0000)',
+    shortName: 'ICICI CC 0000',
+    type: 'rupay_card',
+    badge: 'RuPay CC',
+    color: '#f97316',
+    creditLimit: 120000,
+  },
+  'SBI CC 5733': {
+    id: 'SBI CC 5733',
+    name: 'SBI SimplyCLICK CC (5733)',
+    shortName: 'SBI CC 5733',
+    type: 'credit_card',
+    badge: 'SBI CC',
+    color: '#0284c7',
+    creditLimit: 150000,
+  },
+  'SBI CC 6526': {
+    id: 'SBI CC 6526',
+    name: 'SBI Pulse / Prime CC (6526)',
+    shortName: 'SBI CC 6526',
+    type: 'credit_card',
+    badge: 'SBI CC',
+    color: '#2563eb',
+    creditLimit: 100000,
+  },
+  'AX CC 8210': {
+    id: 'AX CC 8210',
+    name: 'Axis Flipkart / Ace CC (8210)',
+    shortName: 'AX CC 8210',
+    type: 'credit_card',
+    badge: 'Axis CC',
+    color: '#9333ea',
+    creditLimit: 180000,
+  },
+  'AX CC 5376': {
+    id: 'AX CC 5376',
+    name: 'Axis Neo / Privilege CC (5376)',
+    shortName: 'AX CC 5376',
+    type: 'credit_card',
+    badge: 'Axis CC',
+    color: '#a855f7',
+    creditLimit: 90000,
+  },
+  'IC Bank': {
+    id: 'IC Bank',
+    name: 'ICICI Bank Savings Account',
+    shortName: 'IC Bank',
+    type: 'bank_account',
+    badge: 'ICICI Bank',
+    color: '#ea580c',
+  },
+  'AX Bank': {
+    id: 'AX Bank',
+    name: 'Axis Bank Salary Account',
+    shortName: 'AX Bank',
+    type: 'bank_account',
+    badge: 'Axis Bank',
+    color: '#be185d',
+  },
+  'Cash': {
+    id: 'Cash',
+    name: 'Cash in Hand / Pocket',
+    shortName: 'Cash',
+    type: 'cash',
+    badge: 'Cash',
+    color: '#10b981',
+  },
+};
+
+export function calculateAccountsBalances(userId: string) {
+  const store = getUserData(userId);
+  const baseBalances = store.accountBaseBalances || {};
+  const wifeBase = Number(store.wifeBaseBalance) || 0;
+  const txs = store.transactions || [];
+  const savingsTransfers = store.savingsTransfers || [];
+
+  const accounts: Record<string, any> = {};
+  let totalBankCashBalance = 0;
+  let totalCardAvailableLimit = 0;
+  let totalCardOutstanding = 0;
+
+  for (const [accId, meta] of Object.entries(ACCOUNTS_META)) {
+    const isCard = meta.type === 'credit_card' || meta.type === 'rupay_card';
+    const base = Number(baseBalances[accId]) || 0;
+
+    let credits = 0;
+    let debits = 0;
+
+    for (const t of txs) {
+      const tAcc = t.account || 'ICICI CC 0000';
+      if (tAcc === accId) {
+        const amt = Number(t.amount) || 0;
+        if (t.type === 'income') {
+          credits += amt;
+        } else {
+          debits += amt;
+        }
+      }
+    }
+
+    // For bank/cash accounts, also subtract any dedicated savings transfers sent from this account
+    if (!isCard) {
+      for (const s of savingsTransfers) {
+        if (s.fromAccount === accId) {
+          const sAmt = Number(s.amount) || 0;
+          const isDupe = txs.some(
+            t => t.account === accId &&
+                 t.isSavingsTransfer &&
+                 Number(t.amount) === sAmt &&
+                 t.date === s.date
+          );
+          if (!isDupe) {
+            debits += sAmt;
+          }
+        }
+      }
+    }
+
+    if (isCard) {
+      const creditLimit = meta.creditLimit || 100000;
+      const currentOutstanding = Math.max(0, base + debits - credits);
+      const availableLimit = Math.max(0, creditLimit - currentOutstanding);
+
+      accounts[accId] = {
+        accountId: accId,
+        name: meta.name,
+        shortName: meta.shortName,
+        type: meta.type,
+        badge: meta.badge,
+        color: meta.color,
+        baseBalance: base,
+        credits,
+        debits,
+        currentBalance: availableLimit,
+        creditLimit,
+        availableLimit,
+        currentOutstanding,
+      };
+
+      totalCardAvailableLimit += availableLimit;
+      totalCardOutstanding += currentOutstanding;
+    } else {
+      const currentBalance = base + credits - debits;
+
+      accounts[accId] = {
+        accountId: accId,
+        name: meta.name,
+        shortName: meta.shortName,
+        type: meta.type,
+        badge: meta.badge,
+        color: meta.color,
+        baseBalance: base,
+        credits,
+        debits,
+        currentBalance,
+      };
+
+      totalBankCashBalance += currentBalance;
+    }
+  }
+
+  // Calculate Wife Savings Balance:
+  let totalTransferred = 0;
+  for (const s of savingsTransfers) {
+    totalTransferred += (Number(s.amount) || 0);
+  }
+  for (const t of txs) {
+    if (t.isSavingsTransfer) {
+      const tAmt = Number(t.amount) || 0;
+      const isDupe = savingsTransfers.some(
+        s => Number(s.amount) === tAmt && s.date === t.date
+      );
+      if (!isDupe) {
+        totalTransferred += tAmt;
+      }
+    }
+  }
+
+  const wifeCurrentBalance = wifeBase + totalTransferred;
+
+  return {
+    accountBaseBalances: baseBalances,
+    wifeBaseBalance: wifeBase,
+    accounts,
+    totalBankCashBalance,
+    totalCardAvailableLimit,
+    totalCardOutstanding,
+    wifeSavings: {
+      baseBalance: wifeBase,
+      totalTransferred,
+      currentBalance: wifeCurrentBalance,
+    },
+  };
+}
+
+export function buildBalancesTelegramMessage(userId: string, userName: string, isOwner = true): string {
+  if (!isOwner) {
+    return `💰 <b>Account Balances:</b> 🔒 Masked for Family Privacy (Sirf Owner dekh sakte hain).`;
+  }
+
+  const data = calculateAccountsBalances(userId);
+  const { accounts, totalBankCashBalance, totalCardAvailableLimit, totalCardOutstanding, wifeSavings } = data;
+
+  const icBank = accounts['IC Bank'] || {};
+  const axBank = accounts['AX Bank'] || {};
+  const cash = accounts['Cash'] || {};
+
+  const iciciCC = accounts['ICICI CC 0000'] || {};
+  const sbi5733 = accounts['SBI CC 5733'] || {};
+  const sbi6526 = accounts['SBI CC 6526'] || {};
+  const ax8210 = accounts['AX CC 8210'] || {};
+  const ax5376 = accounts['AX CC 5376'] || {};
+
+  return `🏦 <b>ACCOUNTS & CARDS LIVE BALANCE</b>
+━━━━━━━━━━━━━━━━━━━━
+👤 <b>Khata:</b> ${userName}
+
+🏛️ <b>BANK ACCOUNTS & CASH:</b>
+• 🏦 <b>ICICI Bank:</b> <b>₹${(icBank.currentBalance || 0).toLocaleString('en-IN')}</b>
+  <i>(Base: ₹${(icBank.baseBalance || 0).toLocaleString('en-IN')} | +In: ₹${(icBank.credits || 0).toLocaleString('en-IN')} | -Out: ₹${(icBank.debits || 0).toLocaleString('en-IN')})</i>
+• 🏦 <b>Axis Bank (Salary):</b> <b>₹${(axBank.currentBalance || 0).toLocaleString('en-IN')}</b>
+  <i>(Base: ₹${(axBank.baseBalance || 0).toLocaleString('en-IN')} | +In: ₹${(axBank.credits || 0).toLocaleString('en-IN')} | -Out: ₹${(axBank.debits || 0).toLocaleString('en-IN')})</i>
+• 💵 <b>Cash in Pocket:</b> <b>₹${(cash.currentBalance || 0).toLocaleString('en-IN')}</b>
+  <i>(Base: ₹${(cash.baseBalance || 0).toLocaleString('en-IN')} | -Spent: ₹${(cash.debits || 0).toLocaleString('en-IN')})</i>
+────────────────────
+👉 <b>Kul Bank & Cash Balance:</b> <b>₹${totalBankCashBalance.toLocaleString('en-IN')}</b>
+
+💳 <b>CREDIT CARDS (AVAILABLE / SPENT):</b>
+• 🟠 <b>ICICI RuPay (0000):</b>
+  Limit: ₹${(iciciCC.creditLimit || 120000).toLocaleString('en-IN')} | Bacha: 🟢 <b>₹${(iciciCC.availableLimit || 0).toLocaleString('en-IN')}</b>
+  Spends/Due: 🔴 ₹${(iciciCC.currentOutstanding || 0).toLocaleString('en-IN')}
+• 🔵 <b>SBI SimplyCLICK (5733):</b>
+  Limit: ₹${(sbi5733.creditLimit || 150000).toLocaleString('en-IN')} | Bacha: 🟢 <b>₹${(sbi5733.availableLimit || 0).toLocaleString('en-IN')}</b>
+  Spends/Due: 🔴 ₹${(sbi5733.currentOutstanding || 0).toLocaleString('en-IN')}
+• 🔷 <b>SBI Pulse (6526):</b>
+  Limit: ₹${(sbi6526.creditLimit || 100000).toLocaleString('en-IN')} | Bacha: 🟢 <b>₹${(sbi6526.availableLimit || 0).toLocaleString('en-IN')}</b>
+  Spends/Due: 🔴 ₹${(sbi6526.currentOutstanding || 0).toLocaleString('en-IN')}
+• 🟣 <b>Axis Flipkart (8210):</b>
+  Limit: ₹${(ax8210.creditLimit || 180000).toLocaleString('en-IN')} | Bacha: 🟢 <b>₹${(ax8210.availableLimit || 0).toLocaleString('en-IN')}</b>
+  Spends/Due: 🔴 ₹${(ax8210.currentOutstanding || 0).toLocaleString('en-IN')}
+• 🟪 <b>Axis Neo (5376):</b>
+  Limit: ₹${(ax5376.creditLimit || 90000).toLocaleString('en-IN')} | Bacha: 🟢 <b>₹${(ax5376.availableLimit || 0).toLocaleString('en-IN')}</b>
+  Spends/Due: 🔴 ₹${(ax5376.currentOutstanding || 0).toLocaleString('en-IN')}
+────────────────────
+💳 <b>Kul Available Card Limit:</b> <b>₹${totalCardAvailableLimit.toLocaleString('en-IN')}</b>
+🔴 <b>Kul Card Spends/Outstanding:</b> <b>₹${totalCardOutstanding.toLocaleString('en-IN')}</b>
+
+🌸 <b>WIFE'S SAVINGS ACCOUNT:</b>
+• 🌸 <b>Kul Live Balance:</b> <b>₹${wifeSavings.currentBalance.toLocaleString('en-IN')}</b>
+  <i>(Base Balance: ₹${wifeSavings.baseBalance.toLocaleString('en-IN')} | Bheja Hua: ₹${wifeSavings.totalTransferred.toLocaleString('en-IN')})</i>
+
+━━━━━━━━━━━━━━━━━━━━
+💡 <i>Opening balance set karne ke liye bot me bhejein:</i>
+<code>/setbalance icici 50000</code>
+<code>/setbalance axis 80000</code>
+<code>/setbalance cash 5000</code>
+<code>/setbalance wife 20000</code>
+<i>Ya Web Dashboard par "Balances Set Karein" click karein!</i>`;
 }
 
 export function isPureDateQuery(rawText: string): string | null {
@@ -4592,12 +4867,37 @@ Aap neeche diye gaye inline buttons par tap karein, keyboard buttons use karein 
   // 6. Balance & Summary commands
   const isBalanceQuery =
     command === '/balance' ||
+    command === '/balances' ||
+    command === '/bank' ||
+    command === '/banks' ||
+    command === '/cards' ||
+    command === '/card' ||
+    command === '/khata' ||
+    command === '/accounts' ||
+    command === '/account' ||
+    command === '/ledger' ||
     lowerText === 'balance' ||
+    lowerText === 'balances' ||
+    lowerText === 'bank balance' ||
+    lowerText === 'accounts' ||
+    lowerText === 'account' ||
+    lowerText === 'bank accounts' ||
+    lowerText === 'cards' ||
+    lowerText === 'accounts balance' ||
+    lowerText === 'card balance' ||
     lowerText.includes('💰 balance') ||
     lowerText === '💰' ||
     lowerText === 'balance check' ||
     lowerText === 'kitna balance hai' ||
-    lowerText === 'kitna bacha';
+    lowerText === 'kitna balance bacha' ||
+    lowerText === 'kitna balance bacha hai' ||
+    lowerText === 'kitna bacha' ||
+    lowerText === 'kitna bacha hai' ||
+    lowerText === 'kitna balance' ||
+    lowerText === 'account balance' ||
+    lowerText === 'sab account ka balance' ||
+    lowerText === 'wife balance' ||
+    lowerText === 'wife ka balance';
 
   const isSummaryQuery =
     command === '/summary' ||
@@ -4609,38 +4909,17 @@ Aap neeche diye gaye inline buttons par tap karein, keyboard buttons use karein 
     lowerText === 'hisab';
 
   if (isBalanceQuery) {
-    const summary = calculateUserSummary(userId);
-    let balanceMsg = '';
-    const istInfo = getAppDateTime();
-    const [y, m] = istInfo.date.split('-').map(Number);
-    const monthName = new Date(y, m - 1, 1).toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
-
-    if (isSenderOwner) {
-      balanceMsg = `💰 <b>${targetUser.name} ka Net Balance (${monthName})</b>
-
-🟢 <b>Is Mahine Ki Income:</b> ₹${(summary.currentMonthIncome || 0).toLocaleString('en-IN')}
-🔴 <b>Is Mahine Ka Kharcha:</b> ₹${(summary.currentMonthPersonalExpense || 0).toLocaleString('en-IN')}
-📈 <b>Is Mahine Ki Net Bachat:</b> ₹${(summary.currentMonthNetSavings || 0).toLocaleString('en-IN')} (Rate: ${summary.savingsRate}%)
-📦 <b>Pichla Carryforward Balance:</b> ₹${(summary.openingCarryforward || 0).toLocaleString('en-IN')}
-━━━━━━━━━━━━━━━━━━━━
-💵 <b>Total Wallet/Bank Net Balance:</b> <b>₹${(summary.totalNetSavings || summary.netSavings).toLocaleString('en-IN')}</b>
-🎯 <b>Monthly Budget Remaining:</b> ₹${Math.max(0, summary.monthlyBudget - summary.monthlySpent).toLocaleString('en-IN')}
-📝 <b>Is Mahine Ke Transactions:</b> ${summary.currentMonthCount || 0}
-
-💡 <i>Purane mahino ka detailed archive dekhne ke liye Web Dashboard use karein!</i>`;
-    } else {
-      balanceMsg = `💰 <b>Balance & Khata Summary</b> (👤 <b>${senderDisplayName}</b>)\n━━━━━━━━━━━━━━━━━━━━\n👤 <b>Aapka Is Mahine Ka Kharcha:</b> <b>₹${memberMonthSpent.toLocaleString('en-IN')}</b>\n📝 <b>Aapke Kul Transactions:</b> ${memberTransactions.length}\n━━━━━━━━━━━━━━━━━━━━\n💵 <b>Net Family Balance:</b> 🔒 Masked (Owner Protected)\n🟢 <b>Kul Family Income:</b> 🔒 Masked (Owner Protected)\n🔴 <b>Kul Family Kharcha:</b> 🔒 Masked (Owner Protected)\n\n🔒 <i>(Family Privacy Active: Master financial vault figures are protected)</i>`;
-    }
+    const balanceMsg = buildBalancesTelegramMessage(userId, targetUser.name, isSenderOwner);
 
     await sendTelegramReply(botToken, chatId, balanceMsg, {
       inline_keyboard: [
         [
           { text: '📊 Mahine Ki Summary', callback_data: 'cmd_summary' },
-          { text: '🤖 AI Faltu Kharcha', callback_data: 'cmd_tips' },
+          { text: '🎯 Category Budget', callback_data: 'cmd_budget' },
         ],
         [
+          { text: '🔄 Refresh Balance', callback_data: 'cmd_balance' },
           { text: '🕒 Recent 5 Tx', callback_data: 'cmd_recent' },
-          { text: '↩️ Undo Last', callback_data: 'cmd_undo' },
         ],
       ],
     });
@@ -4918,6 +5197,138 @@ ${budgetLines || 'ℹ️ Koi budget set nahi hai.'}
         [{ text: '🎯 Sabhi Budgets Dekhein', callback_data: 'cmd_budget' }, { text: '💰 Balance', callback_data: 'cmd_balance' }],
       ],
     });
+    return;
+  }
+
+  // 6.36. Set Account / Card / Wife Base Balance (/setbalance <account> <amount>)
+  const isSetBalance =
+    cleanCmd === '/setbalance' ||
+    cleanCmd === '/balanceset' ||
+    lowerText.startsWith('/setbalance') ||
+    lowerText.startsWith('set balance') ||
+    lowerText.startsWith('balance set');
+
+  if (isSetBalance) {
+    if (isFamilyMemberSender) {
+      await sendTelegramReply(botToken, chatId, `🔒 <b>Permission Denied:</b> Sirf Khata Owner opening balance set kar sakte hain.`);
+      return;
+    }
+
+    let rawArg = '';
+    if (lowerText.startsWith('/setbalance')) {
+      rawArg = rawText.replace(/^\/setbalance(@\w+)?/i, '').trim();
+    } else if (lowerText.startsWith('set balance')) {
+      rawArg = rawText.replace(/^set balance/i, '').trim();
+    } else if (lowerText.startsWith('balance set')) {
+      rawArg = rawText.replace(/^balance set/i, '').trim();
+    } else {
+      rawArg = commandArg;
+    }
+
+    const userStore = getUserData(userId);
+    if (!userStore.accountBaseBalances) userStore.accountBaseBalances = {};
+
+    if (!rawArg) {
+      const helpMsg = `⚙️ <b>ACCOUNT BASE / OPENING BALANCES KAISE SET KAREIN:</b>
+━━━━━━━━━━━━━━━━━━━━
+Aap apne bank accounts, cash, credit cards ya wife ke account ka one-time opening balance set kar sakte hain. Uske baad transactions se automatically real-time minus/plus hota rahega!
+
+📝 <b>Examples:</b>
+• <code>/setbalance icici 50000</code> <i>(ICICI Bank)</i>
+• <code>/setbalance axis 80000</code> <i>(Axis Bank)</i>
+• <code>/setbalance cash 5000</code> <i>(Cash in hand)</i>
+• <code>/setbalance wife 20000</code> <i>(Wife's savings account)</i>
+• <code>/setbalance rupay 0</code> <i>(ICICI RuPay Card opening spends)</i>
+• <code>/setbalance sbi 0</code> <i>(SBI CC opening spends)</i>
+
+📊 <b>Current Base Balances:</b>
+• 🏦 ICICI Bank: ₹${(userStore.accountBaseBalances['IC Bank'] || 0).toLocaleString('en-IN')}
+• 🏦 Axis Bank: ₹${(userStore.accountBaseBalances['AX Bank'] || 0).toLocaleString('en-IN')}
+• 💵 Cash in Hand: ₹${(userStore.accountBaseBalances['Cash'] || 0).toLocaleString('en-IN')}
+• 🌸 Wife's Account Base: ₹${(userStore.wifeBaseBalance || 0).toLocaleString('en-IN')}
+
+━━━━━━━━━━━━━━━━━━━━
+💡 <i>Web Dashboard par "Accounts & Cards Ledger" me "Balances Set Karein" button se bhi set kar sakte hain!</i>`;
+
+      await sendTelegramReply(botToken, chatId, helpMsg, {
+        inline_keyboard: [
+          [{ text: '🏦 Live Balances Dekhein', callback_data: 'cmd_balance' }]
+        ]
+      });
+      return;
+    }
+
+    const parts = rawArg.split(/\s+/);
+    const lastPart = parts[parts.length - 1];
+    const amountNum = parseFloat(lastPart.replace(/[^0-9.]/g, ''));
+
+    if (isNaN(amountNum)) {
+      await sendTelegramReply(botToken, chatId, `⚠️ Kripya sahi amount dalein.\n<i>Udaharan:</i> <code>/setbalance icici 50000</code> ya <code>/setbalance wife 20000</code>`);
+      return;
+    }
+
+    const targetPart = parts.slice(0, parts.length - 1).join(' ').toLowerCase();
+
+    // Check if target is wife's account
+    if (targetPart.includes('wife') || targetPart.includes('patni') || targetPart.includes('saving')) {
+      userStore.wifeBaseBalance = Math.max(0, amountNum);
+      saveUserData(userId, userStore);
+      const updatedBal = calculateAccountsBalances(userId);
+      await sendTelegramReply(
+        botToken,
+        chatId,
+        `✅ <b>Wife's Account Base Balance Updated!</b>\n\n🌸 <b>Base Balance:</b> ₹${amountNum.toLocaleString('en-IN')}\n💰 <b>Ab Kul Live Balance:</b> <b>₹${updatedBal.wifeSavings.currentBalance.toLocaleString('en-IN')}</b>\n<i>(Base: ₹${amountNum.toLocaleString('en-IN')} + Transfers: ₹${updatedBal.wifeSavings.totalTransferred.toLocaleString('en-IN')})</i>`,
+        {
+          inline_keyboard: [[{ text: '🏦 Sabhi Balances Dekhein', callback_data: 'cmd_balance' }]]
+        }
+      );
+      return;
+    }
+
+    // Match account
+    let matchedAccId: string | undefined;
+    if (targetPart.includes('icici') && (targetPart.includes('cc') || targetPart.includes('card') || targetPart.includes('rupay') || targetPart.includes('0000'))) {
+      matchedAccId = 'ICICI CC 0000';
+    } else if (targetPart.includes('icici') || targetPart.includes('ic bank')) {
+      matchedAccId = 'IC Bank';
+    } else if (targetPart.includes('axis') && (targetPart.includes('cc') || targetPart.includes('card') || targetPart.includes('8210'))) {
+      matchedAccId = 'AX CC 8210';
+    } else if (targetPart.includes('axis') && (targetPart.includes('5376') || targetPart.includes('neo'))) {
+      matchedAccId = 'AX CC 5376';
+    } else if (targetPart.includes('axis') || targetPart.includes('salary') || targetPart.includes('ax bank')) {
+      matchedAccId = 'AX Bank';
+    } else if (targetPart.includes('cash') || targetPart.includes('nagad') || targetPart.includes('pocket')) {
+      matchedAccId = 'Cash';
+    } else if (targetPart.includes('5733') || targetPart.includes('simplyclick')) {
+      matchedAccId = 'SBI CC 5733';
+    } else if (targetPart.includes('6526') || targetPart.includes('pulse')) {
+      matchedAccId = 'SBI CC 6526';
+    } else if (targetPart.includes('sbi')) {
+      matchedAccId = 'SBI CC 5733';
+    } else if (targetPart.includes('rupay')) {
+      matchedAccId = 'ICICI CC 0000';
+    } else {
+      matchedAccId = detectAccountFromText(targetPart);
+    }
+
+    if (!matchedAccId) {
+      await sendTelegramReply(botToken, chatId, `⚠️ Account samajh nahi aaya. Kripya inme se chunien:\n• <code>/setbalance icici ${amountNum}</code>\n• <code>/setbalance axis ${amountNum}</code>\n• <code>/setbalance cash ${amountNum}</code>\n• <code>/setbalance wife ${amountNum}</code>\n• <code>/setbalance rupay ${amountNum}</code>`);
+      return;
+    }
+
+    userStore.accountBaseBalances[matchedAccId] = Math.max(0, amountNum);
+    saveUserData(userId, userStore);
+    const updatedBal = calculateAccountsBalances(userId);
+    const accInfo = updatedBal.accounts[matchedAccId];
+
+    await sendTelegramReply(
+      botToken,
+      chatId,
+      `✅ <b>${accInfo.name} Base Balance Saved!</b>\n\n📌 <b>Starting Base Balance:</b> ₹${amountNum.toLocaleString('en-IN')}\n💳 <b>Ab Live Remaining Balance / Available Limit:</b> <b>₹${(accInfo.currentBalance || 0).toLocaleString('en-IN')}</b>`,
+      {
+        inline_keyboard: [[{ text: '🏦 Sabhi Balances Dekhein', callback_data: 'cmd_balance' }]]
+      }
+    );
     return;
   }
 
@@ -7297,6 +7708,40 @@ app.delete('/api/emis/:id', (req, res) => {
   store.cardEmis = store.cardEmis.filter(e => e.id !== req.params.id);
   saveUserData(user.id, store);
   res.json({ success: true, emis: store.cardEmis });
+});
+
+// ---------------- Account & Wife Balances Endpoints ----------------
+app.get('/api/accounts/balances', (req, res) => {
+  const user = getRequestUser(req);
+  const data = calculateAccountsBalances(user.id);
+  res.json(data);
+});
+
+app.post('/api/accounts/balances', (req, res) => {
+  const user = getRequestUser(req);
+  const store = getUserData(user.id);
+  const { accountBaseBalances, wifeBaseBalance } = req.body;
+
+  if (accountBaseBalances && typeof accountBaseBalances === 'object') {
+    if (!store.accountBaseBalances) store.accountBaseBalances = {};
+    for (const [acc, val] of Object.entries(accountBaseBalances)) {
+      const num = Number(val);
+      if (!isNaN(num)) {
+        store.accountBaseBalances[acc] = Math.max(0, num);
+      }
+    }
+  }
+
+  if (wifeBaseBalance !== undefined) {
+    const num = Number(wifeBaseBalance);
+    if (!isNaN(num)) {
+      store.wifeBaseBalance = Math.max(0, num);
+    }
+  }
+
+  saveUserData(user.id, store);
+  const updatedData = calculateAccountsBalances(user.id);
+  res.json({ success: true, ...updatedData });
 });
 
 app.get('/api/savings-transfers', (req, res) => {

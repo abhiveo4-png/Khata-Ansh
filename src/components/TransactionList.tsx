@@ -361,7 +361,8 @@ export const TransactionList: React.FC<TransactionListProps> = ({
   };
 
   return (
-    <div className="glass-card overflow-hidden">
+    <>
+      <div className="glass-card overflow-hidden">
       
       {/* Ledger Header & Filter Toolbar */}
       <div className="p-4 sm:p-5 border-b border-white/[0.08] space-y-4">
@@ -1061,6 +1062,8 @@ export const TransactionList: React.FC<TransactionListProps> = ({
         </div>
       )}
 
+      </div>
+
       {/* Edit Transaction Modal */}
       <EditTransactionModal
         isOpen={!!editingTransaction}
@@ -1073,7 +1076,6 @@ export const TransactionList: React.FC<TransactionListProps> = ({
           }
         }}
       />
-
-    </div>
+    </>
   );
 };

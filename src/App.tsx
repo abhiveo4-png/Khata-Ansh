@@ -958,6 +958,7 @@ export default function App() {
 
         {activeTab === 'wealth' && (
           <WealthKhataHub
+            transactions={transactions}
             udhaars={udhaars}
             isPrivacyMode={isPrivacyMode}
             onAddUdhaar={handleAddUdhaar}
