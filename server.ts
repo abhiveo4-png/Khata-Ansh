@@ -277,6 +277,38 @@ export interface FuelLog {
   createdAt: string;
 }
 
+export interface DailyItemLimit {
+  id: string;
+  userId?: string;
+  itemName: string;
+  dailyLimit: number;
+  keywords: string[];
+  category: string;
+  notes?: string;
+  isActive: boolean;
+  todaySpent?: number;
+  status?: 'safe' | 'warning' | 'exceeded';
+  percentage?: number;
+  todayCount?: number;
+  createdAt?: string;
+}
+
+export interface PiggyBankItem {
+  id: string;
+  userId?: string;
+  name: string;
+  category: 'general' | 'emergency' | 'goal' | 'travel' | 'investment' | 'vehicle' | 'home' | 'health';
+  targetAmount?: number;
+  currentBalance: number;
+  icon?: string;
+  color?: string;
+  notes?: string;
+  isSurplusFund?: boolean;
+  targetDate?: string;
+  createdAt: string;
+  updatedAt?: string;
+}
+
 // Default standard categories including Uncategorized
 export const DEFAULT_CATEGORIES: CategoryDef[] = [
   {
@@ -579,6 +611,9 @@ interface UserDataStore {
   savingsTransfers?: SavingsTransfer[];
   investments?: InvestmentRecord[];
   fuelLogs?: FuelLog[];
+  dailyItemLimits?: DailyItemLimit[];
+  piggyBankFunds?: PiggyBankItem[];
+  goals?: any[];
   dataVersion?: number;
   accountBaseBalances?: Record<string, number>;
   accountBalanceSetTimestamps?: Record<string, string>;
@@ -1041,6 +1076,86 @@ function getRequestUser(req: express.Request): UserProfile | null {
   return users[0] || null;
 }
 
+// Compute full details (monthly amount, paid installments, total deposited, current value, maturity amount) for an investment
+export function computeInvestmentDetails(inv: any) {
+  const rawMonthly = Number(inv.monthlyAmount) || Number(inv.amount) || 0;
+  const rate = Number(inv.interestRate) || 0;
+  const startDate = inv.date ? new Date(inv.date) : new Date();
+  const today = new Date();
+
+  if (inv.type === 'RD' || inv.type === 'Mutual Fund') {
+    let totalMonths = Number(inv.totalInstallments) || 0;
+    if (!totalMonths && inv.maturityDate && inv.date) {
+      const matDate = new Date(inv.maturityDate);
+      totalMonths = Math.max(1, (matDate.getFullYear() - startDate.getFullYear()) * 12 + (matDate.getMonth() - startDate.getMonth()));
+    }
+    if (!totalMonths) totalMonths = 12;
+
+    let paidCount = Number(inv.paidInstallments);
+    if (paidCount === undefined || isNaN(paidCount) || paidCount <= 0) {
+      let monthsElapsed = (today.getFullYear() - startDate.getFullYear()) * 12 + (today.getMonth() - startDate.getMonth());
+      if (today.getDate() >= startDate.getDate()) {
+        monthsElapsed += 1;
+      }
+      paidCount = Math.max(1, Math.min(totalMonths, monthsElapsed));
+    }
+
+    const totalDeposited = paidCount * rawMonthly;
+    let interest = 0;
+    if (rate > 0) {
+      const qRate = (rate / 100) / 4;
+      for (let i = 1; i <= paidCount; i++) {
+        const mHeld = paidCount - i + 1;
+        interest += rawMonthly * (Math.pow(1 + qRate, mHeld / 3) - 1);
+      }
+    }
+    const computedVal = totalDeposited + Math.round(interest);
+    const finalVal = (inv.currentValue !== undefined && Number(inv.currentValue) > 0) ? Number(inv.currentValue) : computedVal;
+
+    let maturityAmount = Number(inv.maturityAmount) || 0;
+    if (!maturityAmount && rate > 0) {
+      const qRate = (rate / 100) / 4;
+      let totalInterest = 0;
+      for (let i = 1; i <= totalMonths; i++) {
+        const mHeld = totalMonths - i + 1;
+        totalInterest += rawMonthly * (Math.pow(1 + qRate, mHeld / 3) - 1);
+      }
+      maturityAmount = Math.round((totalMonths * rawMonthly) + totalInterest);
+    } else if (!maturityAmount) {
+      maturityAmount = totalMonths * rawMonthly;
+    }
+
+    return {
+      monthlyAmount: rawMonthly,
+      paidInstallments: paidCount,
+      totalInstallments: totalMonths,
+      totalDeposited,
+      currentValue: finalVal,
+      maturityAmount,
+      interestRate: rate,
+    };
+  } else {
+    const principal = Number(inv.amount) || rawMonthly;
+    let interest = 0;
+    if (rate > 0 && inv.date) {
+      const diffTime = Math.max(0, today.getTime() - startDate.getTime());
+      const years = diffTime / (1000 * 60 * 60 * 24 * 365.25);
+      interest = Math.round(principal * (Math.pow(1 + (rate / 400), 4 * years) - 1));
+    }
+    const computedVal = principal + interest;
+    const finalVal = (inv.currentValue !== undefined && Number(inv.currentValue) > 0) ? Number(inv.currentValue) : computedVal;
+    return {
+      monthlyAmount: undefined,
+      paidInstallments: 1,
+      totalInstallments: 1,
+      totalDeposited: principal,
+      currentValue: finalVal,
+      maturityAmount: Number(inv.maturityAmount) || finalVal,
+      interestRate: rate,
+    };
+  }
+}
+
 // Calculate Financial Summary for a user
 function calculateUserSummary(userId: string): FinancialSummary {
   const store = getUserData(userId);
@@ -1135,49 +1250,9 @@ function calculateUserSummary(userId: string): FinancialSummary {
   // Compute accumulated investment portfolio (RD / FD / SIP with interest)
   let computedInvestmentsAccumulated = 0;
   if (Array.isArray(store.investments) && store.investments.length > 0) {
-    const today = new Date();
     for (const inv of store.investments) {
-      const rawAmt = Number(inv.monthlyAmount) || Number(inv.amount) || 0;
-      const rate = Number(inv.interestRate) || 0;
-      const startDate = inv.date ? new Date(inv.date) : new Date();
-
-      if (inv.type === 'RD' || inv.type === 'Mutual Fund') {
-        let totalMonths = Number(inv.totalInstallments) || 0;
-        if (!totalMonths && inv.maturityDate && inv.date) {
-          const matDate = new Date(inv.maturityDate);
-          totalMonths = Math.max(1, (matDate.getFullYear() - startDate.getFullYear()) * 12 + (matDate.getMonth() - startDate.getMonth()));
-        }
-        if (!totalMonths) totalMonths = 12;
-
-        let paidCount = Number(inv.paidInstallments);
-        if (paidCount === undefined || isNaN(paidCount) || paidCount <= 0) {
-          let monthsElapsed = (today.getFullYear() - startDate.getFullYear()) * 12 + (today.getMonth() - startDate.getMonth());
-          if (today.getDate() >= startDate.getDate()) {
-            monthsElapsed += 1;
-          }
-          paidCount = Math.max(1, Math.min(totalMonths, monthsElapsed));
-        }
-
-        const deposited = paidCount * rawAmt;
-        let interest = 0;
-        if (rate > 0) {
-          const qRate = (rate / 100) / 4;
-          for (let i = 1; i <= paidCount; i++) {
-            const mHeld = paidCount - i + 1;
-            interest += rawAmt * (Math.pow(1 + qRate, mHeld / 3) - 1);
-          }
-        }
-        computedInvestmentsAccumulated += deposited + Math.round(interest);
-      } else {
-        const principal = rawAmt;
-        let interest = 0;
-        if (rate > 0 && inv.date) {
-          const diffTime = Math.max(0, today.getTime() - startDate.getTime());
-          const years = diffTime / (1000 * 60 * 60 * 24 * 365.25);
-          interest = Math.round(principal * (Math.pow(1 + (rate / 400), 4 * years) - 1));
-        }
-        computedInvestmentsAccumulated += principal + interest;
-      }
+      const details = computeInvestmentDetails(inv);
+      computedInvestmentsAccumulated += details.currentValue;
     }
   }
 
@@ -1222,13 +1297,16 @@ function getGeminiClient(): GoogleGenAI | null {
   });
 }
 
-// Resilient Gemini Generator with automatic model fallback for high-demand 503 spikes
+// Resilient & Fast Gemini Generator with automatic model fallback
 async function callGeminiCandidateModels(
   ai: GoogleGenAI,
   prompt: string,
   options?: { jsonMode?: boolean; responseSchema?: any }
 ): Promise<{ text: string; model: string } | null> {
-  const candidateModels = ['gemini-3.6-flash', 'gemini-3.1-flash-lite', 'gemini-3.8-flash'];
+  const customModel = process.env.GEMINI_MODEL;
+  const candidateModels = customModel
+    ? [customModel, 'gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-2.5-flash-lite']
+    : ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-2.5-flash-lite'];
   for (const model of candidateModels) {
     try {
       const response = await ai.models.generateContent({
@@ -1243,9 +1321,8 @@ async function callGeminiCandidateModels(
         return { text: response.text, model };
       }
     } catch (err: any) {
-      // Quiet fallback without logging warnings that trigger error alerts
       if (process.env.DEBUG_AI) {
-        console.log(`[Gemini Fallback] Model ${model} unavailable, trying next candidate...`);
+        console.log(`[Gemini Fast Engine] Model ${model} failed (${err.message}), checking next...`);
       }
     }
   }
@@ -10544,9 +10621,16 @@ export async function answerAiFinancialQuestion(
   const wifeSavings = accountBalances?.wifeSavings || { baseBalance: 0, totalTransferred: 0, currentBalance: 0 };
 
   const goals: any[] = (store as any).goals || (store as any).piggyBankFunds || [];
-  const investments = store.investments || [];
-  const totalInvestmentValue = investments.reduce((sum, inv) => sum + (Number(inv.currentValue || inv.amount) || 0), 0);
-  const totalInvestedPrincipal = investments.reduce((sum, inv) => sum + (Number(inv.amount) || 0), 0);
+  const rawInvestments = store.investments || [];
+  const detailedInvestments = rawInvestments.map(inv => {
+    const details = computeInvestmentDetails(inv);
+    return {
+      ...inv,
+      ...details,
+    };
+  });
+  const totalInvestmentValue = detailedInvestments.reduce((sum, inv) => sum + (Number(inv.currentValue) || 0), 0);
+  const totalInvestedPrincipal = detailedInvestments.reduce((sum, inv) => sum + (Number(inv.totalDeposited) || 0), 0);
 
   const udhaars = store.udhaars || [];
   const pendingLent = udhaars.filter(u => u.status === 'pending' && u.type === 'lent').reduce((sum, u) => sum + (Number(u.amount) || 0), 0);
@@ -10575,18 +10659,22 @@ ${sortedMonths.map(m => `
 • Key Transactions in this month: ${m.topTransactions.map(t => `${t.date}: ${t.type === 'income' ? '+' : '-'}₹${t.amount.toLocaleString('en-IN')} (${t.description})`).join('; ') || 'None'}
 `).join('\n') || 'No monthly transactions logged yet.'}
 
-=== 📊 ALL-TIME CUMULATIVE STATS (LIFETIME TOTAL OF ALL MONTHS COMBINED) ===
-• All-Time Total Income (All months): ₹${(Number(summary?.totalIncome) || 0).toLocaleString('en-IN')}
-• All-Time Total Expenses (All months): ₹${(Number(summary?.totalExpense) || 0).toLocaleString('en-IN')}
-• All-Time Net Balance / Bank Holdings: ₹${(Number(summary?.totalNetSavings || summary?.netSavings) || 0).toLocaleString('en-IN')}
+=== 📊 ALL-TIME CUMULATIVE STATS (LIFETIME RECORD OF LOGGED TRANSACTIONS) ===
+• All-Time Total Income Logged: ₹${(Number(summary?.totalIncome) || 0).toLocaleString('en-IN')}
+• All-Time Total Expenses Logged: ₹${(Number(summary?.totalExpense) || 0).toLocaleString('en-IN')}
+• Ledger Net Savings (Logged Income - Expenses): ₹${(Number(summary?.totalNetSavings || summary?.netSavings) || 0).toLocaleString('en-IN')}
+• Total Live Bank & Cash Holdings (All Banks Combined): ₹${(Number(accountBalances?.totalBankCashBalance) || 0).toLocaleString('en-IN')}
 • Current Month (${currentMonthData.monthName}) Income: ₹${currentMonthData.income.toLocaleString('en-IN')}
 • Current Month (${currentMonthData.monthName}) Personal Expenses: ₹${currentMonthData.personalExpense.toLocaleString('en-IN')}
 • Current Month (${currentMonthData.monthName}) Net Savings: ₹${currentMonthData.netSavings.toLocaleString('en-IN')}
 
-=== 🏦 BANK ACCOUNTS & CASH BALANCES ===
-${bankAccounts.map(([id, a]) => `• ${a.name} (${id}): Live Balance ₹${(Number(a.balance) || 0).toLocaleString('en-IN')} (Base: ₹${(Number(a.baseBalance) || 0).toLocaleString('en-IN')}, Credits: ₹${(Number(a.totalCredits) || 0).toLocaleString('en-IN')}, Debits: ₹${(Number(a.totalDebits) || 0).toLocaleString('en-IN')})`).join('\n') || 'None'}
+=== 🏦 LIVE BANK ACCOUNTS & CASH HOLDINGS ===
+• 🌟 Total Bank & Cash Holdings: ₹${(Number(accountBalances?.totalBankCashBalance) || 0).toLocaleString('en-IN')}
+${bankAccounts.map(([id, a]) => `• ${a.name} (${id}): Live Balance ₹${(Number(a.currentBalance) || 0).toLocaleString('en-IN')} (Base: ₹${(Number(a.baseBalance) || 0).toLocaleString('en-IN')}, Recent Credits: ₹${(Number(a.credits) || 0).toLocaleString('en-IN')}, Recent Debits: ₹${(Number(a.debits) || 0).toLocaleString('en-IN')})`).join('\n') || 'None'}
 
 === 💳 CREDIT CARDS (LIMITS, SPENDS & DUES) ===
+• Total Available Card Limit: ₹${(Number(accountBalances?.totalCardAvailableLimit) || 0).toLocaleString('en-IN')}
+• Total Card Outstanding / Dues: ₹${(Number(accountBalances?.totalCardOutstanding) || 0).toLocaleString('en-IN')}
 ${creditCards.map(([id, a]) => `• ${a.name} (${id}): Credit Limit ₹${(Number(a.creditLimit) || 0).toLocaleString('en-IN')}, Current Spends/Due ₹${(Number(a.currentOutstanding) || 0).toLocaleString('en-IN')}, Available Limit ₹${(Number(a.availableLimit) || 0).toLocaleString('en-IN')}`).join('\n') || 'None'}
 
 === 👩‍💼 WIFE SAVINGS & KHATA ===
@@ -10594,17 +10682,53 @@ ${creditCards.map(([id, a]) => `• ${a.name} (${id}): Credit Limit ₹${(Number
 • Total Transferred: ₹${(Number(wifeSavings.totalTransferred) || 0).toLocaleString('en-IN')}
 • Live Current Balance: ₹${(Number(wifeSavings.currentBalance || ((Number(wifeSavings.baseBalance) || 0) + (Number(wifeSavings.totalTransferred) || 0))) || 0).toLocaleString('en-IN')}
 
-=== 📈 INVESTMENTS & PORTFOLIO ===
-• Total Portfolio Value: ₹${(Number(totalInvestmentValue) || 0).toLocaleString('en-IN')}
-• Total Principal Invested: ₹${(Number(totalInvestedPrincipal) || 0).toLocaleString('en-IN')}
-• Portfolio Items: ${investments.length > 0 ? investments.map(inv => `${inv.name || inv.type || 'Investment'} (Invested: ₹${(Number(inv.amount) || 0).toLocaleString('en-IN')}, Value: ₹${(Number(inv.currentValue || inv.amount) || 0).toLocaleString('en-IN')}, Type: ${inv.type || 'MF'})`).join('; ') : 'No investments logged yet'}
+=== 📈 INVESTMENTS & RECURRING DEPOSITS (RD / FD / SIP) ===
+• 🌟 Total Investment Portfolio Live Value: ₹${(Number(totalInvestmentValue) || 0).toLocaleString('en-IN')}
+• Total Principal Deposited So Far: ₹${(Number(totalInvestedPrincipal) || 0).toLocaleString('en-IN')}
+• Active Investments & RD Plans:
+${detailedInvestments.map(inv => {
+  if (inv.type === 'RD') {
+    return `• 🏦 ${inv.name} (Recurring Deposit - RD):
+  - Monthly Installment: ₹${(Number(inv.monthlyAmount) || 0).toLocaleString('en-IN')}/month
+  - Progress: ${inv.paidInstallments} of ${inv.totalInstallments} monthly installments completed
+  - Total Principal Deposited So Far: ₹${(Number(inv.totalDeposited) || 0).toLocaleString('en-IN')} (${inv.paidInstallments} x ₹${(Number(inv.monthlyAmount) || 0).toLocaleString('en-IN')})
+  - Current Live Accumulated Value (with Interest): ₹${(Number(inv.currentValue) || 0).toLocaleString('en-IN')}
+  - Interest Rate: ${inv.interestRate ? `${inv.interestRate}%` : 'Standard RD Rate'}
+  - Full Maturity Target Amount (at 1 Year / ${inv.totalInstallments} months): ₹${(Number(inv.maturityAmount) || 0).toLocaleString('en-IN')}`;
+  } else if (inv.type === 'FD') {
+    return `• 🔒 ${inv.name} (Fixed Deposit - FD): Principal ₹${(Number(inv.totalDeposited) || 0).toLocaleString('en-IN')}, Current Live Value ₹${(Number(inv.currentValue) || 0).toLocaleString('en-IN')}, Rate: ${inv.interestRate || 'N/A'}%`;
+  } else if (inv.type === 'Mutual Fund') {
+    return `• 📊 ${inv.name} (Mutual Fund / SIP): Monthly SIP ₹${(Number(inv.monthlyAmount) || 0).toLocaleString('en-IN')}/mo, Deposited ₹${(Number(inv.totalDeposited) || 0).toLocaleString('en-IN')}, Current Value ₹${(Number(inv.currentValue) || 0).toLocaleString('en-IN')}`;
+  } else {
+    return `• 💎 ${inv.name} (${inv.type || 'Investment'}): Invested Principal ₹${(Number(inv.totalDeposited) || 0).toLocaleString('en-IN')}, Current Value ₹${(Number(inv.currentValue) || 0).toLocaleString('en-IN')}`;
+  }
+}).join('\n') || 'No investments logged yet'}
 
-=== 🤝 UDHAAR KHATA (DEBTS & RECEIVABLES) ===
+=== 🎯 CATEGORY BUDGETS & SPENDING LIMITS (FROM WEB APP) ===
+• Total Monthly Budget: ₹${(Number(summary?.monthlyBudget) || 0).toLocaleString('en-IN')}
+• Total Monthly Spent: ₹${(Number(summary?.monthlySpent) || 0).toLocaleString('en-IN')}
+• Remaining Budget: ₹${Math.max(0, (Number(summary?.monthlyBudget) || 0) - (Number(summary?.monthlySpent) || 0)).toLocaleString('en-IN')}
+• Category Budgets vs Actuals:
+${(store.budgets || []).map(b => {
+  const spent = currentMonthData.categories[b.category] || 0;
+  const isOver = spent > b.limit;
+  return `• ${b.category}: Limit ₹${(Number(b.limit) || 0).toLocaleString('en-IN')} | Spent ₹${spent.toLocaleString('en-IN')} ${isOver ? '⚠️ [OVER BUDGET]' : '✅ [WITHIN BUDGET]'}`;
+}).join('\n') || 'No custom category budgets configured'}
+
+=== 💳 CREDIT CARD EMIS (FROM WEB APP) ===
+${(store.cardEmis || []).length > 0 ? (store.cardEmis || []).map(e => `• ${e.title || 'EMI'} on ${e.cardId || 'Credit Card'}: Monthly EMI ₹${(Number(e.monthlyAmount) || 0).toLocaleString('en-IN')} (${e.paidMonths || 0} of ${e.totalMonths || 0} paid, Remaining Principal approx ₹${Math.max(0, ((Number(e.totalMonths) || 0) - (Number(e.paidMonths) || 0)) * (Number(e.monthlyAmount) || 0)).toLocaleString('en-IN')})`).join('\n') : 'No active credit card EMIs'}
+
+=== 🛡️ DAILY ITEM LIMITS / POCKET GUARD (FROM WEB APP) ===
+${(store.dailyItemLimits || []).length > 0 ? (store.dailyItemLimits || []).map(d => `• ${d.itemName} (${d.category}): Daily Limit ₹${(Number(d.dailyLimit) || 0).toLocaleString('en-IN')} | Status: ${d.isActive ? 'Active Guard' : 'Inactive'}`).join('\n') : 'No daily item limits set'}
+
+=== 🤝 UDHAAR KHATA (DEBTS & RECEIVABLES FROM WEB APP) ===
 • Money you will receive (Lent pending): ₹${(Number(pendingLent) || 0).toLocaleString('en-IN')}
 • Money you have to give (Borrowed pending): ₹${(Number(pendingBorrowed) || 0).toLocaleString('en-IN')}
+• Pending Items:
+${udhaars.filter(u => u.status === 'pending').map(u => `• [${u.type === 'lent' ? 'LENDAARI / Receive' : 'DENDAARI / Pay'}] ${u.personName}: ₹${(Number(u.amount) || 0).toLocaleString('en-IN')} (Date: ${u.date || 'N/A'}, Reason: ${u.description || 'Udhaar'})`).join('\n') || 'No pending udhaar'}
 
-=== 🎯 DEDICATED GOALS & PIGGY BANK FUNDS ===
-${goals.length > 0 ? goals.map((g: any) => `• ${g.name || 'Goal'}: Saved ₹${(Number(g.currentBalance || g.currentAmount) || 0).toLocaleString('en-IN')} / Target ₹${(Number(g.targetAmount) || 0).toLocaleString('en-IN')}`).join('\n') : 'No dedicated goal funds created yet'}
+=== 🎯 DEDICATED GOALS & GULLAK / PIGGY BANK FUNDS (FROM WEB APP) ===
+${goals.length > 0 ? goals.map((g: any) => `• ${g.name || 'Goal'}: Saved ₹${(Number(g.currentBalance || g.currentAmount) || 0).toLocaleString('en-IN')} / Target ₹${(Number(g.targetAmount) || 0).toLocaleString('en-IN')} (Target Date: ${g.targetDate || 'Flexible'})`).join('\n') : 'No dedicated goal funds created yet'}
 
 === 🚫 DETECTED FALTU / AVOIDABLE SPENDS ===
 • Total Avoidable: ₹${(Number(ruleBasedAvoidable?.totalAvoidableAmount) || 0).toLocaleString('en-IN')} (${Number(ruleBasedAvoidable?.percentageOfExpenses) || 0}% of expenses)
@@ -10617,7 +10741,7 @@ USER'S QUESTION:
 CRITICAL INSTRUCTIONS (MUST FOLLOW STRICTLY):
 1. 🗣️ STRICT HINDI / HINGLISH LANGUAGE REQUIREMENT:
    - Aapko hamesha aur 100% STRICTLY aam bolchal ki Hindi / Hinglish me hi jawab dena hai (jaise Telegram chats me baat karte hain).
-   - Pure English me jawab bilkul na dein! Technical financial terms (jaise SIP, Index Fund, Emergency Fund, Credit Card limit, Dues) English me likh sakte hain, par pura vakya aur explanation natural Hindi me hona chahiye.
+   - Pure English me jawab bilkul na dein! Technical financial terms (jaise SIP, Index Fund, Emergency Fund, Credit Card limit, Dues, RD) English me likh sakte hain, par pura vakya aur explanation natural Hindi me hona chahiye.
 
 2. 📆 MONTH-WISE ACCURACY & SEPARATION (KABHI BHI SABHI MAHINO KA TOTAL EK SAATH NA JODEIN):
    - KABHI BHI sabhi mahino ke expenses ya income ko ek saath jod kar kisi ek mahine ka kharcha mat batayein!
@@ -10626,10 +10750,26 @@ CRITICAL INSTRUCTIONS (MUST FOLLOW STRICTLY):
    - Agar user mahino ka comparison ya "month-wise" record maange, to har mahine ka alag-alag bullet point bana kar month-by-month breakdown batao.
    - All-Time cumulative total ko tabhi mention karo jab user explicitly "poora kul kharcha / all-time total / lifetime total" pooche, aur tab bhi saaf batao ki "Ye sabhi mahino ka mila kar kul All-Time Total hai".
 
-3. 💰 CITE ACTUAL NUMBERS:
-   - Ground your answers in their real financial data from above (Bank balances, Card dues, Wife savings, Month-wise expenses, Goals).
+3. 🏦 BANK HOLDINGS & BALANCES CITE RULES:
+   - "Bank holding", "kul bank balance", "kitna paisa hai bank me" hamesha "Total Bank & Cash Holdings: ₹${(Number(accountBalances?.totalBankCashBalance) || 0).toLocaleString('en-IN')}" se batayein (jo ki ICICI + Axis + Cash ka actual live sum hai).
+   - "Ledger Net Savings" (₹${(Number(summary?.totalNetSavings || summary?.netSavings) || 0).toLocaleString('en-IN')}) ko Bank holding mat bolna, wo sirf recorded income minus expenses ka ledger track hai. Actual bank holding ₹${(Number(accountBalances?.totalBankCashBalance) || 0).toLocaleString('en-IN')} hai.
 
-4. 🎯 ACTIONABLE & STRUCTURED:
+4. 📈 INVESTMENTS & RD (RECURRING DEPOSIT) ACCURACY:
+   - Agar user RD (Recurring Deposit) ke baare me pooche ya investment details maange:
+     • Monthly Installment = e.g. ₹5,000/mahina (har mahine jama hone wali kist)
+     • Ab tak jama rashi (Total Deposited so far) = e.g. 5 kistein x ₹5,000 = ₹25,000
+     • Current Live Value = ₹25,000+ (with interest)
+     • 1-Year Maturity Target = 12 x ₹5,000 = ₹60,000 (+ interest)
+   - KABHI BHI RD ko sirf ₹5,000 ka total investment mat bolna! Saaf batayein ki ₹5,000 har mahine ki installment hai aur abhi tak 5 kisto me kul ₹25,000 jama ho chuke hain.
+
+5. 🌐 HOLISTIC WEB APP PARITY:
+   - Raw transactions ke saath-saath web app ke sabhi structured modules ko analyze karein: Category Budgets (limits vs spent), Credit Card EMIs (monthly EMI & remaining tenure), Daily Pocket Guard Limits, Udhaar / Khata Book (lendaari & dendaari), Wife Savings Khata, aur Piggy Bank Goal funds.
+   - User ko comprehensive financial advice dete waqt in sabhi web app features ka reference aur alignment rakhein.
+
+6. 💰 CITE ACTUAL NUMBERS:
+   - Ground your answers directly in their real financial data from above (Live Bank balances, Card dues, Wife savings, Month-wise expenses, RD/Investments, Goals, Category Budgets, EMIs).
+
+7. 🎯 ACTIONABLE & STRUCTURED:
    - Financial Planning: 50/30/20 monthly plan with exact ₹ numbers based on monthly income.
    - Investment Strategy: Nifty 50 Index SIP, Gold, Emergency Liquid Fund.
    - Credit Cards: Card dues vs limit advice.
@@ -10688,7 +10828,19 @@ CRITICAL INSTRUCTIONS (MUST FOLLOW STRICTLY):
     fallbackAnswer += `📈 <b>All-Time Kul Khata (All Months):</b>\n`;
     fallbackAnswer += `• Kul Kamai: ₹${(Number(summary?.totalIncome) || 0).toLocaleString('en-IN')}\n`;
     fallbackAnswer += `• Kul Kharcha: ₹${(Number(summary?.totalExpense) || 0).toLocaleString('en-IN')}\n`;
-    fallbackAnswer += `• Bank & Net Holdings: ₹${(Number(summary?.totalNetSavings || summary?.netSavings) || 0).toLocaleString('en-IN')}\n\n`;
+    fallbackAnswer += `• 🏦 <b>Total Bank & Cash Holding:</b> <b>₹${(Number(accountBalances?.totalBankCashBalance) || 0).toLocaleString('en-IN')}</b>\n\n`;
+  }
+
+  if (detailedInvestments.length > 0) {
+    fallbackAnswer += `📈 <b>Active Investment & RD Portfolio:</b>\n`;
+    for (const inv of detailedInvestments) {
+      if (inv.type === 'RD') {
+        fallbackAnswer += `• 🏦 <b>${inv.name} (RD):</b> ₹${(Number(inv.monthlyAmount) || 0).toLocaleString('en-IN')}/mahina | ${inv.paidInstallments}/${inv.totalInstallments} kistein jama (Kul Jama: <b>₹${(Number(inv.totalDeposited) || 0).toLocaleString('en-IN')}</b>, Live Value: <b>₹${(Number(inv.currentValue) || 0).toLocaleString('en-IN')}</b>)\n`;
+      } else {
+        fallbackAnswer += `• <b>${inv.name} (${inv.type}):</b> Jama: ₹${(Number(inv.totalDeposited) || 0).toLocaleString('en-IN')} | Live Value: ₹${(Number(inv.currentValue) || 0).toLocaleString('en-IN')}\n`;
+      }
+    }
+    fallbackAnswer += `\n`;
   }
 
   fallbackAnswer += `📊 <b>SMART ACTION PLAN (Hindi):</b>\n`;
