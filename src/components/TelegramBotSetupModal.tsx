@@ -319,7 +319,7 @@ export const TelegramBotSetupModal: React.FC<TelegramBotSetupModalProps> = ({
                   📅 Aaj Ka Hisab
                 </div>
                 <div className="bg-slate-900 border border-amber-500/30 text-amber-200 px-2.5 py-1.5 rounded-lg text-center font-bold text-[11px]">
-                  🤖 AI Tips & Bachat
+                  🤖 Ask AI Advisor (/ask)
                 </div>
                 <div className="bg-slate-900 border border-indigo-500/30 text-indigo-200 px-2.5 py-1.5 rounded-lg text-center font-bold text-[11px]">
                   🕒 Recent 5 Tx
@@ -346,11 +346,12 @@ export const TelegramBotSetupModal: React.FC<TelegramBotSetupModalProps> = ({
             <div className="text-[10px] text-slate-400 space-y-1">
               <span className="font-bold text-slate-300">📋 Telegram "Menu" Button me registered commands:</span>
               <div className="grid grid-cols-2 gap-x-2 gap-y-0.5 font-mono text-[10px] text-slate-400">
+                <span>• <code>/ask</code> - 🤖 AI Financial Advisor</span>
+                <span>• <code>/done</code> - ✅ Normal Mode Wapas</span>
                 <span>• <code>/balance</code> - Kul bachat</span>
                 <span>• <code>/summary</code> - Mahina report</span>
                 <span>• <code>/budget</code> - Category wise kharcha</span>
                 <span>• <code>/date 2 sep</code> - Date hisaab</span>
-                <span>• <code>/tips</code> - Gemini Faltu kharcha</span>
                 <span>• <code>/recent</code> - Aakhri 5 transactions</span>
                 <span>• <code>/buttons</code> - Handy buttons</span>
                 <span>• <code>/categories</code> - Active categories</span>

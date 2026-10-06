@@ -236,16 +236,16 @@ export const Header: React.FC<HeaderProps> = ({
               <span>Backup & Restore</span>
             </button>
 
-            {/* AI Insights Button */}
+            {/* AI Advisor Button */}
             <button
               onClick={onOpenAiInsights}
-              className="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-gradient-to-r from-indigo-500/20 via-purple-500/20 to-pink-500/20 border border-indigo-500/40 hover:border-indigo-400 text-indigo-200 hover:text-white transition-all shadow-md shadow-indigo-500/20 cursor-pointer backdrop-blur-md"
-              title="Gemini AI se janein kaha faltu kharcha hua aur kitni bachat ho sakti hai"
+              className="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-gradient-to-r from-cyan-500/20 via-indigo-500/20 to-purple-500/20 border border-cyan-500/40 hover:border-cyan-400 text-cyan-200 hover:text-white transition-all shadow-md shadow-cyan-500/20 cursor-pointer backdrop-blur-md"
+              title="Gemini AI Financial Advisor se live chat karein aur financial planning / goals / investments par advice lein"
             >
-              <div className="w-4 h-4 rounded-md bg-indigo-500/30 flex items-center justify-center">
-                <Sparkles className="w-3 h-3 text-indigo-300" />
+              <div className="w-4 h-4 rounded-md bg-cyan-500/30 flex items-center justify-center">
+                <Sparkles className="w-3 h-3 text-cyan-300 animate-pulse" />
               </div>
-              <span>AI Tips & Bachat</span>
+              <span>🤖 Ask AI Advisor</span>
             </button>
 
             {/* Quick Export CSV Button */}

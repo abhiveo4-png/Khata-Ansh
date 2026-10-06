@@ -369,19 +369,19 @@ export const MobileNavDrawer: React.FC<MobileNavDrawerProps> = ({
               <ChevronRight className="w-3.5 h-3.5 text-emerald-400" />
             </button>
 
-            {/* AI Insights */}
+            {/* AI Advisor & Chat */}
             <button
               onClick={() => {
                 onClose();
                 onOpenAiInsights();
               }}
-              className="w-full flex items-center justify-between p-2.5 rounded-xl text-indigo-200 hover:bg-indigo-500/20 bg-indigo-500/10 border border-indigo-500/30 text-xs font-medium cursor-pointer transition-all backdrop-blur-md"
+              className="w-full flex items-center justify-between p-2.5 rounded-xl text-cyan-200 hover:bg-cyan-500/20 bg-cyan-500/10 border border-cyan-500/30 text-xs font-medium cursor-pointer transition-all backdrop-blur-md"
             >
               <div className="flex items-center space-x-2.5">
-                <Sparkles className="w-4 h-4 text-indigo-400 shrink-0" />
-                <span>Gemini AI Bachat Tips</span>
+                <Sparkles className="w-4 h-4 text-cyan-400 shrink-0 animate-pulse" />
+                <span className="font-semibold">🤖 Ask AI Financial Advisor</span>
               </div>
-              <ChevronRight className="w-3.5 h-3.5 text-indigo-400" />
+              <ChevronRight className="w-3.5 h-3.5 text-cyan-400" />
             </button>
 
             {/* Telegram Bot Setup - Only for abhiveo4@gmail.com */}

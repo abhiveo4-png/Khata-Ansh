@@ -35,6 +35,7 @@ const USERS_FILE = path.join(DATA_DIR, 'users.json');
 const BOT_CONFIG_FILE = path.join(DATA_DIR, 'bot_config.json');
 const LOGS_FILE = path.join(DATA_DIR, 'telegram_logs.json');
 const ACTIVE_ACCOUNTS_FILE = path.join(DATA_DIR, 'active_accounts.json');
+const AI_ADVISOR_MODE_FILE = path.join(DATA_DIR, 'ai_advisor_mode.json');
 
 // Global Legacy files (for auto-migration)
 const LEGACY_TX_FILE = path.join(DATA_DIR, 'transactions.json');
@@ -589,6 +590,7 @@ interface UserDataStore {
 let users: UserProfile[] = loadJson<UserProfile[]>(USERS_FILE, []);
 let telegramLogs: TelegramLog[] = loadJson<TelegramLog[]>(LOGS_FILE, []);
 let chatActiveAccounts: Record<string, string> = loadJson<Record<string, string>>(ACTIVE_ACCOUNTS_FILE, {});
+let chatAiAdvisorMode: Record<string, boolean> = loadJson<Record<string, boolean>>(AI_ADVISOR_MODE_FILE, {});
 let botConfig: BotConfig = loadJson<BotConfig>(BOT_CONFIG_FILE, {
   botToken: process.env.TELEGRAM_BOT_TOKEN || '8805911705:AAFqlnYNiguHCdar15R3XX8JJkuI0nXNanc',
   isWebhookSet: true,
@@ -663,6 +665,11 @@ async function initPgDatabase(): Promise<boolean> {
             chatActiveAccounts = row.data;
             saveJson(ACTIVE_ACCOUNTS_FILE, chatActiveAccounts);
           }
+        } else if (row.key === 'ai_advisor_mode') {
+          if (row.data && typeof row.data === 'object') {
+            chatAiAdvisorMode = row.data;
+            saveJson(AI_ADVISOR_MODE_FILE, chatAiAdvisorMode);
+          }
         } else if (row.key.startsWith('user_data:')) {
           const uid = row.key.replace('user_data:', '');
           if (row.data) {
@@ -725,6 +732,31 @@ function setActiveAccountForChat(chatId: string | number, userId: string): void 
   if (!cId) return;
   chatActiveAccounts[cId] = userId;
   saveActiveAccounts(chatActiveAccounts);
+}
+
+function saveAiAdvisorMode(updated: Record<string, boolean>): void {
+  chatAiAdvisorMode = updated;
+  saveJson(AI_ADVISOR_MODE_FILE, chatAiAdvisorMode);
+  persistToPg('ai_advisor_mode', chatAiAdvisorMode).catch(() => {});
+}
+
+function setChatAiAdvisorMode(chatId: string | number, enabled: boolean): void {
+  const cId = String(chatId).trim();
+  if (!cId) return;
+  chatAiAdvisorMode = loadJson<Record<string, boolean>>(AI_ADVISOR_MODE_FILE, chatAiAdvisorMode);
+  if (enabled) {
+    chatAiAdvisorMode[cId] = true;
+  } else {
+    delete chatAiAdvisorMode[cId];
+  }
+  saveAiAdvisorMode(chatAiAdvisorMode);
+}
+
+function isChatInAiAdvisorMode(chatId: string | number): boolean {
+  const cId = String(chatId).trim();
+  if (!cId) return false;
+  chatAiAdvisorMode = loadJson<Record<string, boolean>>(AI_ADVISOR_MODE_FILE, chatAiAdvisorMode);
+  return Boolean(chatAiAdvisorMode[cId]);
 }
 
 export function getLinkedUsersForChat(
@@ -3677,6 +3709,8 @@ export function buildDuplicatesReportTelegramMessage(
 // ---------------- Helper to send Telegram message & Handy Buttons ----------------
 
 export const TELEGRAM_BOT_COMMANDS = [
+  { command: 'ask', description: '🤖 Gemini AI Financial Advisor (Chat / Plan / Strategy)' },
+  { command: 'done', description: '✅ AI Advisor mode exit karein & normal mode me aayein' },
   { command: 'balance', description: '💰 Net balance aur kul bachat dekhein' },
   { command: 'summary', description: '📊 Mahine ki income, kharcha & bachat report' },
   { command: 'compare', description: '📈 Is mahine vs Pichla mahina spending comparison' },
@@ -3689,7 +3723,6 @@ export const TELEGRAM_BOT_COMMANDS = [
   { command: 'accounts', description: '👥 Linked accounts dekhein & unlink buttons' },
   { command: 'budget', description: '🎯 Category-wise kharcha aur bacha budget' },
   { command: 'date', description: '📅 Kisi bhi tareeq ka kharcha & income dekhein' },
-  { command: 'tips', description: '🤖 AI Faltu Kharcha & Bachat Tips' },
   { command: 'recent', description: '🕒 Haal hi ke aakhri 5 transactions' },
   { command: 'buttons', description: '📱 Handy Quick Action Buttons on screen' },
   { command: 'categories', description: '🏷️ Active categories aur keywords dekhein' },
@@ -3707,8 +3740,17 @@ export const TELEGRAM_HANDY_KEYBOARD = {
     [{ text: '🤝 Udhaar Khata' }, { text: '⛽ Fuel Tracker' }],
     [{ text: '🐷 Gullak' }, { text: '🎯 Category Budget' }],
     [{ text: '👥 My Accounts' }, { text: '📅 Aaj Ka Hisab' }],
-    [{ text: '🤖 AI Tips & Bachat' }, { text: '🕒 Recent 5 Tx' }],
+    [{ text: '🤖 Ask AI Advisor (/ask)' }, { text: '🕒 Recent 5 Tx' }],
     [{ text: '↩️ Undo Last' }, { text: '❓ Help & Guide' }],
+  ],
+  resize_keyboard: true,
+  is_persistent: true,
+};
+
+export const TELEGRAM_AI_ADVISOR_KEYBOARD = {
+  keyboard: [
+    [{ text: '✅ Exit AI Mode (/done)' }, { text: '💰 Balance' }],
+    [{ text: '📊 Summary' }, { text: '🎯 Category Budget' }],
   ],
   resize_keyboard: true,
   is_persistent: true,
@@ -3737,7 +3779,7 @@ export const INLINE_KB_MAIN_COMMANDS = {
       { text: '📅 Aaj Ka Hisab', callback_data: 'cmd_date_today' },
     ],
     [
-      { text: '🤖 AI Faltu Kharcha', callback_data: 'cmd_tips' },
+      { text: '🤖 Ask AI Advisor', callback_data: 'cmd_ask' },
       { text: '🕒 Recent 5 Tx', callback_data: 'cmd_recent' },
     ],
   ],
@@ -4337,7 +4379,9 @@ async function handleTelegramCallbackQuery(callbackQuery: any) {
   await answerTelegramCallbackQuery(token, callbackId);
 
   let simulatedText = '';
-  if (data === 'cmd_balance') simulatedText = '/balance';
+  if (data === 'cmd_ask') simulatedText = '/ask';
+  else if (data === 'cmd_done') simulatedText = '/done';
+  else if (data === 'cmd_balance') simulatedText = '/balance';
   else if (data === 'cmd_summary') simulatedText = '/summary';
   else if (data === 'cmd_compare' || data === 'cmd_mom') simulatedText = '/compare';
   else if (data === 'cmd_search' || data === 'cmd_find') simulatedText = '/find';
@@ -4814,6 +4858,155 @@ async function handleTelegramMessage(messageObj: any) {
     }
   }
 
+  // 2.8 AI Financial Advisor Exit Command (/done, /exit, /stop, /cancel, 'exit ai')
+  const isDoneCmd =
+    cleanCmd === '/done' ||
+    cleanCmd === '/exit' ||
+    cleanCmd === '/stop' ||
+    cleanCmd === '/cancel' ||
+    cleanCmd === '/finish' ||
+    lowerText === 'done' ||
+    lowerText === 'exit' ||
+    lowerText === 'stop' ||
+    lowerText === 'cancel' ||
+    lowerText === 'finish' ||
+    lowerText.includes('exit ai mode') ||
+    lowerText.includes('finish ai mode');
+
+  if (isDoneCmd) {
+    setChatAiAdvisorMode(chatId, false);
+    if (fromId) setChatAiAdvisorMode(fromId, false);
+    await sendTelegramReply(
+      botToken,
+      chatId,
+      `✅ <b>AI Financial Advisor Mode Finished!</b>\n━━━━━━━━━━━━━━━━━━━━\nBot wapas normal transaction tracking mode me aa gaya hai.\n\n💡 <b>Ab aap apne daily kharche ya kamai bhej sakte hain:</b>\n• <code>500 grocery cash</code>\n• <code>300 petrol upi</code>\n• <code>1200 restaurant card</code>\n\n🤖 <i>(Jab dobara AI Advisor se financial planning, goals ya investment strategy par salah chahiye ho, bas <code>/ask</code> likhein ya <b>🤖 Ask AI Advisor</b> button dabayein!)</i>`,
+      TELEGRAM_HANDY_KEYBOARD
+    );
+    return;
+  }
+
+  // 2.9 AI Financial Advisor Start / Ask Command (/ask, /advisor, /askai, '🤖 Ask AI Advisor')
+  const isAskCmd =
+    cleanCmd === '/ask' ||
+    cleanCmd === '/advisor' ||
+    cleanCmd === '/askai' ||
+    lowerText.startsWith('/ask') ||
+    lowerText.startsWith('/advisor') ||
+    lowerText === 'ask ai' ||
+    lowerText === 'ai advisor' ||
+    lowerText.includes('ask ai advisor') ||
+    lowerText.includes('ask advisor');
+
+  if (isAskCmd) {
+    setChatAiAdvisorMode(chatId, true);
+    if (fromId) setChatAiAdvisorMode(fromId, true);
+
+    let questionArg = '';
+    if (lowerText.startsWith('/ask')) {
+      questionArg = rawText.replace(/^\/ask(@\w+)?/i, '').trim();
+    } else if (lowerText.startsWith('/advisor')) {
+      questionArg = rawText.replace(/^\/advisor(@\w+)?/i, '').trim();
+    } else if (lowerText.startsWith('/askai')) {
+      questionArg = rawText.replace(/^\/askai(@\w+)?/i, '').trim();
+    }
+
+    if (questionArg) {
+      await sendTelegramReply(
+        botToken,
+        chatId,
+        `🤖 <i>Gemini AI aapka khata aur ledger analyze karke answer taiyar kar raha hai...</i> ⏳`,
+        TELEGRAM_AI_ADVISOR_KEYBOARD
+      );
+      const aiAnswer = await answerAiFinancialQuestion(userId, questionArg);
+      const formattedHtml = formatMarkdownToTelegramHtml(aiAnswer.text);
+      await sendTelegramReply(
+        botToken,
+        chatId,
+        formattedHtml,
+        {
+          inline_keyboard: [
+            [
+              { text: '💬 Aur Sawaal Poochein', callback_data: 'cmd_ask' },
+              { text: '✅ Exit AI Mode (/done)', callback_data: 'cmd_done' },
+            ]
+          ]
+        }
+      );
+      return;
+    }
+
+    const welcomeAiMsg = `🤖 <b>GEMINI AI FINANCIAL ADVISOR ACTIVATED!</b> 📊
+━━━━━━━━━━━━━━━━━━━━
+👤 <b>Khata:</b> ${targetUser.name}
+
+Aapka complete live ledger (Bank balances, Credit cards, Expenses, Investments, Udhaar, Piggy Bank Goals & Wife savings) AI ke paas connect ho gaya hai!
+
+💬 <b>Ab aap normal chats / questions bhej sakte hain:</b>
+• 🎯 <i>"Meri monthly bachat badhane ke liye kya planning karein?"</i>
+• 🚗 <i>"Mujhe 1 saal me goal reach karna hai, roadmap batao"</i>
+• 📈 <i>"Mere surplus ke hisaab se best investment (MF / FD / Gold) strategy kya hogi?"</i>
+• 💳 <i>"Mere credit card dues aur limits ko kaise optimize karein?"</i>
+• ⚠️ <i>"Mere kharchon me sabse zyada faltu kharcha kaha ho raha hai?"</i>
+
+━━━━━━━━━━━━━━━━━━━━
+🔙 <b>Exit Karne Ke Liye:</b>
+Jab bhi normal expense entry mode me wapas aana ho, bas <code>/done</code> ya <code>/exit</code> likhein ya neeche <b>✅ Exit AI Mode</b> button dabayein!`;
+
+    await sendTelegramReply(
+      botToken,
+      chatId,
+      welcomeAiMsg,
+      TELEGRAM_AI_ADVISOR_KEYBOARD
+    );
+    return;
+  }
+
+  // 2.95 Check if user is actively in AI Advisor Conversational Mode
+  const isChatActiveInAiMode = isChatInAiAdvisorMode(chatId) || (fromId ? isChatInAiAdvisorMode(fromId) : false);
+  const isSystemOrUtilityCommand =
+    command === '/start' ||
+    command === '/help' ||
+    command === '/menu' ||
+    command === '/buttons' ||
+    command === '/accounts' ||
+    command === '/link' ||
+    command === '/unlink' ||
+    command === '/clearall' ||
+    command === '/balance' ||
+    command === '/balances' ||
+    command === '/summary' ||
+    command === '/budget' ||
+    command === '/recent' ||
+    command === '/undo' ||
+    cleanCmd === '/setlimit' ||
+    cleanCmd === '/setbalance';
+
+  if (isChatActiveInAiMode && !isSystemOrUtilityCommand) {
+    // Treat the incoming natural text as an AI Financial advisory question
+    await sendTelegramReply(
+      botToken,
+      chatId,
+      `🤖 <i>Gemini AI aapka question aur khata analyze kar raha hai...</i> ⏳`,
+      TELEGRAM_AI_ADVISOR_KEYBOARD
+    );
+    const aiAnswer = await answerAiFinancialQuestion(userId, rawText);
+    const formattedHtml = formatMarkdownToTelegramHtml(aiAnswer.text);
+    await sendTelegramReply(
+      botToken,
+      chatId,
+      formattedHtml,
+      {
+        inline_keyboard: [
+          [
+            { text: '💬 Aur Sawaal Poochein', callback_data: 'cmd_ask' },
+            { text: '✅ Exit AI Mode (/done)', callback_data: 'cmd_done' },
+          ]
+        ]
+      }
+    );
+    return;
+  }
+
   // 3. Help, Buttons & Commands
   if (
     command === '/start' ||
@@ -4860,6 +5053,8 @@ Aap neeche diye gaye inline buttons par tap karein, keyboard buttons use karein 
 • <code>/clearall</code> ya <code>sab delete karo</code> - Saare transactions clear karein
 
 📊 <b>Handy Commands:</b>
+/ask - 🤖 Gemini AI Financial Advisor (Chat/Planning/Strategy mode)
+/done - ✅ AI mode exit karein & normal mode me aayein
 /balance - Kul bacha hua balance check karein
 /summary - Mahine ki summary report
 /compare - Is mahine vs pichla mahina MoM spending comparison
@@ -4869,7 +5064,6 @@ Aap neeche diye gaye inline buttons par tap karein, keyboard buttons use karein 
 /budget - Category-wise kharcha aur bacha budget
 /setbudget - Naya monthly budget set karein (jaise: <code>/setbudget Food 5000</code>)
 /date - Tareeq ka hisaab (jaise: <code>/date 2 sep</code> ya <code>kal</code>)
-/tips - Gemini AI se janein kaha faltu kharcha hua aur bachat tips
 /recent - Aakhri 5 transactions dekhein
 /unlink - Account se Telegram unlink karein
 /buttons - Handy quick buttons screen par layein
@@ -10200,6 +10394,170 @@ Return ONLY a valid JSON object with this exact schema:
   return fallbackInsights;
 }
 
+// ---------------- Helper to format AI Markdown for Telegram HTML ----------------
+export function formatMarkdownToTelegramHtml(text: string): string {
+  if (!text) return '';
+  let formatted = text
+    // Replace ```blocks``` with <pre>
+    .replace(/```([\s\S]*?)```/g, '<pre>$1</pre>')
+    // Replace `inline code` with <code>
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    // Replace **bold** with <b>bold</b>
+    .replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>')
+    // Replace *italic* or _italic_ with <i>italic</i>
+    .replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, '<i>$1</i>')
+    .replace(/(?<!\w)_([^_]+)_(?!\w)/g, '<i>$1</i>')
+    // Replace markdown headers ### Header with <b>Header</b>
+    .replace(/^###?\s+(.+)$/gm, '<b>$1</b>')
+    // Replace markdown list item - or * with bullet •
+    .replace(/^[-*]\s+/gm, '• ');
+  return formatted;
+}
+
+// ---------------- Gemini Conversational AI Financial Advisor ----------------
+export async function answerAiFinancialQuestion(
+  userId: string,
+  userQuestion: string,
+  conversationHistory?: Array<{ role: 'user' | 'model'; text: string }>
+): Promise<{ text: string; model: string; source: 'gemini' | 'rule_fallback' }> {
+  const store = getUserData(userId);
+  const user = users.find(u => u.id === userId) || { name: 'User', id: userId, email: 'user@example.com' };
+  const summary = calculateUserSummary(userId);
+  const accountBalances = calculateAccountsBalances(userId);
+  const ruleBasedAvoidable = calculateAvoidableSpending(store.transactions);
+
+  const bankAccounts = Object.entries(accountBalances.accounts).filter(([_, a]) => a.type === 'bank_account' || a.type === 'cash');
+  const creditCards = Object.entries(accountBalances.accounts).filter(([_, a]) => a.type === 'credit_card' || a.type === 'rupay_card');
+  const wifeSavings = accountBalances.wifeSavings;
+
+  const goals: any[] = (store as any).goals || (store as any).piggyBankFunds || [];
+  const investments = store.investments || [];
+  const totalInvestmentValue = investments.reduce((sum, inv) => sum + (Number(inv.currentValue || inv.amount) || 0), 0);
+  const totalInvestedPrincipal = investments.reduce((sum, inv) => sum + (Number(inv.amount) || 0), 0);
+
+  const udhaars = store.udhaars || [];
+  const pendingLent = udhaars.filter(u => u.status === 'pending' && u.type === 'lent').reduce((sum, u) => sum + (Number(u.amount) || 0), 0);
+  const pendingBorrowed = udhaars.filter(u => u.status === 'pending' && u.type === 'borrowed').reduce((sum, u) => sum + (Number(u.amount) || 0), 0);
+
+  const categoryTotals: Record<string, number> = {};
+  for (const t of store.transactions) {
+    if (t.type === 'expense') {
+      categoryTotals[t.category] = (categoryTotals[t.category] || 0) + t.amount;
+    }
+  }
+
+  const ai = getGeminiClient();
+
+  const systemContextPrompt = `You are an elite, certified Indian Personal Wealth Coach and Financial Planner exclusively dedicated to ${user.name}.
+You have direct, real-time access to ${user.name}'s complete live personal financial ledger:
+
+=== LIVE FINANCIAL LEDGER CONTEXT FOR ${user.name} ===
+• User Name: ${user.name} (${user.email})
+• Total Income: ₹${summary.totalIncome.toLocaleString('en-IN')}
+• Total Expenses: ₹${summary.totalExpense.toLocaleString('en-IN')}
+• Net Savings / Cash-in-Bank: ₹${(summary.totalNetSavings || summary.netSavings).toLocaleString('en-IN')}
+• Savings Rate: ${summary.savingsRate}%
+
+=== BANK ACCOUNTS & CASH BALANCES ===
+${bankAccounts.map(([id, a]) => `• ${a.name} (${id}): Live Balance ₹${a.balance.toLocaleString('en-IN')} (Base: ₹${a.baseBalance}, Credits: ₹${a.totalCredits}, Debits: ₹${a.totalDebits})`).join('\n') || 'None'}
+
+=== CREDIT CARDS (LIMITS, SPENDS & DUES) ===
+${creditCards.map(([id, a]) => `• ${a.name} (${id}): Credit Limit ₹${a.creditLimit.toLocaleString('en-IN')}, Current Spends/Due ₹${(a.currentOutstanding || 0).toLocaleString('en-IN')}, Available Limit ₹${(a.availableLimit || 0).toLocaleString('en-IN')}`).join('\n') || 'None'}
+
+=== WIFE SAVINGS & KHATA ===
+• Starting Base: ₹${wifeSavings.baseBalance.toLocaleString('en-IN')}
+• Total Transferred: ₹${wifeSavings.totalTransferred.toLocaleString('en-IN')}
+• Live Current Balance: ₹${(wifeSavings.currentBalance || (wifeSavings.baseBalance + wifeSavings.totalTransferred)).toLocaleString('en-IN')}
+
+=== INVESTMENTS & PORTFOLIO ===
+• Total Portfolio Value: ₹${totalInvestmentValue.toLocaleString('en-IN')}
+• Total Principal Invested: ₹${totalInvestedPrincipal.toLocaleString('en-IN')}
+• Portfolio Items: ${investments.length > 0 ? investments.map(inv => `${inv.name || inv.type || 'Investment'} (Invested: ₹${inv.amount}, Value: ₹${inv.currentValue || inv.amount}, Type: ${inv.type || 'MF'})`).join('; ') : 'No investments logged yet'}
+
+=== UDHAAR KHATA (DEBTS & RECEIVABLES) ===
+• Money you will receive (Lent pending): ₹${pendingLent.toLocaleString('en-IN')}
+• Money you have to give (Borrowed pending): ₹${pendingBorrowed.toLocaleString('en-IN')}
+
+=== DEDICATED GOALS & PIGGY BANK FUNDS ===
+${goals.length > 0 ? goals.map((g: any) => `• ${g.name}: Saved ₹${(g.currentBalance || g.currentAmount || 0).toLocaleString('en-IN')} / Target ₹${(g.targetAmount || 0).toLocaleString('en-IN')}`).join('\n') : 'No dedicated goal funds created yet'}
+
+=== TOP EXPENSE CATEGORIES ===
+${Object.entries(categoryTotals).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([cat, amt]) => `• ${cat}: ₹${amt.toLocaleString('en-IN')}`).join('\n') || 'No expenses logged'}
+
+=== DETECTED FALTU / AVOIDABLE SPENDS ===
+• Total Avoidable: ₹${ruleBasedAvoidable.totalAvoidableAmount.toLocaleString('en-IN')} (${ruleBasedAvoidable.percentageOfExpenses}% of expenses)
+• Items: ${ruleBasedAvoidable.items.map(i => `${i.title} (₹${i.amount} - ${i.reason})`).join(', ') || 'None'}
+
+=== RECENT TRANSACTIONS (LAST 15) ===
+${store.transactions.slice(0, 15).map(t => `[${t.date}] ${t.type === 'income' ? '+' : '-'}₹${t.amount} | ${t.description} | ${t.category} | ${t.account || t.paymentMethod}`).join('\n') || 'None'}
+=====================================================
+
+USER'S QUESTION:
+"${userQuestion}"
+
+INSTRUCTIONS FOR ANSWERING:
+1. Always respond in natural, friendly, fluent conversational Hinglish (Hindi written in Roman script) or English, matching the user's tone.
+2. CITE ACTUAL NUMBERS: Always ground your answers directly in their real financial data from above (e.g. cite their actual Bank balance, Credit Card limit & due, Wife savings, Investment portfolio, specific category spends).
+3. If asking about Financial Planning: Give a clear 50/30/20 or tailored monthly allocation plan with exact ₹ numbers based on their actual income and expenses.
+4. If asking about Goal Savings: Calculate exact monthly saving required, timeline, and recommended low-risk/high-yield instrument (e.g. Liquid Funds/FD for short term, Index MF/Flexicap for >3 years).
+5. If asking about Investment Strategy: Recommend a realistic Indian portfolio asset allocation (Nifty 50 Index SIP, Sovereign Gold/Gold ETF, PPF, Emergency Liquid Fund).
+6. If asking about Credit Cards: Analyze their dues vs limit, advise keeping card utilization under 30%, and paying bill in full before due date.
+7. If asking about Expense Reduction: Highlight their highest or avoidable spend categories and calculate exact monthly/yearly potential savings.
+8. Keep your response well-structured, inspiring, actionable, with clear bullet points (•), bold text for key figures, and appropriate emojis.
+`;
+
+  if (ai) {
+    try {
+      const result = await callGeminiCandidateModels(ai, systemContextPrompt);
+      if (result && result.text) {
+        return {
+          text: result.text.trim(),
+          model: result.model,
+          source: 'gemini',
+        };
+      }
+    } catch (err: any) {
+      console.error('Error answering AI financial question:', err.message);
+    }
+  }
+
+  // Smart Rule-Based Financial Advisor Fallback (if Gemini key is unavailable or during network outage)
+  let fallbackAnswer = `🤖 <b>FINANCIAL ADVISORY SUMMARY FOR ${user.name.toUpperCase()}</b>\n━━━━━━━━━━━━━━━━━━━━\n`;
+  fallbackAnswer += `💰 <b>Monthly Income:</b> ₹${summary.totalIncome.toLocaleString('en-IN')}\n`;
+  fallbackAnswer += `🔴 <b>Total Expenses:</b> ₹${summary.totalExpense.toLocaleString('en-IN')}\n`;
+  fallbackAnswer += `🟢 <b>Net Savings:</b> ₹${(summary.totalNetSavings || summary.netSavings).toLocaleString('en-IN')} (Bachat Dar: <b>${summary.savingsRate}%</b>)\n\n`;
+
+  fallbackAnswer += `📊 <b>SMART ACTION PLAN:</b>\n`;
+  if (summary.savingsRate < 20) {
+    fallbackAnswer += `• <b>Bachat Badhayein:</b> Aapki current bachat rate ${summary.savingsRate}% hai. Ideal target kam se kam 20%-30% hona chahiye (₹${Math.round(summary.totalIncome * 0.25).toLocaleString('en-IN')}/mahina).\n`;
+  } else {
+    fallbackAnswer += `• <b>Bachat Rate Strong Hai:</b> Aapki bachat dar ${summary.savingsRate}% hai jo kaafi healthy hai! Ise smart investments me allocate karein.\n`;
+  }
+
+  if (ruleBasedAvoidable.totalAvoidableAmount > 0) {
+    fallbackAnswer += `• <b>Faltu Kharcha Cut:</b> Lagbhag ₹${ruleBasedAvoidable.totalAvoidableAmount.toLocaleString('en-IN')} ka avoidable kharcha detect hua hai. Ise rokne se saal me <b>₹${(ruleBasedAvoidable.totalAvoidableAmount * 12).toLocaleString('en-IN')}</b> ki extra bachat hogi!\n`;
+  }
+
+  if (creditCards.length > 0) {
+    const totalCcDue = creditCards.reduce((sum, [_, c]) => sum + (c.currentOutstanding || 0), 0);
+    if (totalCcDue > 0) {
+      fallbackAnswer += `• <b>Credit Card Priority:</b> Aapka kul CC due ₹${totalCcDue.toLocaleString('en-IN')} hai. Interest se bachne ke liye due date se pehle full payment karein.\n`;
+    }
+  }
+
+  fallbackAnswer += `• <b>Recommended Investment Strategy:</b>\n`;
+  fallbackAnswer += `  - 50% Nifty 50 Index Mutual Fund SIP\n`;
+  fallbackAnswer += `  - 25% Flexi-Cap / Multi-Cap Equity SIP\n`;
+  fallbackAnswer += `  - 15% Sovereign Gold Bonds (SGB) / Gold ETF\n`;
+  fallbackAnswer += `  - 10% Emergency Fund (Liquid FD / High-Yield Savings)\n`;
+
+  return {
+    text: fallbackAnswer,
+    model: 'RuleEngine-CFP',
+    source: 'rule_fallback',
+  };
+}
+
 // 7. AI Financial Insights Generator (User-Scoped)
 app.post('/api/ai/insights', async (req, res) => {
   const user = getRequestUser(req);
@@ -10209,6 +10567,22 @@ app.post('/api/ai/insights', async (req, res) => {
   } catch (err: any) {
     console.error('Error generating AI insights:', err);
     res.status(500).json({ error: 'Failed to generate AI insights' });
+  }
+});
+
+// 7.05 Conversational AI Financial Advisor Chat API (User-Scoped)
+app.post('/api/ai/ask', async (req, res) => {
+  const user = getRequestUser(req);
+  const { question, history } = req.body;
+  if (!question || !String(question).trim()) {
+    return res.status(400).json({ error: 'Question is required' });
+  }
+  try {
+    const response = await answerAiFinancialQuestion(user.id, String(question).trim(), history);
+    res.json(response);
+  } catch (err: any) {
+    console.error('Error in /api/ai/ask:', err);
+    res.status(500).json({ error: 'Failed to process AI question: ' + err.message });
   }
 });
 

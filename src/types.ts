@@ -253,6 +253,20 @@ export interface AvoidableExpenseItem {
   reason: string;
 }
 
+export interface AiChatMessage {
+  id: string;
+  sender: 'user' | 'ai';
+  text: string;
+  timestamp: string;
+  model?: string;
+}
+
+export interface AiAdvisorResponse {
+  answer: string;
+  model?: string;
+  source?: 'gemini' | 'rule_fallback';
+}
+
 export interface AiFinancialInsights {
   overview: string;
   healthScore: number;
