@@ -172,6 +172,22 @@ export default function App() {
     return Array.from(set).sort().reverse();
   }, [transactions]);
 
+  // When transactions load, if the currently selected month has 0 transactions but other months have transactions,
+  // and user hasn't explicitly locked a month preference, show 'all' so entries are immediately visible instead of showing 0
+  useEffect(() => {
+    if (transactions.length > 0) {
+      try {
+        const storedPref = localStorage.getItem('teleexpense_selected_month');
+        if (!storedPref) {
+          const hasTxInSelectedMonth = transactions.some(t => t.date && t.date.startsWith(selectedMonth));
+          if (!hasTxInSelectedMonth) {
+            setSelectedMonth('all');
+          }
+        }
+      } catch {}
+    }
+  }, [transactions]);
+
   // Modals state
   const [isBotSetupOpen, setIsBotSetupOpen] = useState(false);
   const [isAiInsightsOpen, setIsAiInsightsOpen] = useState(false);

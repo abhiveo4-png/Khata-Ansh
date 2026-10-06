@@ -801,12 +801,34 @@ export const TransactionList: React.FC<TransactionListProps> = ({
           <div className="w-14 h-14 rounded-2xl bg-white/[0.04] border border-white/[0.08] text-slate-400 mx-auto flex items-center justify-center mb-3 shadow-inner">
             <Filter className="w-6 h-6 text-slate-400" />
           </div>
-          <h4 className="text-sm font-semibold text-slate-200">Koi transaction nahi mila</h4>
-          <p className="text-xs text-slate-400 max-w-sm mx-auto mt-1">
-            {hasActiveFilters
-              ? 'Filter criteria badlein ya filters reset karein.'
-              : 'Naya kharcha add karein ya Telegram par message bhejein.'}
-          </p>
+          <h4 className="text-sm font-semibold text-slate-200">
+            {selectedMonth && selectedMonth !== 'all' && transactions.length > 0
+              ? `Chune huye mahine (${selectedMonth}) me koi transaction nahi hai`
+              : 'Koi transaction nahi mila'}
+          </h4>
+          <div className="text-xs text-slate-400 max-w-sm mx-auto mt-1">
+            {selectedMonth && selectedMonth !== 'all' && transactions.length > 0 ? (
+              <div className="space-y-3">
+                <p>
+                  Aapke khate me kul <b>{transactions.length} entries</b> recorded hain jo doosre mahino ki hain.
+                </p>
+                {onSelectMonth && (
+                  <button
+                    onClick={() => onSelectMonth('all')}
+                    className="px-3.5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-semibold cursor-pointer shadow-md inline-flex items-center gap-1.5 transition-all"
+                  >
+                    <span>🌟 Sabhi {transactions.length} Transactions Dekhein (All Months)</span>
+                  </button>
+                )}
+              </div>
+            ) : (
+              <p>
+                {hasActiveFilters
+                  ? 'Filter criteria badlein ya filters reset karein.'
+                  : 'Naya kharcha add karein ya Telegram par message bhejein.'}
+              </p>
+            )}
+          </div>
         </div>
       ) : (
         <div className="divide-y divide-white/[0.06] overflow-x-auto">

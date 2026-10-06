@@ -6,6 +6,5 @@
   "isWebhookSet": true,
   "lastWebhookCheck": "2026-08-16T12:53:08.816Z",
   "pendingUpdateCount": 0,
-  "isConnected": true,
-  "geminiApiKey": "AIzaSyTestKeyForChecking"
+  "isConnected": true
 }
