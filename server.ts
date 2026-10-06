@@ -10426,6 +10426,118 @@ export async function answerAiFinancialQuestion(
   const accountBalances = calculateAccountsBalances(userId);
   const ruleBasedAvoidable = calculateAvoidableSpending(store.transactions || []);
 
+  const istInfo = getAppDateTime();
+  const currentMonthPrefix = istInfo.date.substring(0, 7); // e.g. "2026-10"
+
+  // Month-by-month aggregation map
+  interface MonthSummaryData {
+    monthKey: string; // "2026-10"
+    monthName: string; // "October 2026"
+    isCurrentMonth: boolean;
+    income: number;
+    totalExpense: number;
+    personalExpense: number;
+    savingsTransfers: number;
+    reimbursements: number;
+    netSavings: number;
+    savingsRate: number;
+    transactionCount: number;
+    categories: Record<string, number>;
+    topTransactions: Array<{ date: string; amount: number; type: string; description: string; category: string; paymentMethod: string }>;
+  }
+
+  const monthsMap = new Map<string, MonthSummaryData>();
+  const txList = store.transactions || [];
+
+  for (const t of txList) {
+    const rawDate = t.date || istInfo.date;
+    const mKey = rawDate.substring(0, 7);
+    if (!monthsMap.has(mKey)) {
+      const [yStr, mStr] = mKey.split('-');
+      const mIdx = parseInt(mStr, 10) - 1;
+      const mNames = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+      const mName = mIdx >= 0 && mIdx < 12 ? `${mNames[mIdx]} ${yStr}` : mKey;
+      monthsMap.set(mKey, {
+        monthKey: mKey,
+        monthName: mName,
+        isCurrentMonth: mKey === currentMonthPrefix,
+        income: 0,
+        totalExpense: 0,
+        personalExpense: 0,
+        savingsTransfers: 0,
+        reimbursements: 0,
+        netSavings: 0,
+        savingsRate: 0,
+        transactionCount: 0,
+        categories: {},
+        topTransactions: []
+      });
+    }
+
+    const mData = monthsMap.get(mKey)!;
+    const amt = Number(t.amount) || 0;
+    mData.transactionCount++;
+
+    if (t.type === 'income') {
+      mData.income += amt;
+    } else {
+      mData.totalExpense += amt;
+      const isRim = Boolean(t.isReimbursement || t.category === 'Reimbursement');
+      if (isRim) {
+        mData.reimbursements += amt;
+      } else if (t.isSavingsTransfer) {
+        mData.savingsTransfers += amt;
+      } else {
+        mData.personalExpense += amt;
+        mData.categories[t.category] = (mData.categories[t.category] || 0) + amt;
+      }
+    }
+
+    if (mData.topTransactions.length < 8) {
+      mData.topTransactions.push({
+        date: t.date,
+        amount: amt,
+        type: t.type,
+        description: t.description,
+        category: t.category,
+        paymentMethod: t.account || t.paymentMethod
+      });
+    }
+  }
+
+  // Calculate net savings and savings rates for each month
+  for (const mData of monthsMap.values()) {
+    mData.netSavings = mData.income - mData.personalExpense;
+    mData.savingsRate = mData.income > 0 ? Math.max(0, Math.round((mData.netSavings / mData.income) * 100)) : 0;
+  }
+
+  // Sorted months descending (latest month first)
+  const sortedMonths = Array.from(monthsMap.values()).sort((a, b) => b.monthKey.localeCompare(a.monthKey));
+  
+  // Ensure current month exists in the list even if no transactions yet
+  let currentMonthData = sortedMonths.find(m => m.monthKey === currentMonthPrefix);
+  if (!currentMonthData) {
+    const [yStr, mStr] = currentMonthPrefix.split('-');
+    const mIdx = parseInt(mStr, 10) - 1;
+    const mNames = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+    const mName = mIdx >= 0 && mIdx < 12 ? `${mNames[mIdx]} ${yStr}` : currentMonthPrefix;
+    currentMonthData = {
+      monthKey: currentMonthPrefix,
+      monthName: mName,
+      isCurrentMonth: true,
+      income: 0,
+      totalExpense: 0,
+      personalExpense: 0,
+      savingsTransfers: 0,
+      reimbursements: 0,
+      netSavings: 0,
+      savingsRate: 0,
+      transactionCount: 0,
+      categories: {},
+      topTransactions: []
+    };
+  }
+
   const accountsMap = accountBalances?.accounts || {};
   const bankAccounts = Object.entries(accountsMap).filter(([_, a]) => a && (a.type === 'bank_account' || a.type === 'cash'));
   const creditCards = Object.entries(accountsMap).filter(([_, a]) => a && (a.type === 'credit_card' || a.type === 'rupay_card'));
@@ -10440,10 +10552,10 @@ export async function answerAiFinancialQuestion(
   const pendingLent = udhaars.filter(u => u.status === 'pending' && u.type === 'lent').reduce((sum, u) => sum + (Number(u.amount) || 0), 0);
   const pendingBorrowed = udhaars.filter(u => u.status === 'pending' && u.type === 'borrowed').reduce((sum, u) => sum + (Number(u.amount) || 0), 0);
 
-  const categoryTotals: Record<string, number> = {};
-  for (const t of (store.transactions || [])) {
-    if (t.type === 'expense') {
-      categoryTotals[t.category] = (categoryTotals[t.category] || 0) + (Number(t.amount) || 0);
+  const allCategoryTotals: Record<string, number> = {};
+  for (const t of txList) {
+    if (t.type === 'expense' && !t.isReimbursement && !t.isSavingsTransfer) {
+      allCategoryTotals[t.category] = (allCategoryTotals[t.category] || 0) + (Number(t.amount) || 0);
     }
   }
 
@@ -10452,59 +10564,76 @@ export async function answerAiFinancialQuestion(
   const systemContextPrompt = `You are an elite, certified Indian Personal Wealth Coach and Financial Planner exclusively dedicated to ${user.name}.
 You have direct, real-time access to ${user.name}'s complete live personal financial ledger:
 
-=== LIVE FINANCIAL LEDGER CONTEXT FOR ${user.name} ===
-• User Name: ${user.name} (${user.email})
-• Total Income: ₹${(Number(summary?.totalIncome) || 0).toLocaleString('en-IN')}
-• Total Expenses: ₹${(Number(summary?.totalExpense) || 0).toLocaleString('en-IN')}
-• Net Savings / Cash-in-Bank: ₹${(Number(summary?.totalNetSavings || summary?.netSavings) || 0).toLocaleString('en-IN')}
-• Savings Rate: ${Number(summary?.savingsRate) || 0}%
+=== 📅 LIVE MONTH-BY-MONTH FINANCIAL BREAKDOWN (SEPARATE DATA FOR EACH MONTH) ===
+${sortedMonths.map(m => `
+🗓️ MONTH: ${m.monthName} (${m.monthKey}) ${m.isCurrentMonth ? '[CURRENT ACTIVE MONTH]' : ''}
+• Total Income: ₹${m.income.toLocaleString('en-IN')}
+• Personal Expenses: ₹${m.personalExpense.toLocaleString('en-IN')} (Total Outflows: ₹${m.totalExpense.toLocaleString('en-IN')})
+• Net Monthly Savings: ₹${m.netSavings.toLocaleString('en-IN')}
+• Monthly Savings Rate: ${m.savingsRate}%
+• Category Spends in this month: ${Object.entries(m.categories).map(([c, a]) => `${c}: ₹${a.toLocaleString('en-IN')}`).join(', ') || 'None'}
+• Key Transactions in this month: ${m.topTransactions.map(t => `${t.date}: ${t.type === 'income' ? '+' : '-'}₹${t.amount.toLocaleString('en-IN')} (${t.description})`).join('; ') || 'None'}
+`).join('\n') || 'No monthly transactions logged yet.'}
 
-=== BANK ACCOUNTS & CASH BALANCES ===
+=== 📊 ALL-TIME CUMULATIVE STATS (LIFETIME TOTAL OF ALL MONTHS COMBINED) ===
+• All-Time Total Income (All months): ₹${(Number(summary?.totalIncome) || 0).toLocaleString('en-IN')}
+• All-Time Total Expenses (All months): ₹${(Number(summary?.totalExpense) || 0).toLocaleString('en-IN')}
+• All-Time Net Balance / Bank Holdings: ₹${(Number(summary?.totalNetSavings || summary?.netSavings) || 0).toLocaleString('en-IN')}
+• Current Month (${currentMonthData.monthName}) Income: ₹${currentMonthData.income.toLocaleString('en-IN')}
+• Current Month (${currentMonthData.monthName}) Personal Expenses: ₹${currentMonthData.personalExpense.toLocaleString('en-IN')}
+• Current Month (${currentMonthData.monthName}) Net Savings: ₹${currentMonthData.netSavings.toLocaleString('en-IN')}
+
+=== 🏦 BANK ACCOUNTS & CASH BALANCES ===
 ${bankAccounts.map(([id, a]) => `• ${a.name} (${id}): Live Balance ₹${(Number(a.balance) || 0).toLocaleString('en-IN')} (Base: ₹${(Number(a.baseBalance) || 0).toLocaleString('en-IN')}, Credits: ₹${(Number(a.totalCredits) || 0).toLocaleString('en-IN')}, Debits: ₹${(Number(a.totalDebits) || 0).toLocaleString('en-IN')})`).join('\n') || 'None'}
 
-=== CREDIT CARDS (LIMITS, SPENDS & DUES) ===
+=== 💳 CREDIT CARDS (LIMITS, SPENDS & DUES) ===
 ${creditCards.map(([id, a]) => `• ${a.name} (${id}): Credit Limit ₹${(Number(a.creditLimit) || 0).toLocaleString('en-IN')}, Current Spends/Due ₹${(Number(a.currentOutstanding) || 0).toLocaleString('en-IN')}, Available Limit ₹${(Number(a.availableLimit) || 0).toLocaleString('en-IN')}`).join('\n') || 'None'}
 
-=== WIFE SAVINGS & KHATA ===
+=== 👩‍💼 WIFE SAVINGS & KHATA ===
 • Starting Base: ₹${(Number(wifeSavings.baseBalance) || 0).toLocaleString('en-IN')}
 • Total Transferred: ₹${(Number(wifeSavings.totalTransferred) || 0).toLocaleString('en-IN')}
 • Live Current Balance: ₹${(Number(wifeSavings.currentBalance || ((Number(wifeSavings.baseBalance) || 0) + (Number(wifeSavings.totalTransferred) || 0))) || 0).toLocaleString('en-IN')}
 
-=== INVESTMENTS & PORTFOLIO ===
+=== 📈 INVESTMENTS & PORTFOLIO ===
 • Total Portfolio Value: ₹${(Number(totalInvestmentValue) || 0).toLocaleString('en-IN')}
 • Total Principal Invested: ₹${(Number(totalInvestedPrincipal) || 0).toLocaleString('en-IN')}
 • Portfolio Items: ${investments.length > 0 ? investments.map(inv => `${inv.name || inv.type || 'Investment'} (Invested: ₹${(Number(inv.amount) || 0).toLocaleString('en-IN')}, Value: ₹${(Number(inv.currentValue || inv.amount) || 0).toLocaleString('en-IN')}, Type: ${inv.type || 'MF'})`).join('; ') : 'No investments logged yet'}
 
-=== UDHAAR KHATA (DEBTS & RECEIVABLES) ===
+=== 🤝 UDHAAR KHATA (DEBTS & RECEIVABLES) ===
 • Money you will receive (Lent pending): ₹${(Number(pendingLent) || 0).toLocaleString('en-IN')}
 • Money you have to give (Borrowed pending): ₹${(Number(pendingBorrowed) || 0).toLocaleString('en-IN')}
 
-=== DEDICATED GOALS & PIGGY BANK FUNDS ===
+=== 🎯 DEDICATED GOALS & PIGGY BANK FUNDS ===
 ${goals.length > 0 ? goals.map((g: any) => `• ${g.name || 'Goal'}: Saved ₹${(Number(g.currentBalance || g.currentAmount) || 0).toLocaleString('en-IN')} / Target ₹${(Number(g.targetAmount) || 0).toLocaleString('en-IN')}`).join('\n') : 'No dedicated goal funds created yet'}
 
-=== TOP EXPENSE CATEGORIES ===
-${Object.entries(categoryTotals).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([cat, amt]) => `• ${cat}: ₹${(Number(amt) || 0).toLocaleString('en-IN')}`).join('\n') || 'No expenses logged'}
-
-=== DETECTED FALTU / AVOIDABLE SPENDS ===
+=== 🚫 DETECTED FALTU / AVOIDABLE SPENDS ===
 • Total Avoidable: ₹${(Number(ruleBasedAvoidable?.totalAvoidableAmount) || 0).toLocaleString('en-IN')} (${Number(ruleBasedAvoidable?.percentageOfExpenses) || 0}% of expenses)
 • Items: ${ruleBasedAvoidable?.items?.map(i => `${i.title} (₹${(Number(i.amount) || 0).toLocaleString('en-IN')} - ${i.reason})`).join(', ') || 'None'}
-
-=== RECENT TRANSACTIONS (LAST 15) ===
-${(store.transactions || []).slice(0, 15).map(t => `[${t.date}] ${t.type === 'income' ? '+' : '-'}₹${(Number(t.amount) || 0).toLocaleString('en-IN')} | ${t.description} | ${t.category} | ${t.account || t.paymentMethod}`).join('\n') || 'None'}
 =====================================================
 
 USER'S QUESTION:
 "${userQuestion}"
 
-INSTRUCTIONS FOR ANSWERING:
-1. Always respond in natural, friendly, fluent conversational Hinglish (Hindi written in Roman script) or English, matching the user's tone.
-2. CITE ACTUAL NUMBERS: Always ground your answers directly in their real financial data from above (e.g. cite their actual Bank balance, Credit Card limit & due, Wife savings, Investment portfolio, specific category spends).
-3. If asking about Financial Planning: Give a clear 50/30/20 or tailored monthly allocation plan with exact ₹ numbers based on their actual income and expenses.
-4. If asking about Goal Savings: Calculate exact monthly saving required, timeline, and recommended low-risk/high-yield instrument (e.g. Liquid Funds/FD for short term, Index MF/Flexicap for >3 years).
-5. If asking about Investment Strategy: Recommend a realistic Indian portfolio asset allocation (Nifty 50 Index SIP, Sovereign Gold/Gold ETF, PPF, Emergency Liquid Fund).
-6. If asking about Credit Cards: Analyze their dues vs limit, advise keeping card utilization under 30%, and paying bill in full before due date.
-7. If asking about Expense Reduction: Highlight their highest or avoidable spend categories and calculate exact monthly/yearly potential savings.
-8. Keep your response well-structured, inspiring, actionable, with clear bullet points (•), bold text for key figures, and appropriate emojis.
+CRITICAL INSTRUCTIONS (MUST FOLLOW STRICTLY):
+1. 🗣️ STRICT HINDI / HINGLISH LANGUAGE REQUIREMENT:
+   - Aapko hamesha aur 100% STRICTLY aam bolchal ki Hindi / Hinglish me hi jawab dena hai (jaise Telegram chats me baat karte hain).
+   - Pure English me jawab bilkul na dein! Technical financial terms (jaise SIP, Index Fund, Emergency Fund, Credit Card limit, Dues) English me likh sakte hain, par pura vakya aur explanation natural Hindi me hona chahiye.
+
+2. 📆 MONTH-WISE ACCURACY & SEPARATION (KABHI BHI SABHI MAHINO KA TOTAL EK SAATH NA JODEIN):
+   - KABHI BHI sabhi mahino ke expenses ya income ko ek saath jod kar kisi ek mahine ka kharcha mat batayein!
+   - Agar user "is mahine", "this month", "current month", ya simple "kharcha / income" pooche, to SIRF aur SIRF Current Month (${currentMonthData.monthName}) ka hi data batao!
+   - Agar user kisi specific month (jaise "October", "September", "August", "pichle mahine", "last month", "Jan", etc.) ke baare me pooche, to upar diye gaye live ledger me se SIRF us specific mahine ka Income, Expense aur Savings batao.
+   - Agar user mahino ka comparison ya "month-wise" record maange, to har mahine ka alag-alag bullet point bana kar month-by-month breakdown batao.
+   - All-Time cumulative total ko tabhi mention karo jab user explicitly "poora kul kharcha / all-time total / lifetime total" pooche, aur tab bhi saaf batao ki "Ye sabhi mahino ka mila kar kul All-Time Total hai".
+
+3. 💰 CITE ACTUAL NUMBERS:
+   - Ground your answers in their real financial data from above (Bank balances, Card dues, Wife savings, Month-wise expenses, Goals).
+
+4. 🎯 ACTIONABLE & STRUCTURED:
+   - Financial Planning: 50/30/20 monthly plan with exact ₹ numbers based on monthly income.
+   - Investment Strategy: Nifty 50 Index SIP, Gold, Emergency Liquid Fund.
+   - Credit Cards: Card dues vs limit advice.
+   - Keep response crisp, well-structured, with clear bullet points (•), bold figures, and emojis.
 `;
 
   if (ai) {
@@ -10522,37 +10651,71 @@ INSTRUCTIONS FOR ANSWERING:
     }
   }
 
-  // Smart Rule-Based Financial Advisor Fallback (if Gemini key is unavailable or during network outage)
-  let fallbackAnswer = `🤖 <b>FINANCIAL ADVISORY SUMMARY FOR ${user.name.toUpperCase()}</b>\n━━━━━━━━━━━━━━━━━━━━\n`;
-  fallbackAnswer += `💰 <b>Monthly Income:</b> ₹${(Number(summary?.totalIncome) || 0).toLocaleString('en-IN')}\n`;
-  fallbackAnswer += `🔴 <b>Total Expenses:</b> ₹${(Number(summary?.totalExpense) || 0).toLocaleString('en-IN')}\n`;
-  fallbackAnswer += `🟢 <b>Net Savings:</b> ₹${(Number(summary?.totalNetSavings || summary?.netSavings) || 0).toLocaleString('en-IN')} (Bachat Dar: <b>${Number(summary?.savingsRate) || 0}%</b>)\n\n`;
+  // Smart Rule-Based Financial Advisor Fallback (Strict Hindi / Hinglish with Month-wise details)
+  const qLower = userQuestion.toLowerCase();
+  
+  // Check if a specific month is requested
+  const matchedMonth = sortedMonths.find(m => {
+    const mNameLow = m.monthName.toLowerCase();
+    const mKeyLow = m.monthKey.toLowerCase();
+    return qLower.includes(mNameLow.split(' ')[0]) || qLower.includes(mKeyLow);
+  });
 
-  fallbackAnswer += `📊 <b>SMART ACTION PLAN:</b>\n`;
-  const sRate = Number(summary?.savingsRate) || 0;
-  if (sRate < 20) {
-    fallbackAnswer += `• <b>Bachat Badhayein:</b> Aapki current bachat rate ${sRate}% hai. Ideal target kam se kam 20%-30% hona chahiye (₹${Math.round((Number(summary?.totalIncome) || 0) * 0.25).toLocaleString('en-IN')}/mahina).\n`;
+  const isPrevMonthQuery = qLower.includes('pichle') || qLower.includes('pichla') || qLower.includes('last month') || qLower.includes('previous');
+  const targetMonth = matchedMonth || (isPrevMonthQuery && sortedMonths.length > 1 ? sortedMonths[1] : currentMonthData);
+
+  let fallbackAnswer = `🤖 <b>FINANCIAL ADVISOR REPORT (${user.name.toUpperCase()})</b>\n━━━━━━━━━━━━━━━━━━━━\n`;
+  
+  if (matchedMonth || isPrevMonthQuery || qLower.includes('month') || qLower.includes('mahine') || qLower.includes('mahina')) {
+    fallbackAnswer += `📅 <b>Mahina:</b> ${targetMonth.monthName} ${targetMonth.isCurrentMonth ? '(Current Month)' : ''}\n`;
+    fallbackAnswer += `💰 <b>Is Mahine Ki Income:</b> ₹${targetMonth.income.toLocaleString('en-IN')}\n`;
+    fallbackAnswer += `🔴 <b>Is Mahine Ka Kharcha:</b> ₹${targetMonth.personalExpense.toLocaleString('en-IN')}\n`;
+    fallbackAnswer += `🟢 <b>Is Mahine Ki Bachat:</b> ₹${targetMonth.netSavings.toLocaleString('en-IN')} (Bachat Dar: <b>${targetMonth.savingsRate}%</b>)\n\n`;
+
+    if (sortedMonths.length > 1 && !matchedMonth) {
+      fallbackAnswer += `📊 <b>Mahine-Vaar (Month-Wise) Record:</b>\n`;
+      for (const m of sortedMonths.slice(0, 4)) {
+        fallbackAnswer += `• <b>${m.monthName}:</b> Income: ₹${m.income.toLocaleString('en-IN')} | Kharcha: ₹${m.personalExpense.toLocaleString('en-IN')} | Bachat: ₹${m.netSavings.toLocaleString('en-IN')} (${m.savingsRate}%)\n`;
+      }
+      fallbackAnswer += `\n`;
+    }
   } else {
-    fallbackAnswer += `• <b>Bachat Rate Strong Hai:</b> Aapki bachat dar ${sRate}% hai jo kaafi healthy hai! Ise smart investments me allocate karein.\n`;
+    fallbackAnswer += `🗓️ <b>Current Month (${currentMonthData.monthName}):</b>\n`;
+    fallbackAnswer += `• Income: ₹${currentMonthData.income.toLocaleString('en-IN')}\n`;
+    fallbackAnswer += `• Kharcha: ₹${currentMonthData.personalExpense.toLocaleString('en-IN')}\n`;
+    fallbackAnswer += `• Bachat: ₹${currentMonthData.netSavings.toLocaleString('en-IN')} (Bachat Dar: <b>${currentMonthData.savingsRate}%</b>)\n\n`;
+    
+    fallbackAnswer += `📈 <b>All-Time Kul Khata (All Months):</b>\n`;
+    fallbackAnswer += `• Kul Kamai: ₹${(Number(summary?.totalIncome) || 0).toLocaleString('en-IN')}\n`;
+    fallbackAnswer += `• Kul Kharcha: ₹${(Number(summary?.totalExpense) || 0).toLocaleString('en-IN')}\n`;
+    fallbackAnswer += `• Bank & Net Holdings: ₹${(Number(summary?.totalNetSavings || summary?.netSavings) || 0).toLocaleString('en-IN')}\n\n`;
+  }
+
+  fallbackAnswer += `📊 <b>SMART ACTION PLAN (Hindi):</b>\n`;
+  const sRate = targetMonth.savingsRate || Number(summary?.savingsRate) || 0;
+  if (sRate < 20) {
+    fallbackAnswer += `• <b>Bachat Badhayein:</b> Aapki bachat rate ${sRate}% hai. Target kam se kam 20%-30% hona chahiye (₹${Math.round((targetMonth.income || (Number(summary?.totalIncome) || 0)) * 0.25).toLocaleString('en-IN')}/mahina).\n`;
+  } else {
+    fallbackAnswer += `• <b>Bachat Rate Shandar Hai:</b> Aapki bachat dar ${sRate}% hai jo kaafi majboot hai! Ise smart SIP aur gold me invest karein.\n`;
   }
 
   const avoidableAmt = Number(ruleBasedAvoidable?.totalAvoidableAmount) || 0;
   if (avoidableAmt > 0) {
-    fallbackAnswer += `• <b>Faltu Kharcha Cut:</b> Lagbhag ₹${avoidableAmt.toLocaleString('en-IN')} ka avoidable kharcha detect hua hai. Ise rokne se saal me <b>₹${(avoidableAmt * 12).toLocaleString('en-IN')}</b> ki extra bachat hogi!\n`;
+    fallbackAnswer += `• <b>Faltu Kharcha Control:</b> Lagbhag ₹${avoidableAmt.toLocaleString('en-IN')} ka avoidable kharcha detect hua hai. Ise rokne se saal me <b>₹${(avoidableAmt * 12).toLocaleString('en-IN')}</b> ki extra bachat hogi!\n`;
   }
 
   if (creditCards.length > 0) {
     const totalCcDue = creditCards.reduce((sum, [_, c]) => sum + (Number(c?.currentOutstanding) || 0), 0);
     if (totalCcDue > 0) {
-      fallbackAnswer += `• <b>Credit Card Priority:</b> Aapka kul CC due ₹${totalCcDue.toLocaleString('en-IN')} hai. Interest se bachne ke liye due date se pehle full payment karein.\n`;
+      fallbackAnswer += `• <b>Credit Card Priority:</b> Aapka kul CC due ₹${totalCcDue.toLocaleString('en-IN')} hai. Due date se pehle full payment karein taaki interest na lage.\n`;
     }
   }
 
-  fallbackAnswer += `• <b>Recommended Investment Strategy:</b>\n`;
+  fallbackAnswer += `• <b>Best Investment Strategy:</b>\n`;
   fallbackAnswer += `  - 50% Nifty 50 Index Mutual Fund SIP\n`;
-  fallbackAnswer += `  - 25% Flexi-Cap / Multi-Cap Equity SIP\n`;
-  fallbackAnswer += `  - 15% Sovereign Gold Bonds (SGB) / Gold ETF\n`;
-  fallbackAnswer += `  - 10% Emergency Fund (Liquid FD / High-Yield Savings)\n`;
+  fallbackAnswer += `  - 25% Flexi-Cap Equity SIP\n`;
+  fallbackAnswer += `  - 15% Gold ETF / Sovereign Gold Bond\n`;
+  fallbackAnswer += `  - 10% Emergency Fund (Liquid FD)\n`;
 
   return {
     text: fallbackAnswer,
