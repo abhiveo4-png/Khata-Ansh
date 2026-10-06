@@ -1312,10 +1312,10 @@ async function callGeminiCandidateModels(
   options?: { jsonMode?: boolean; responseSchema?: any }
 ): Promise<{ text: string; model: string } | null> {
   const customModel = process.env.GEMINI_MODEL;
-  // Prioritize modern, high-speed active models per Google AI guidelines
+  // Prioritize modern, active models per Google AI guidelines
   const candidateModels = customModel
-    ? [customModel, 'gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-3.8-flash', 'gemini-flash-latest', 'gemini-3.1-pro-preview']
-    : ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-3.8-flash', 'gemini-flash-latest', 'gemini-3.1-pro-preview'];
+    ? [customModel, 'gemini-3.8-flash', 'gemini-flash-latest', 'gemini-3.1-pro-preview', 'gemini-3.1-flash-lite']
+    : ['gemini-3.8-flash', 'gemini-flash-latest', 'gemini-3.1-pro-preview', 'gemini-3.1-flash-lite'];
   
   for (const model of candidateModels) {
     try {
@@ -5861,7 +5861,7 @@ Aap apna Gemini Pro / Flash API Key Telegram bot se direct connect kar sakte hai
         httpOptions: { headers: { 'User-Agent': 'aistudio-build' } },
       });
       const testRes = await testAi.models.generateContent({
-        model: 'gemini-2.5-flash',
+        model: 'gemini-3.8-flash',
         contents: 'Say "OK" in 1 word',
       });
 
@@ -10354,7 +10354,7 @@ app.post('/api/gemini/config', async (req, res) => {
       httpOptions: { headers: { 'User-Agent': 'aistudio-build' } },
     });
     const testRes = await testAi.models.generateContent({
-      model: 'gemini-2.5-flash',
+      model: 'gemini-3.8-flash',
       contents: 'Say OK',
     });
     if (testRes && testRes.text) {
@@ -10362,7 +10362,7 @@ app.post('/api/gemini/config', async (req, res) => {
         success: true,
         message: 'Google Gemini Pro / Flash API Key successfully verified and active!',
         hasKey: true,
-        model: 'gemini-2.5-flash',
+        model: 'gemini-3.8-flash',
       });
     }
   } catch (err: any) {
