@@ -219,6 +219,7 @@ export interface BotConfig {
   lastWebhookCheck?: string;
   pendingUpdateCount?: number;
   lastError?: string;
+  geminiApiKey?: string;
 }
 
 export interface FinancialSummary {
@@ -1285,10 +1286,17 @@ function calculateUserSummary(userId: string): FinancialSummary {
 
 // Gemini AI Client setup
 function getGeminiClient(): GoogleGenAI | null {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) return null;
+  const apiKey =
+    process.env.GEMINI_API_KEY ||
+    process.env.GOOGLE_API_KEY ||
+    process.env.GOOGLE_GENAI_API_KEY ||
+    process.env.GEMINI_KEY ||
+    botConfig.geminiApiKey ||
+    process.env.VITE_GEMINI_API_KEY ||
+    '';
+  if (!apiKey || !apiKey.trim()) return null;
   return new GoogleGenAI({
-    apiKey,
+    apiKey: apiKey.trim(),
     httpOptions: {
       headers: {
         'User-Agent': 'aistudio-build',
@@ -1304,26 +1312,35 @@ async function callGeminiCandidateModels(
   options?: { jsonMode?: boolean; responseSchema?: any }
 ): Promise<{ text: string; model: string } | null> {
   const customModel = process.env.GEMINI_MODEL;
+  // Prioritize modern, high-speed active models per Google AI guidelines
   const candidateModels = customModel
-    ? [customModel, 'gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite']
-    : ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite'];
+    ? [customModel, 'gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-3.8-flash', 'gemini-flash-latest', 'gemini-3.1-pro-preview']
+    : ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-3.8-flash', 'gemini-flash-latest', 'gemini-3.1-pro-preview'];
+  
   for (const model of candidateModels) {
     try {
-      const response = await ai.models.generateContent({
+      // 18-second timeout promise race to guarantee snappy responses
+      const generatePromise = ai.models.generateContent({
         model,
         contents: prompt,
         config: {
+          temperature: 0.65,
           ...(options?.jsonMode ? { responseMimeType: 'application/json' } : {}),
           ...(options?.responseSchema ? { responseSchema: options.responseSchema } : {}),
         },
       });
+
+      const timeoutPromise = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('Model generation timed out after 18s')), 18000)
+      );
+
+      const response = await Promise.race([generatePromise, timeoutPromise]);
       if (response && response.text) {
+        console.log(`[Gemini Engine] Generated answer using model: ${model}`);
         return { text: response.text, model };
       }
     } catch (err: any) {
-      if (process.env.DEBUG_AI) {
-        console.log(`[Gemini Engine] Model ${model} failed (${err.message}), checking next...`);
-      }
+      console.warn(`[Gemini Engine] Model ${model} call failed (${err.message}), trying next candidate...`);
     }
   }
   return null;
@@ -3807,6 +3824,8 @@ export const TELEGRAM_BOT_COMMANDS = [
   { command: 'unlink', description: '❌ Account se Telegram unlink karein' },
   { command: 'clearall', description: '🗑️ Saare transactions clear karein' },
   { command: 'link', description: '🔗 Web account se Telegram link karein' },
+  { command: 'setkey', description: '🔑 Set Gemini Pro / Flash AI API Key' },
+  { command: 'key', description: 'ℹ️ Check Gemini AI Key Status' },
   { command: 'help', description: '❓ Kaise use karein & full command list' },
 ];
 
@@ -5056,7 +5075,14 @@ Jab bhi normal expense entry mode me wapas aana ho, bas <code>/done</code> ya <c
     command === '/recent' ||
     command === '/undo' ||
     cleanCmd === '/setlimit' ||
-    cleanCmd === '/setbalance';
+    cleanCmd === '/setbalance' ||
+    cleanCmd === '/setkey' ||
+    cleanCmd === '/setgeminikey' ||
+    cleanCmd === '/aikey' ||
+    cleanCmd === '/geminikey' ||
+    cleanCmd === '/key' ||
+    cleanCmd === '/checkkey' ||
+    cleanCmd === '/removekey';
 
   if (isChatActiveInAiMode && !isSystemOrUtilityCommand) {
     // Treat the incoming natural text as an AI Financial advisory question
@@ -5770,7 +5796,144 @@ Aap apne kisi bhi credit card ki total credit limit change kar sakte hain:
     return;
   }
 
-  // 6.5. Gemini AI Financial Tips & Faltu Kharcha Analysis
+  // 6.38. Set or Check Gemini AI API Key (/setkey <API_KEY>, /key, /removekey)
+  const isSetKey =
+    cleanCmd === '/setkey' ||
+    cleanCmd === '/setgeminikey' ||
+    cleanCmd === '/aikey' ||
+    cleanCmd === '/geminikey' ||
+    lowerText.startsWith('/setkey') ||
+    lowerText.startsWith('/setgeminikey') ||
+    lowerText.startsWith('/aikey') ||
+    lowerText.startsWith('/geminikey');
+
+  const isCheckKey =
+    cleanCmd === '/key' ||
+    cleanCmd === '/checkkey' ||
+    cleanCmd === '/geministatus' ||
+    lowerText === '/key' ||
+    lowerText === 'key' ||
+    lowerText === 'check key';
+
+  const isRemoveKey =
+    cleanCmd === '/removekey' ||
+    cleanCmd === '/deletekey' ||
+    lowerText === '/removekey';
+
+  if (isSetKey) {
+    if (isFamilyMemberSender) {
+      await sendTelegramReply(botToken, chatId, `🔒 <b>Permission Denied:</b> Sirf Khata Owner Gemini API Key configure kar sakte hain.`);
+      return;
+    }
+
+    const rawKey = rawText.replace(/^\/(setkey|setgeminikey|aikey|geminikey)(@\w+)?/i, '').trim();
+    if (!rawKey) {
+      const activeKey = process.env.GEMINI_API_KEY || botConfig.geminiApiKey || '';
+      const masked = activeKey ? `${activeKey.slice(0, 4)}...${activeKey.slice(-4)}` : 'Nahi hai';
+      const keyHelpMsg = `🔑 <b>GOOGLE GEMINI AI API KEY SETUP</b>
+━━━━━━━━━━━━━━━━━━━━
+Aap apna Gemini Pro / Flash API Key Telegram bot se direct connect kar sakte hain taaki bot real-time AI se natural answers de sake!
+
+📝 <b>Key Kaise Set Karein:</b>
+<code>/setkey AIzaSyYourApiKeyHere...</code>
+
+🔍 <b>Current Key Status:</b>
+• Active Key: <code>${masked}</code>
+• Status: ${activeKey ? '✅ Configured & Active' : '⚪ Not Set (Using Smart Offline Engine)'}
+
+🌐 <b>Free Gemini API Key Kaise Banayein:</b>
+1. Browser me <b>https://aistudio.google.com</b> kholein.
+2. <b>Get API key</b> par click karke Free API key generate karein.
+3. Yahan bot me <code>/setkey AIza...</code> bhej kar save kar dein!`;
+      await sendTelegramReply(botToken, chatId, keyHelpMsg);
+      return;
+    }
+
+    // Save key to botConfig & persist
+    botConfig.geminiApiKey = rawKey;
+    saveBotConfig(botConfig);
+
+    // Verify key with Gemini test call
+    await sendTelegramReply(botToken, chatId, `⏳ <i>Gemini API Key verify ki ja rahi hai...</i>`);
+    try {
+      const testAi = new GoogleGenAI({
+        apiKey: rawKey,
+        httpOptions: { headers: { 'User-Agent': 'aistudio-build' } },
+      });
+      const testRes = await testAi.models.generateContent({
+        model: 'gemini-2.5-flash',
+        contents: 'Say "OK" in 1 word',
+      });
+
+      if (testRes && testRes.text) {
+        await sendTelegramReply(
+          botToken,
+          chatId,
+          `✅ <b>GEMINI PRO AI CONNECTED SUCCESSFULLY!</b> 🤖
+━━━━━━━━━━━━━━━━━━━━
+Aapki Google AI API Key verify aur securely save ho gayi hai!
+
+⚡ <b>Status:</b> Active & Verified
+🧠 <b>Model Engine:</b> Gemini 2.5 Flash & Gemini 2.5 Pro
+💬 <b>Ab AI se poochhein:</b>
+Aap <code>/ask</code> likhkar koi bhi sawal direct natural Hindi me pooch sakte hain, jaise:
+• <i>"Meri RD kab complete hogi?"</i>
+• <i>"Axis bank me kitna live balance hai?"</i>
+• <i>"Is mahine petrol pe kitna kharcha hua?"</i>
+• <i>"Kya mai naya phone afford kar sakta hu?"</i>`,
+          {
+            inline_keyboard: [
+              [{ text: '🤖 Ask AI Advisor', callback_data: 'cmd_ask' }, { text: '💰 Balance', callback_data: 'cmd_balance' }]
+            ]
+          }
+        );
+        return;
+      }
+    } catch (testErr: any) {
+      await sendTelegramReply(
+        botToken,
+        chatId,
+        `⚠️ <b>Key Save Ho Gayi Hai Lekin Test Failed:</b>\n<i>${testErr.message}</i>\n\nKripya check karein ki API key Google AI Studio (aistudio.google.com) se generated valid key hai.`
+      );
+      return;
+    }
+  }
+
+  if (isCheckKey) {
+    const activeKey = process.env.GEMINI_API_KEY || botConfig.geminiApiKey || '';
+    const masked = activeKey ? `${activeKey.slice(0, 4)}...${activeKey.slice(-4)}` : 'Nahi hai';
+    const source = process.env.GEMINI_API_KEY ? 'Render/Server Env' : botConfig.geminiApiKey ? 'Bot Config' : 'None';
+    await sendTelegramReply(
+      botToken,
+      chatId,
+      `🔑 <b>GEMINI AI KEY STATUS:</b>
+━━━━━━━━━━━━━━━━━━━━
+• <b>Status:</b> ${activeKey ? '✅ Active & Connected' : '⚪ Not Set (Smart Offline Engine Active)'}
+• <b>Key:</b> <code>${masked}</code>
+• <b>Source:</b> ${source}
+
+💡 <i>Nayi key set karne ke liye:</i>
+<code>/setkey AIzaSy...</code>
+<i>Key delete karne ke liye:</i>
+<code>/removekey</code>`
+    );
+    return;
+  }
+
+  if (isRemoveKey) {
+    if (isFamilyMemberSender) {
+      await sendTelegramReply(botToken, chatId, `🔒 <b>Permission Denied.</b>`);
+      return;
+    }
+    botConfig.geminiApiKey = '';
+    saveBotConfig(botConfig);
+    await sendTelegramReply(
+      botToken,
+      chatId,
+      `🗑️ <b>Gemini API Key Remove Ho Gayi Hai.</b>\nAb Smart Offline Financial Advisor engine active rahega.`
+    );
+    return;
+  }
   const isTipQuery =
     command === '/tips' ||
     command === '/advice' ||
@@ -10125,8 +10288,13 @@ app.get('/api/telegram/config', async (req, res) => {
 });
 
 app.post('/api/telegram/config', async (req, res) => {
-  const { botToken } = req.body;
-  botConfig.botToken = (botToken || '').trim();
+  const { botToken, geminiApiKey } = req.body;
+  if (botToken !== undefined) {
+    botConfig.botToken = (botToken || '').trim();
+  }
+  if (geminiApiKey !== undefined) {
+    botConfig.geminiApiKey = (geminiApiKey || '').trim();
+  }
 
   if (botConfig.botToken) {
     try {
@@ -10148,7 +10316,64 @@ app.post('/api/telegram/config', async (req, res) => {
   }
 
   saveJson(BOT_CONFIG_FILE, botConfig);
+  persistToPg('bot_config', botConfig).catch(() => {});
   res.json({ success: true, config: botConfig });
+});
+
+// Gemini AI API Configuration Endpoint (Web App)
+app.get('/api/gemini/config', (req, res) => {
+  const activeKey =
+    process.env.GEMINI_API_KEY ||
+    process.env.GOOGLE_API_KEY ||
+    process.env.GOOGLE_GENAI_API_KEY ||
+    process.env.GEMINI_KEY ||
+    botConfig.geminiApiKey ||
+    process.env.VITE_GEMINI_API_KEY ||
+    '';
+  res.json({
+    hasKey: !!(activeKey && activeKey.trim()),
+    maskedKey: activeKey ? (activeKey.length > 8 ? `${activeKey.slice(0, 4)}...${activeKey.slice(-4)}` : '****') : '',
+    source: process.env.GEMINI_API_KEY ? 'env' : botConfig.geminiApiKey ? 'bot_config' : 'none',
+  });
+});
+
+app.post('/api/gemini/config', async (req, res) => {
+  const { apiKey } = req.body;
+  const trimmed = (apiKey || '').trim();
+  botConfig.geminiApiKey = trimmed;
+  saveBotConfig(botConfig);
+
+  if (!trimmed) {
+    return res.json({ success: true, message: 'Gemini API Key removed. Smart offline engine is active.', hasKey: false });
+  }
+
+  // Quick verification test
+  try {
+    const testAi = new GoogleGenAI({
+      apiKey: trimmed,
+      httpOptions: { headers: { 'User-Agent': 'aistudio-build' } },
+    });
+    const testRes = await testAi.models.generateContent({
+      model: 'gemini-2.5-flash',
+      contents: 'Say OK',
+    });
+    if (testRes && testRes.text) {
+      return res.json({
+        success: true,
+        message: 'Google Gemini Pro / Flash API Key successfully verified and active!',
+        hasKey: true,
+        model: 'gemini-2.5-flash',
+      });
+    }
+  } catch (err: any) {
+    return res.json({
+      success: true,
+      warning: `Key saved, but test call returned: ${err.message}. Ensure it is an active Google AI Studio key.`,
+      hasKey: true,
+    });
+  }
+
+  res.json({ success: true, hasKey: true });
 });
 
 // Endpoint to manually or automatically trigger menu & commands synchronization
@@ -10734,7 +10959,11 @@ ${goals.length > 0 ? goals.map((g: any) => `• ${g.name || 'Goal'}: Saved ₹${
 • Total Avoidable: ₹${(Number(ruleBasedAvoidable?.totalAvoidableAmount) || 0).toLocaleString('en-IN')} (${Number(ruleBasedAvoidable?.percentageOfExpenses) || 0}% of expenses)
 • Items: ${ruleBasedAvoidable?.items?.map(i => `${i.title} (₹${(Number(i.amount) || 0).toLocaleString('en-IN')} - ${i.reason})`).join(', ') || 'None'}
 =====================================================
-
+${conversationHistory && conversationHistory.length > 0 ? `
+PREVIOUS CONVERSATION CONTEXT:
+${conversationHistory.slice(-6).map(m => `${m.role === 'user' ? 'User' : 'Advisor'}: ${m.text}`).join('\n')}
+=====================================================
+` : ''}
 USER'S QUESTION:
 "${userQuestion}"
 
@@ -10773,87 +11002,394 @@ CORE ADVISORY GUIDELINES (BE HUMAN, CONVERSATIONAL, SHARP & NATURAL):
     }
   }
 
-  // Smart Rule-Based Financial Advisor Fallback (Strict Hindi / Hinglish with Month-wise details)
-  const qLower = userQuestion.toLowerCase();
-  
+  // Smart Rule-Based Financial Advisor Fallback (Natural, Intent-Aware Hindi / Hinglish)
+  const qLower = userQuestion.toLowerCase().trim();
+  const totalBankHolding = Number(accountBalances?.totalBankCashBalance) || 0;
+  const currentMonthName = currentMonthData.monthName;
+  const avoidableAmt = Number(ruleBasedAvoidable?.totalAvoidableAmount) || 0;
+  const totalCcDue = creditCards.reduce((sum, [_, c]) => sum + (Number(c?.currentOutstanding) || 0), 0);
+  const totalCcLimit = creditCards.reduce((sum, [_, c]) => sum + (Number(c?.creditLimit) || 0), 0);
+  const cardEmis = store.cardEmis || [];
+
   // Check if a specific month is requested
   const matchedMonth = sortedMonths.find(m => {
     const mNameLow = m.monthName.toLowerCase();
     const mKeyLow = m.monthKey.toLowerCase();
     return qLower.includes(mNameLow.split(' ')[0]) || qLower.includes(mKeyLow);
   });
-
   const isPrevMonthQuery = qLower.includes('pichle') || qLower.includes('pichla') || qLower.includes('last month') || qLower.includes('previous');
   const targetMonth = matchedMonth || (isPrevMonthQuery && sortedMonths.length > 1 ? sortedMonths[1] : currentMonthData);
 
-  let fallbackAnswer = `🤖 <b>FINANCIAL ADVISOR REPORT (${user.name.toUpperCase()})</b>\n━━━━━━━━━━━━━━━━━━━━\n`;
-  
-  if (matchedMonth || isPrevMonthQuery || qLower.includes('month') || qLower.includes('mahine') || qLower.includes('mahina')) {
-    fallbackAnswer += `📅 <b>Mahina:</b> ${targetMonth.monthName} ${targetMonth.isCurrentMonth ? '(Current Month)' : ''}\n`;
-    fallbackAnswer += `💰 <b>Is Mahine Ki Income:</b> ₹${targetMonth.income.toLocaleString('en-IN')}\n`;
-    fallbackAnswer += `🔴 <b>Is Mahine Ka Kharcha:</b> ₹${targetMonth.personalExpense.toLocaleString('en-IN')}\n`;
-    fallbackAnswer += `🟢 <b>Is Mahine Ki Bachat:</b> ₹${targetMonth.netSavings.toLocaleString('en-IN')} (Bachat Dar: <b>${targetMonth.savingsRate}%</b>)\n\n`;
+  // 1. GREETINGS & CASUAL INTROS
+  const isGreeting = /^(hi|hello|hey|namaste|pranam|kaise ho|kya hal|good morning|good afternoon|good evening)\b/i.test(qLower) || qLower === 'hi' || qLower === 'hello';
+  if (isGreeting) {
+    const greetingText = `👋 <b>Namaste ${user.name}!</b> 🙏
+━━━━━━━━━━━━━━━━━━━━
+Main aapka personal <b>AI Wealth Advisor</b> hoon. Mere paas aapke sabhi bank khate, live balance, RD, credit cards aur mahine-vaar kharcho ka poora live record hai.
 
-    if (sortedMonths.length > 1 && !matchedMonth) {
-      fallbackAnswer += `📊 <b>Mahine-Vaar (Month-Wise) Record:</b>\n`;
-      for (const m of sortedMonths.slice(0, 4)) {
-        fallbackAnswer += `• <b>${m.monthName}:</b> Income: ₹${m.income.toLocaleString('en-IN')} | Kharcha: ₹${m.personalExpense.toLocaleString('en-IN')} | Bachat: ₹${m.netSavings.toLocaleString('en-IN')} (${m.savingsRate}%)\n`;
-      }
-      fallbackAnswer += `\n`;
-    }
-  } else {
-    fallbackAnswer += `🗓️ <b>Current Month (${currentMonthData.monthName}):</b>\n`;
-    fallbackAnswer += `• Income: ₹${currentMonthData.income.toLocaleString('en-IN')}\n`;
-    fallbackAnswer += `• Kharcha: ₹${currentMonthData.personalExpense.toLocaleString('en-IN')}\n`;
-    fallbackAnswer += `• Bachat: ₹${currentMonthData.netSavings.toLocaleString('en-IN')} (Bachat Dar: <b>${currentMonthData.savingsRate}%</b>)\n\n`;
+💡 <b>Aap mujhse bejhijhak pooch sakte hain:</b>
+• 🏦 <i>"Mera total bank balance kitna hai?"</i>
+• 📈 <i>"Meri RD ki kya status hai aur kab complete hogi?"</i>
+• ⛽ <i>"Is mahine petrol ya food pe kitna kharcha hua?"</i>
+• 💳 <i>"Credit card ka kitna bill due hai?"</i>
+• 🎯 <i>"Meri bachat badhane ke liye kya plan banayein?"</i>
+
+Bataiye, aaj kis hisaab ya planning ke baare me jaan-na chahte hain?`;
+    return { text: greetingText, model: 'SmartAdvisor-Engine', source: 'rule_fallback' };
+  }
+
+  // 2. BANK BALANCE / CASH / HOLDINGS INTENT
+  const isBalanceQuery =
+    qLower.includes('balance') ||
+    qLower.includes('bank') ||
+    qLower.includes('holding') ||
+    qLower.includes('holdings') ||
+    qLower.includes('kitna paisa') ||
+    qLower.includes('kitne paise') ||
+    qLower.includes('rokda') ||
+    qLower.includes('paisa kitna') ||
+    qLower.includes('khate') ||
+    qLower.includes('axis') ||
+    qLower.includes('icici bank');
+
+  if (isBalanceQuery && !qLower.includes('rd') && !qLower.includes('invest') && !qLower.includes('credit')) {
+    let balText = `🏦 <b>AAPKA LIVE BANK & CASH HOLDING HISAB:</b>\n━━━━━━━━━━━━━━━━━━━━\n`;
+    balText += `🌟 <b>Total Live Bank & Cash Balance:</b> <b>₹${totalBankHolding.toLocaleString('en-IN')}</b>\n`;
+    balText += `<i>(Yeh aapke sabhi banks aur cash ka live real-time balance hai)</i>\n\n`;
     
-    fallbackAnswer += `📈 <b>All-Time Kul Khata (All Months):</b>\n`;
-    fallbackAnswer += `• Kul Kamai: ₹${(Number(summary?.totalIncome) || 0).toLocaleString('en-IN')}\n`;
-    fallbackAnswer += `• Kul Kharcha: ₹${(Number(summary?.totalExpense) || 0).toLocaleString('en-IN')}\n`;
-    fallbackAnswer += `• 🏦 <b>Total Bank & Cash Holding:</b> <b>₹${(Number(accountBalances?.totalBankCashBalance) || 0).toLocaleString('en-IN')}</b>\n\n`;
+    balText += `📋 <b>Bank-Wise Live Balances:</b>\n`;
+    for (const [id, a] of bankAccounts) {
+      balText += `• <b>${a.name}:</b> Live ₹${Number(a.currentBalance || 0).toLocaleString('en-IN')} (Base: ₹${Number(a.baseBalance || 0).toLocaleString('en-IN')})\n`;
+    }
+    balText += `• 🌸 <b>Wife's Savings:</b> Live ₹${Number(wifeSavings.currentBalance || 0).toLocaleString('en-IN')} (Total Transferred: ₹${Number(wifeSavings.totalTransferred || 0).toLocaleString('en-IN')})\n\n`;
+    
+    balText += `💡 <b>Advisor Insight:</b>\n`;
+    const emergencyTarget = Math.round(currentMonthData.personalExpense * 3);
+    if (totalBankHolding >= emergencyTarget) {
+      balText += `• Aapka live balance ₹${totalBankHolding.toLocaleString('en-IN')} kaafi safe hai. Isme se 3 mahine ke kharche (lagbhag ₹${emergencyTarget.toLocaleString('en-IN')}) Emergency Fund me liquid rakhein aur baaki ko smart SIP me invest karein.`;
+    } else {
+      balText += `• Aapka 3 mahine ka emergency target ₹${emergencyTarget.toLocaleString('en-IN')} hai. Current month ki bachat se is balance ko thoda aur majboot karein.`;
+    }
+    return { text: balText, model: 'SmartAdvisor-Engine', source: 'rule_fallback' };
   }
 
-  if (detailedInvestments.length > 0) {
-    fallbackAnswer += `📈 <b>Active Investment & RD Portfolio:</b>\n`;
-    for (const inv of detailedInvestments) {
-      if (inv.type === 'RD') {
-        fallbackAnswer += `• 🏦 <b>${inv.name} (RD):</b> ₹${(Number(inv.monthlyAmount) || 0).toLocaleString('en-IN')}/mahina | ${inv.paidInstallments}/${inv.totalInstallments} kistein jama (Kul Jama: <b>₹${(Number(inv.totalDeposited) || 0).toLocaleString('en-IN')}</b>, Live Value: <b>₹${(Number(inv.currentValue) || 0).toLocaleString('en-IN')}</b>)\n`;
-      } else {
-        fallbackAnswer += `• <b>${inv.name} (${inv.type}):</b> Jama: ₹${(Number(inv.totalDeposited) || 0).toLocaleString('en-IN')} | Live Value: ₹${(Number(inv.currentValue) || 0).toLocaleString('en-IN')}\n`;
+  // 3. RD / INVESTMENTS / MUTUAL FUNDS / SIP INTENT
+  const isInvestmentQuery =
+    qLower.includes('rd') ||
+    qLower.includes('recurring') ||
+    qLower.includes('fd') ||
+    qLower.includes('fixed deposit') ||
+    qLower.includes('sip') ||
+    qLower.includes('mutual fund') ||
+    qLower.includes('invest') ||
+    qLower.includes('portfolio') ||
+    qLower.includes('kist') ||
+    qLower.includes('installment') ||
+    qLower.includes('anita') ||
+    qLower.includes('bc');
+
+  if (isInvestmentQuery) {
+    let invText = `📈 <b>AAPKA ACTIVE INVESTMENT & RD PORTFOLIO:</b>\n━━━━━━━━━━━━━━━━━━━━\n`;
+    
+    const rdInv = detailedInvestments.filter(i => i.type === 'RD');
+    const fdInv = detailedInvestments.filter(i => i.type === 'FD');
+    const otherInv = detailedInvestments.filter(i => i.type !== 'RD' && i.type !== 'FD');
+
+    if (rdInv.length > 0) {
+      invText += `🏦 <b>Recurring Deposits (RD Status):</b>\n`;
+      for (const inv of rdInv) {
+        invText += `• <b>${inv.name}:</b>\n`;
+        invText += `  - Monthly Kist: <b>₹${(Number(inv.monthlyAmount) || 0).toLocaleString('en-IN')}/mahina</b>\n`;
+        invText += `  - Progress: <b>${inv.paidInstallments} of ${inv.totalInstallments} mahine completed</b>\n`;
+        invText += `  - Ab Tak Jama Kul Rashi: <b>₹${(Number(inv.totalDeposited) || 0).toLocaleString('en-IN')}</b>\n`;
+        invText += `  - Live Accumulated Value (With Interest): <b>₹${(Number(inv.currentValue) || 0).toLocaleString('en-IN')}</b>\n`;
+        invText += `  - 1-Year Maturity Estimate: <b>₹${(Number(inv.maturityAmount) || 0).toLocaleString('en-IN')}</b> (${inv.interestRate ? `${inv.interestRate}% interest` : 'Standard RD rate'})\n`;
+      }
+      invText += `\n`;
+    }
+
+    if (fdInv.length > 0) {
+      invText += `🔒 <b>Fixed Deposits (FD):</b>\n`;
+      for (const inv of fdInv) {
+        invText += `• <b>${inv.name}:</b> Jama ₹${(Number(inv.totalDeposited) || 0).toLocaleString('en-IN')} | Live Value: ₹${(Number(inv.currentValue) || 0).toLocaleString('en-IN')}${inv.interestRate ? ` (${inv.interestRate}%)` : ''}\n`;
+      }
+      invText += `\n`;
+    }
+
+    if (otherInv.length > 0) {
+      invText += `💎 <b>Other Investments / BC:</b>\n`;
+      for (const inv of otherInv) {
+        invText += `• <b>${inv.name} (${inv.type || 'Other'}):</b> Jama ₹${(Number(inv.totalDeposited) || 0).toLocaleString('en-IN')} | Live Value: ₹${(Number(inv.currentValue) || 0).toLocaleString('en-IN')}\n`;
+      }
+      invText += `\n`;
+    }
+
+    invText += `━━━━━━━━━━━━━━━━━━━━\n`;
+    invText += `💰 <b>Kul Invested Principal:</b> <b>₹${totalInvestedPrincipal.toLocaleString('en-IN')}</b>\n`;
+    invText += `📊 <b>Total Portfolio Live Value:</b> <b>₹${totalInvestmentValue.toLocaleString('en-IN')}</b>\n\n`;
+
+    invText += `💡 <b>Advisor Tip:</b>\n`;
+    if (rdInv.length > 0) {
+      const rd = rdInv[0];
+      invText += `Aapki RD me ab tak ₹${Number(rd.totalDeposited).toLocaleString('en-IN')} successfully jama ho chuke hain aur interest ke saath iski live value ₹${Number(rd.currentValue).toLocaleString('en-IN')} ho chuki hai. Maturity aane par is amount ko Index Fund SIP me lagaane se lambe samay me behtareen returns banenge!`;
+    } else {
+      invText += `Aapka portfolio surakshit hai. Har mahine ₹5,000 - ₹10,000 ki Nifty 50 Index SIP jodna wealth creation ke liye best rahega.`;
+    }
+
+    return { text: invText, model: 'SmartAdvisor-Engine', source: 'rule_fallback' };
+  }
+
+  // 4. CREDIT CARDS & EMIs INTENT
+  const isCreditCardQuery =
+    qLower.includes('credit card') ||
+    qLower.includes('cc') ||
+    qLower.includes('card due') ||
+    qLower.includes('card bill') ||
+    qLower.includes('emi') ||
+    qLower.includes('card limit') ||
+    qLower.includes('outstanding');
+
+  if (isCreditCardQuery) {
+    let ccText = `💳 <b>AAPKA CREDIT CARD & EMI STATUS:</b>\n━━━━━━━━━━━━━━━━━━━━\n`;
+    ccText += `🔴 <b>Kul Outstanding Due (Spends):</b> <b>₹${totalCcDue.toLocaleString('en-IN')}</b>\n`;
+    ccText += `💳 <b>Kul Available Credit Limit:</b> <b>₹${totalCcLimit.toLocaleString('en-IN')}</b>\n\n`;
+
+    ccText += `📋 <b>Card-Wise Status:</b>\n`;
+    for (const [id, c] of creditCards) {
+      ccText += `• <b>${c.name} (${id}):</b> Due ₹${Number(c.currentOutstanding || 0).toLocaleString('en-IN')} | Available Limit: ₹${Number(c.availableLimit || 0).toLocaleString('en-IN')} (Total: ₹${Number(c.creditLimit || 0).toLocaleString('en-IN')})\n`;
+    }
+
+    if (cardEmis.length > 0) {
+      ccText += `\n📦 <b>Active Credit Card EMIs:</b>\n`;
+      for (const e of cardEmis) {
+        ccText += `• <b>${e.title || 'EMI'} (${e.cardId}):</b> ₹${Number(e.monthlyAmount).toLocaleString('en-IN')}/mahina (${e.paidMonths || 0}/${e.totalMonths || 0} paid)\n`;
       }
     }
-    fallbackAnswer += `\n`;
+
+    ccText += `\n💡 <b>Advisor Tip:</b>\n`;
+    ccText += `Credit card dues par kabhi bhi interest na lage, iske liye due date se 2-3 din pehle full payment kar dein. Aapka credit utilization safe zone me hai!`;
+    return { text: ccText, model: 'SmartAdvisor-Engine', source: 'rule_fallback' };
   }
 
-  fallbackAnswer += `📊 <b>SMART ACTION PLAN (Hindi):</b>\n`;
-  const sRate = targetMonth.savingsRate || Number(summary?.savingsRate) || 0;
-  if (sRate < 20) {
-    fallbackAnswer += `• <b>Bachat Badhayein:</b> Aapki bachat rate ${sRate}% hai. Target kam se kam 20%-30% hona chahiye (₹${Math.round((targetMonth.income || (Number(summary?.totalIncome) || 0)) * 0.25).toLocaleString('en-IN')}/mahina).\n`;
-  } else {
-    fallbackAnswer += `• <b>Bachat Rate Shandar Hai:</b> Aapki bachat dar ${sRate}% hai jo kaafi majboot hai! Ise smart SIP aur gold me invest karein.\n`;
+  // 5. UDHAAR / KHATA (LENA & DENA) INTENT
+  const isUdhaarQuery =
+    qLower.includes('udhar') ||
+    qLower.includes('udhaar') ||
+    qLower.includes('lena hai') ||
+    qLower.includes('dena hai') ||
+    qLower.includes('baaki') ||
+    qLower.includes('dendaari') ||
+    qLower.includes('lendaari') ||
+    qLower.includes('jiju');
+
+  if (isUdhaarQuery) {
+    let uText = `🤝 <b>UDHAAR & KHATA BOOK REPORT:</b>\n━━━━━━━━━━━━━━━━━━━━\n`;
+    uText += `💸 <b>Market Se Lena Hai (Lent Pending):</b> <b>₹${pendingLent.toLocaleString('en-IN')}</b>\n`;
+    uText += `📥 <b>Kisi Ko Dena Hai (Borrowed Pending):</b> <b>₹${pendingBorrowed.toLocaleString('en-IN')}</b>\n\n`;
+
+    const pendingUdhaars = udhaars.filter(u => u.status === 'pending');
+    if (pendingUdhaars.length > 0) {
+      uText += `📋 <b>Active Pending Hisab:</b>\n`;
+      for (const u of pendingUdhaars) {
+        uText += `• [${u.type === 'lent' ? 'LENA HAI' : 'DENA HAI'}] <b>${u.personName}:</b> ₹${Number(u.amount).toLocaleString('en-IN')} <i>(${u.description || 'Udhaar'})</i>\n`;
+      }
+    } else {
+      uText += `✅ Koi bhi udhaar pending nahi hai.\n`;
+    }
+
+    uText += `\n💡 <b>Tip:</b> Agar kisi ko WhatsApp reminder bhejna ho to <code>/udhaar</code> likhkar direct reminder generate karein.`;
+    return { text: uText, model: 'SmartAdvisor-Engine', source: 'rule_fallback' };
   }
 
-  const avoidableAmt = Number(ruleBasedAvoidable?.totalAvoidableAmount) || 0;
-  if (avoidableAmt > 0) {
-    fallbackAnswer += `• <b>Faltu Kharcha Control:</b> Lagbhag ₹${avoidableAmt.toLocaleString('en-IN')} ka avoidable kharcha detect hua hai. Ise rokne se saal me <b>₹${(avoidableAmt * 12).toLocaleString('en-IN')}</b> ki extra bachat hogi!\n`;
+  // 6. AVOIDABLE / FALTU KHARCHA INTENT
+  const isAvoidableQuery =
+    qLower.includes('faltu') ||
+    qLower.includes('avoidable') ||
+    qLower.includes('waste') ||
+    qLower.includes('fuzool') ||
+    qLower.includes('extra kharcha') ||
+    qLower.includes('daru') ||
+    qLower.includes('alcohol') ||
+    qLower.includes('beer') ||
+    qLower.includes('sutta') ||
+    qLower.includes('cigarette');
+
+  if (isAvoidableQuery) {
+    let fText = `🚫 <b>FALTU & AVOIDABLE KHARCHA ANALYSIS:</b>\n━━━━━━━━━━━━━━━━━━━━\n`;
+    fText += `🔍 <b>Total Detect Hua:</b> <b>₹${avoidableAmt.toLocaleString('en-IN')}</b> (${ruleBasedAvoidable?.percentageOfExpenses || 0}% of expenses)\n\n`;
+
+    if (ruleBasedAvoidable?.items && ruleBasedAvoidable.items.length > 0) {
+      fText += `📋 <b>Detected Avoidable Items:</b>\n`;
+      for (const i of ruleBasedAvoidable.items) {
+        fText += `• <b>${i.title}:</b> ₹${Number(i.amount).toLocaleString('en-IN')} <i>(${i.reason})</i>\n`;
+      }
+    } else {
+      fText += `✅ Shandar! Aapke ledger me koi unnecessary faltu kharcha detect nahi hua hai.\n`;
+    }
+
+    if (avoidableAmt > 0) {
+      fText += `\n💡 <b>Wealth Potential:</b>\n`;
+      fText += `• Agar aap har mahine yeh ₹${avoidableAmt.toLocaleString('en-IN')} control karein to saal me <b>₹${(avoidableAmt * 12).toLocaleString('en-IN')}</b> ki direct bachat hogi!\n`;
+      fText += `• Aur yahi bachat Nifty 50 Index Fund SIP me dalein to 3 saal me lagbhag <b>₹${Math.round(avoidableAmt * 42.5).toLocaleString('en-IN')}</b> ban sakte hain!`;
+    }
+    return { text: fText, model: 'SmartAdvisor-Engine', source: 'rule_fallback' };
   }
 
-  if (creditCards.length > 0) {
-    const totalCcDue = creditCards.reduce((sum, [_, c]) => sum + (Number(c?.currentOutstanding) || 0), 0);
+  // 7. SPECIFIC CATEGORY OR ITEM SEARCH (Petrol, Food, Zomato, Swiggy, Shopping, etc.)
+  const knownCategories = Object.keys(allCategoryTotals);
+  const matchedCategory = knownCategories.find(c => qLower.includes(c.toLowerCase())) ||
+    (qLower.includes('petrol') || qLower.includes('fuel') || qLower.includes('diesel') ? 'Transportation & Fuel' :
+     qLower.includes('food') || qLower.includes('zomato') || qLower.includes('swiggy') || qLower.includes('khana') ? 'Food & Dining' :
+     qLower.includes('shopping') || qLower.includes('clothes') || qLower.includes('jeans') ? 'Shopping' :
+     qLower.includes('grocery') || qLower.includes('sabzi') || qLower.includes('ration') ? 'Groceries' :
+     qLower.includes('rent') || qLower.includes('kiraya') ? 'Housing & Rent' :
+     qLower.includes('medical') || qLower.includes('medicine') || qLower.includes('doctor') ? 'Healthcare & Medical' :
+     qLower.includes('bijli') || qLower.includes('electricity') || qLower.includes('recharge') ? 'Utilities & Bills' :
+     null);
+
+  if (matchedCategory) {
+    const monthSpentOnCat = currentMonthData.categories[matchedCategory] || 0;
+    const allTimeSpentOnCat = allCategoryTotals[matchedCategory] || 0;
+    const catTxs = txList.filter(t => t.type === 'expense' && (t.category === matchedCategory || t.description.toLowerCase().includes(matchedCategory.toLowerCase())));
+    const recentCatTxs = catTxs.slice(-4).reverse();
+
+    let catText = `📊 <b>${matchedCategory.toUpperCase()} KHARCHA REPORT:</b>\n━━━━━━━━━━━━━━━━━━━━\n`;
+    catText += `🗓️ <b>Is Mahine (${currentMonthName}):</b> <b>₹${monthSpentOnCat.toLocaleString('en-IN')}</b>\n`;
+    catText += `📈 <b>All-Time Kul Kharcha:</b> <b>₹${allTimeSpentOnCat.toLocaleString('en-IN')}</b> (Total ${catTxs.length} entries)\n\n`;
+
+    if (recentCatTxs.length > 0) {
+      catText += `🕒 <b>Haal Hi Ke Kharche:</b>\n`;
+      for (const t of recentCatTxs) {
+        catText += `• ${t.date}: ₹${Number(t.amount).toLocaleString('en-IN')} - ${t.description} <i>(${t.paymentMethod || 'UPI'})</i>\n`;
+      }
+    }
+
+    const catBudget = (store.budgets || []).find(b => b.category === matchedCategory);
+    if (catBudget) {
+      const remaining = Math.max(0, catBudget.limit - monthSpentOnCat);
+      catText += `\n🎯 <b>Monthly Budget:</b> ₹${catBudget.limit.toLocaleString('en-IN')} | Bacha Hua: ₹${remaining.toLocaleString('en-IN')}`;
+    }
+
+    return { text: catText, model: 'SmartAdvisor-Engine', source: 'rule_fallback' };
+  }
+
+  // 8. AFFORDABILITY & PURCHASE ADVICE ("kya mai le lu", "phone khareedu", "kharid lu", "buy")
+  const isAffordQuery =
+    qLower.includes('kharid') ||
+    qLower.includes('khareed') ||
+    qLower.includes('le lu') ||
+    qLower.includes('buy') ||
+    qLower.includes('afford') ||
+    qLower.includes('kharche karu');
+
+  if (isAffordQuery) {
+    const numMatch = qLower.match(/\b\d+([,.]\d+)?(k|lakh)?\b/i);
+    let estimatedCost = 15000;
+    if (numMatch) {
+      let rawVal = numMatch[0].toLowerCase();
+      if (rawVal.endsWith('k')) estimatedCost = parseFloat(rawVal) * 1000;
+      else if (rawVal.endsWith('lakh')) estimatedCost = parseFloat(rawVal) * 100000;
+      else estimatedCost = parseFloat(rawVal.replace(/,/g, ''));
+    }
+
+    const currentSurplus = currentMonthData.netSavings;
+    let affordText = `🛍️ <b>PURCHASE & AFFORDABILITY ADVICE:</b>\n━━━━━━━━━━━━━━━━━━━━\n`;
+    affordText += `💰 <b>Is Mahine Ki Net Bachat:</b> ₹${currentSurplus.toLocaleString('en-IN')}\n`;
+    affordText += `🏦 <b>Kul Bank Balance:</b> ₹${totalBankHolding.toLocaleString('en-IN')}\n\n`;
+
+    if (estimatedCost <= currentSurplus) {
+      affordText += `✅ <b>Aap Aaram Se Purchase Kar Sakte Hain!</b>\nAapka is mahine ka monthly surplus ₹${currentSurplus.toLocaleString('en-IN')} is purchase ke liye kaafi hai bina emergency fund ya savings ko touch kiye.`;
+    } else if (estimatedCost <= totalBankHolding * 0.2) {
+      affordText += `⚠️ <b>Aap Le Sakte Hain, Lekin Smart Tarika Yeh Hai:</b>\nYeh kharcha is mahine ke regular surplus se thoda zyada hai. Bank balance se pay karein lekin agle 1-2 mahine me ise restore karne ka plan banayein.`;
+    } else {
+      affordText += `🛑 <b>Wait Karein Ya 2 Mahine Ki Bachat Target Karein:</b>\nAbhi lene se aapke monthly emergency fund par asar pad sakta hai. Behtar hoga 2 mahine plan karke save karein.`;
+    }
+    return { text: affordText, model: 'SmartAdvisor-Engine', source: 'rule_fallback' };
+  }
+
+  // 9. SPECIFIC MONTH QUERY
+  if (matchedMonth || isPrevMonthQuery || qLower.includes('mahine') || qLower.includes('mahina')) {
+    let mText = `📅 <b>MAHINA: ${targetMonth.monthName} ${targetMonth.isCurrentMonth ? '(Current Month)' : ''}</b>\n━━━━━━━━━━━━━━━━━━━━\n`;
+    mText += `💰 <b>Income:</b> ₹${targetMonth.income.toLocaleString('en-IN')}\n`;
+    mText += `🔴 <b>Personal Kharcha:</b> ₹${targetMonth.personalExpense.toLocaleString('en-IN')}\n`;
+    mText += `🟢 <b>Net Bachat:</b> <b>₹${targetMonth.netSavings.toLocaleString('en-IN')}</b> (Bachat Dar: <b>${targetMonth.savingsRate}%</b>)\n\n`;
+
+    const topCategories = Object.entries(targetMonth.categories).sort((a, b) => b[1] - a[1]).slice(0, 4);
+    if (topCategories.length > 0) {
+      mText += `📂 <b>Top Spends (${targetMonth.monthName}):</b>\n`;
+      for (const [c, a] of topCategories) {
+        mText += `• ${c}: ₹${a.toLocaleString('en-IN')}\n`;
+      }
+    }
+
+    mText += `\n💡 <b>Verdict:</b> Is mahine aapki bachat dar ${targetMonth.savingsRate}% rahi jo bohot achhi hai!`;
+    return { text: mText, model: 'SmartAdvisor-Engine', source: 'rule_fallback' };
+  }
+
+  // 10. ALL-TIME RECORD QUERY
+  if (qLower.includes('all time') || qLower.includes('kul khata') || qLower.includes('shuru se') || qLower.includes('total kamai')) {
+    let allText = `📈 <b>ALL-TIME KUL KHATA LEDGER:</b>\n━━━━━━━━━━━━━━━━━━━━\n`;
+    allText += `• Kul Kamai (All Months): <b>₹${(Number(summary?.totalIncome) || 0).toLocaleString('en-IN')}</b>\n`;
+    allText += `• Kul Kharcha (All Months): <b>₹${(Number(summary?.totalExpense) || 0).toLocaleString('en-IN')}</b>\n`;
+    allText += `• Ledger Net Savings: <b>₹${(Number(summary?.totalNetSavings || summary?.netSavings) || 0).toLocaleString('en-IN')}</b>\n`;
+    allText += `• 🏦 Total Live Bank & Cash Balance: <b>₹${totalBankHolding.toLocaleString('en-IN')}</b>\n`;
+    allText += `• Total Investment Portfolio: <b>₹${totalInvestmentValue.toLocaleString('en-IN')}</b>\n`;
+    return { text: allText, model: 'SmartAdvisor-Engine', source: 'rule_fallback' };
+  }
+
+  // 11. GENERAL / COMPREHENSIVE FINANCIAL ADVICE OR PLANNING INTENT
+  const isAdvicePlan =
+    qLower.includes('advice') ||
+    qLower.includes('planning') ||
+    qLower.includes('plan') ||
+    qLower.includes('strategy') ||
+    qLower.includes('kya karu') ||
+    qLower.includes('report') ||
+    qLower.includes('overview') ||
+    qLower.includes('50/30/20');
+
+  if (isAdvicePlan) {
+    let pText = `📊 <b>PERSONAL WEALTH ADVISORY REPORT (${user.name.toUpperCase()}):</b>\n━━━━━━━━━━━━━━━━━━━━\n`;
+    pText += `🗓️ <b>Current Month (${currentMonthName}):</b>\n`;
+    pText += `• Income: ₹${currentMonthData.income.toLocaleString('en-IN')} | Kharcha: ₹${currentMonthData.personalExpense.toLocaleString('en-IN')}\n`;
+    pText += `• Net Bachat: <b>₹${currentMonthData.netSavings.toLocaleString('en-IN')}</b> (Bachat Dar: <b>${currentMonthData.savingsRate}%</b>)\n\n`;
+
+    pText += `🏦 <b>Liquid Holdings & Safety:</b>\n`;
+    pText += `• Total Bank & Cash Balance: <b>₹${totalBankHolding.toLocaleString('en-IN')}</b>\n`;
+    pText += `• RD & Investments Portfolio: <b>₹${totalInvestmentValue.toLocaleString('en-IN')}</b>\n\n`;
+
+    pText += `🎯 <b>Smart Action Plan:</b>\n`;
+    pText += `1. <b>Bachat Allocation:</b> Aapki ${currentMonthData.savingsRate}% bachat dar kaafi majboot hai. Is surplus me se har mahine Nifty 50 Index SIP aur Gold ETF me automatic auto-debit set karein.\n`;
+    if (avoidableAmt > 0) {
+      pText += `2. <b>Faltu Kharcha:</b> Lagbhag ₹${avoidableAmt.toLocaleString('en-IN')} ka avoidable kharcha detect hua hai. Ise rokne se saal me seedhe ₹${(avoidableAmt * 12).toLocaleString('en-IN')} ki extra bachat hogi.\n`;
+    }
     if (totalCcDue > 0) {
-      fallbackAnswer += `• <b>Credit Card Priority:</b> Aapka kul CC due ₹${totalCcDue.toLocaleString('en-IN')} hai. Due date se pehle full payment karein taaki interest na lage.\n`;
+      pText += `3. <b>Credit Card Dues:</b> Kul CC due ₹${totalCcDue.toLocaleString('en-IN')} hai, due date se pehle full clear karein taaki 0 interest lage.\n`;
+    }
+    pText += `4. <b>Investment Strategy:</b>\n`;
+    pText += `   • 50% Nifty 50 Index Fund SIP\n`;
+    pText += `   • 25% Flexi-Cap Equity SIP\n`;
+    pText += `   • 15% Sovereign Gold Bond / Gold ETF\n`;
+    pText += `   • 10% Liquid FD / Emergency Fund\n`;
+
+    return { text: pText, model: 'SmartAdvisor-Engine', source: 'rule_fallback' };
+  }
+
+  // 12. DEFAULT FALLBACK - CONVERSATIONAL & NATURAL (NO STATIC DUMPS)
+  let generalText = `💬 <b>Namaste ${user.name}!</b>\n\nAapke sawaal <i>"${userQuestion}"</i> ke sandarbh me aapke live khate ka hisab:\n\n`;
+  generalText += `• 🗓️ <b>Current Month (${currentMonthName}):</b> Kamai: ₹${currentMonthData.income.toLocaleString('en-IN')} | Kharcha: ₹${currentMonthData.personalExpense.toLocaleString('en-IN')} | Bachat: <b>₹${currentMonthData.netSavings.toLocaleString('en-IN')}</b> (${currentMonthData.savingsRate}%)\n`;
+  generalText += `• 🏦 <b>Live Bank Holding:</b> <b>₹${totalBankHolding.toLocaleString('en-IN')}</b> across ICICI, Axis & Cash\n`;
+  if (detailedInvestments.length > 0) {
+    const rd = detailedInvestments.find(i => i.type === 'RD');
+    if (rd) {
+      generalText += `• 📈 <b>Active RD:</b> ${rd.name} me ${rd.paidInstallments}/${rd.totalInstallments} kistein jama (Kul ₹${Number(rd.totalDeposited).toLocaleString('en-IN')} | Live Value: ₹${Number(rd.currentValue).toLocaleString('en-IN')})\n`;
     }
   }
-
-  fallbackAnswer += `• <b>Best Investment Strategy:</b>\n`;
-  fallbackAnswer += `  - 50% Nifty 50 Index Mutual Fund SIP\n`;
-  fallbackAnswer += `  - 25% Flexi-Cap Equity SIP\n`;
-  fallbackAnswer += `  - 15% Gold ETF / Sovereign Gold Bond\n`;
-  fallbackAnswer += `  - 10% Emergency Fund (Liquid FD)\n`;
+  generalText += `\n💡 <i>Aap mujhse specific cheez pooch sakte hain jaise: \"bank balance\", \"meri rd status\", \"petrol kharcha\", ya \"credit card due\"!</i>`;
 
   return {
-    text: fallbackAnswer,
-    model: 'RuleEngine-CFP',
+    text: generalText,
+    model: 'SmartAdvisor-Engine',
     source: 'rule_fallback',
   };
 }

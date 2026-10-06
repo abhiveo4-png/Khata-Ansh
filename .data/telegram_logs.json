@@ -1,5 +1,13 @@
 [
   {
+    "id": "log_1791299970412_xz5m",
+    "timestamp": "2026-10-06T15:19:30.412Z",
+    "type": "outgoing_reply",
+    "chatId": "838107368",
+    "botReply": "🔑 <b>GEMINI AI KEY STATUS:</b>\n━━━━━━━━━━━━━━━━━━━━\n• <b>Status:</b> ⚪ Not Set (Smart Offline Engine Active)\n• <b>Key:</b> <code>Nahi hai</code>\n• <b>Source:</b> None\n\n💡 <i>Nayi key set karne ke liye:</i>\n<code>/setkey AIzaSy...</code>\n<i>Key delete karne ke liye:</i>\n<code>/removekey</code>",
+    "status": "success"
+  },
+  {
     "id": "log_1789477141448_s3a3",
     "timestamp": "2026-09-15T12:59:01.448Z",
     "type": "outgoing_reply",

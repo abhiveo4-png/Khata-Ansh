@@ -144,6 +144,7 @@ export interface BotConfig {
   lastWebhookCheck?: string;
   pendingUpdateCount?: number;
   lastError?: string;
+  geminiApiKey?: string;
 }
 
 export interface AccountBalanceInfo {

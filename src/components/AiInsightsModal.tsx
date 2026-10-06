@@ -94,10 +94,15 @@ export const AiInsightsModal: React.FC<AiInsightsModalProps> = ({
     setIsAsking(true);
 
     try {
+      const historyPayload = messages
+        .filter(m => m.id !== 'welcome_msg' && !m.id.startsWith('err_'))
+        .slice(-8)
+        .map(m => ({ role: (m.sender === 'user' ? 'user' : 'model') as 'user' | 'model', text: m.text }));
+
       const { data, error } = await safeFetchJson<{ text: string; model?: string }>('/api/ai/ask', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ question: questionText })
+        body: JSON.stringify({ question: questionText, history: historyPayload })
       });
 
       if (data?.text) {
@@ -106,7 +111,7 @@ export const AiInsightsModal: React.FC<AiInsightsModalProps> = ({
           sender: 'ai',
           text: data.text,
           timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-          model: data.model || 'Gemini 3.8 Flash'
+          model: data.model || 'Gemini 2.5 Flash'
         };
         setMessages(prev => [...prev, aiMsg]);
       } else {
@@ -159,7 +164,7 @@ export const AiInsightsModal: React.FC<AiInsightsModalProps> = ({
                   GEMINI AI FINANCIAL ADVISOR
                 </h3>
                 <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-cyan-950/90 border border-cyan-500/40 text-cyan-300 font-bold">
-                  GEMINI 3.8 FLASH
+                  GEMINI PRO & FLASH
                 </span>
               </div>
               <p className="text-[11px] text-slate-400 flex items-center gap-1.5">

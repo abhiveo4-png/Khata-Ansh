@@ -37,13 +37,52 @@ export const TelegramBotSetupModal: React.FC<TelegramBotSetupModalProps> = ({
   onRefreshConfig,
 }) => {
   const [tokenInput, setTokenInput] = useState(botConfig?.botToken || '');
+  const [geminiKeyInput, setGeminiKeyInput] = useState('');
+  const [geminiInfo, setGeminiInfo] = useState<{ hasKey: boolean; maskedKey?: string; source?: string } | null>(null);
+  const [isSavingGemini, setIsSavingGemini] = useState(false);
+  const [geminiStatusMsg, setGeminiStatusMsg] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [isSettingWebhook, setIsSettingWebhook] = useState(false);
   const [isSyncingCommands, setIsSyncingCommands] = useState(false);
   const [statusMessage, setStatusMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [copied, setCopied] = useState(false);
 
+  React.useEffect(() => {
+    if (isOpen) {
+      safeFetchJson<{ hasKey: boolean; maskedKey?: string; source?: string }>('/api/gemini/config')
+        .then(({ data }) => {
+          if (data) setGeminiInfo(data);
+        })
+        .catch(() => {});
+    }
+  }, [isOpen]);
+
   if (!isOpen) return null;
+
+  const handleSaveGeminiKey = async () => {
+    const trimmed = geminiKeyInput.trim();
+    setIsSavingGemini(true);
+    setGeminiStatusMsg(null);
+    try {
+      const { data, error } = await safeFetchJson<{ success?: boolean; message?: string; warning?: string; hasKey?: boolean }>('/api/gemini/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ apiKey: trimmed }),
+      });
+      if (data?.success) {
+        setGeminiStatusMsg(data.message || data.warning || '✅ Gemini API Key successfully saved!');
+        setGeminiInfo({ hasKey: !!trimmed, maskedKey: trimmed ? `${trimmed.slice(0, 4)}...${trimmed.slice(-4)}` : '' });
+        setGeminiKeyInput('');
+        onRefreshConfig();
+      } else {
+        setGeminiStatusMsg(error || 'Failed to save Gemini key');
+      }
+    } catch (err: any) {
+      setGeminiStatusMsg('Error: ' + err.message);
+    } finally {
+      setIsSavingGemini(false);
+    }
+  };
 
   const handleCopyWebhook = () => {
     navigator.clipboard.writeText(webhookUrl);
@@ -271,6 +310,68 @@ export const TelegramBotSetupModal: React.FC<TelegramBotSetupModalProps> = ({
                 </div>
               </div>
 
+            </div>
+          </div>
+
+          {/* Google Gemini AI Pro / Flash API Key Section */}
+          <div className="bg-gradient-to-r from-purple-950/40 via-slate-900 to-indigo-950/40 rounded-xl p-4 border border-purple-500/30 space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-2">
+                <Sparkles className="w-4 h-4 text-purple-400" />
+                <h4 className="text-xs font-bold text-white font-display uppercase tracking-wider">
+                  GOOGLE GEMINI PRO / FLASH AI ENGINE
+                </h4>
+              </div>
+              <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold border ${
+                geminiInfo?.hasKey
+                  ? 'bg-emerald-950/80 text-emerald-300 border-emerald-500/40'
+                  : 'bg-amber-950/80 text-amber-300 border-amber-500/40'
+              }`}>
+                {geminiInfo?.hasKey ? '⚡ GEMINI AI ACTIVE' : '⚪ SMART OFFLINE ENGINE'}
+              </span>
+            </div>
+
+            <p className="text-[11px] text-slate-300">
+              Telegram me <code>/ask</code> aur AI Wealth Advisor se natural, zero-robotic chat ke liye Google Gemini API Key add karein. Key na hone par bhi smart offline engine kaam karega.
+            </p>
+
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-slate-300 text-[11px] font-bold">
+                  Gemini API Key (Google AI Studio):
+                </span>
+                <a
+                  href="https://aistudio.google.com/app/apikey"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-[10px] text-purple-400 hover:text-purple-300 inline-flex items-center space-x-1"
+                >
+                  <span>Free Key Banayein</span>
+                  <ExternalLink className="w-2.5 h-2.5" />
+                </a>
+              </div>
+              <div className="flex space-x-2">
+                <input
+                  type="password"
+                  value={geminiKeyInput}
+                  onChange={(e) => setGeminiKeyInput(e.target.value)}
+                  placeholder={geminiInfo?.hasKey ? `Active Key: ${geminiInfo.maskedKey} (Replace karne ke liye dalein)` : "AIzaSy... API key paste karein"}
+                  className="flex-1 px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-purple-200 text-xs font-mono focus:border-purple-400 outline-hidden"
+                />
+                <button
+                  onClick={handleSaveGeminiKey}
+                  disabled={isSavingGemini}
+                  className="px-3 py-2 bg-purple-600 hover:bg-purple-500 text-white rounded-xl text-[11px] font-bold shrink-0 flex items-center space-x-1 cursor-pointer transition-colors"
+                >
+                  {isSavingGemini ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Zap className="w-3 h-3" />}
+                  <span>{isSavingGemini ? 'Testing...' : 'Save & Verify'}</span>
+                </button>
+              </div>
+              {geminiStatusMsg && (
+                <p className="text-[11px] text-purple-300 bg-purple-950/60 p-2 rounded-lg border border-purple-500/30">
+                  {geminiStatusMsg}
+                </p>
+              )}
             </div>
           </div>
 
