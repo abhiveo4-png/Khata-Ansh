@@ -10424,11 +10424,12 @@ export async function answerAiFinancialQuestion(
   const user = users.find(u => u.id === userId) || { name: 'User', id: userId, email: 'user@example.com' };
   const summary = calculateUserSummary(userId);
   const accountBalances = calculateAccountsBalances(userId);
-  const ruleBasedAvoidable = calculateAvoidableSpending(store.transactions);
+  const ruleBasedAvoidable = calculateAvoidableSpending(store.transactions || []);
 
-  const bankAccounts = Object.entries(accountBalances.accounts).filter(([_, a]) => a.type === 'bank_account' || a.type === 'cash');
-  const creditCards = Object.entries(accountBalances.accounts).filter(([_, a]) => a.type === 'credit_card' || a.type === 'rupay_card');
-  const wifeSavings = accountBalances.wifeSavings;
+  const accountsMap = accountBalances?.accounts || {};
+  const bankAccounts = Object.entries(accountsMap).filter(([_, a]) => a && (a.type === 'bank_account' || a.type === 'cash'));
+  const creditCards = Object.entries(accountsMap).filter(([_, a]) => a && (a.type === 'credit_card' || a.type === 'rupay_card'));
+  const wifeSavings = accountBalances?.wifeSavings || { baseBalance: 0, totalTransferred: 0, currentBalance: 0 };
 
   const goals: any[] = (store as any).goals || (store as any).piggyBankFunds || [];
   const investments = store.investments || [];
@@ -10440,9 +10441,9 @@ export async function answerAiFinancialQuestion(
   const pendingBorrowed = udhaars.filter(u => u.status === 'pending' && u.type === 'borrowed').reduce((sum, u) => sum + (Number(u.amount) || 0), 0);
 
   const categoryTotals: Record<string, number> = {};
-  for (const t of store.transactions) {
+  for (const t of (store.transactions || [])) {
     if (t.type === 'expense') {
-      categoryTotals[t.category] = (categoryTotals[t.category] || 0) + t.amount;
+      categoryTotals[t.category] = (categoryTotals[t.category] || 0) + (Number(t.amount) || 0);
     }
   }
 
@@ -10453,43 +10454,43 @@ You have direct, real-time access to ${user.name}'s complete live personal finan
 
 === LIVE FINANCIAL LEDGER CONTEXT FOR ${user.name} ===
 • User Name: ${user.name} (${user.email})
-• Total Income: ₹${summary.totalIncome.toLocaleString('en-IN')}
-• Total Expenses: ₹${summary.totalExpense.toLocaleString('en-IN')}
-• Net Savings / Cash-in-Bank: ₹${(summary.totalNetSavings || summary.netSavings).toLocaleString('en-IN')}
-• Savings Rate: ${summary.savingsRate}%
+• Total Income: ₹${(Number(summary?.totalIncome) || 0).toLocaleString('en-IN')}
+• Total Expenses: ₹${(Number(summary?.totalExpense) || 0).toLocaleString('en-IN')}
+• Net Savings / Cash-in-Bank: ₹${(Number(summary?.totalNetSavings || summary?.netSavings) || 0).toLocaleString('en-IN')}
+• Savings Rate: ${Number(summary?.savingsRate) || 0}%
 
 === BANK ACCOUNTS & CASH BALANCES ===
-${bankAccounts.map(([id, a]) => `• ${a.name} (${id}): Live Balance ₹${a.balance.toLocaleString('en-IN')} (Base: ₹${a.baseBalance}, Credits: ₹${a.totalCredits}, Debits: ₹${a.totalDebits})`).join('\n') || 'None'}
+${bankAccounts.map(([id, a]) => `• ${a.name} (${id}): Live Balance ₹${(Number(a.balance) || 0).toLocaleString('en-IN')} (Base: ₹${(Number(a.baseBalance) || 0).toLocaleString('en-IN')}, Credits: ₹${(Number(a.totalCredits) || 0).toLocaleString('en-IN')}, Debits: ₹${(Number(a.totalDebits) || 0).toLocaleString('en-IN')})`).join('\n') || 'None'}
 
 === CREDIT CARDS (LIMITS, SPENDS & DUES) ===
-${creditCards.map(([id, a]) => `• ${a.name} (${id}): Credit Limit ₹${a.creditLimit.toLocaleString('en-IN')}, Current Spends/Due ₹${(a.currentOutstanding || 0).toLocaleString('en-IN')}, Available Limit ₹${(a.availableLimit || 0).toLocaleString('en-IN')}`).join('\n') || 'None'}
+${creditCards.map(([id, a]) => `• ${a.name} (${id}): Credit Limit ₹${(Number(a.creditLimit) || 0).toLocaleString('en-IN')}, Current Spends/Due ₹${(Number(a.currentOutstanding) || 0).toLocaleString('en-IN')}, Available Limit ₹${(Number(a.availableLimit) || 0).toLocaleString('en-IN')}`).join('\n') || 'None'}
 
 === WIFE SAVINGS & KHATA ===
-• Starting Base: ₹${wifeSavings.baseBalance.toLocaleString('en-IN')}
-• Total Transferred: ₹${wifeSavings.totalTransferred.toLocaleString('en-IN')}
-• Live Current Balance: ₹${(wifeSavings.currentBalance || (wifeSavings.baseBalance + wifeSavings.totalTransferred)).toLocaleString('en-IN')}
+• Starting Base: ₹${(Number(wifeSavings.baseBalance) || 0).toLocaleString('en-IN')}
+• Total Transferred: ₹${(Number(wifeSavings.totalTransferred) || 0).toLocaleString('en-IN')}
+• Live Current Balance: ₹${(Number(wifeSavings.currentBalance || ((Number(wifeSavings.baseBalance) || 0) + (Number(wifeSavings.totalTransferred) || 0))) || 0).toLocaleString('en-IN')}
 
 === INVESTMENTS & PORTFOLIO ===
-• Total Portfolio Value: ₹${totalInvestmentValue.toLocaleString('en-IN')}
-• Total Principal Invested: ₹${totalInvestedPrincipal.toLocaleString('en-IN')}
-• Portfolio Items: ${investments.length > 0 ? investments.map(inv => `${inv.name || inv.type || 'Investment'} (Invested: ₹${inv.amount}, Value: ₹${inv.currentValue || inv.amount}, Type: ${inv.type || 'MF'})`).join('; ') : 'No investments logged yet'}
+• Total Portfolio Value: ₹${(Number(totalInvestmentValue) || 0).toLocaleString('en-IN')}
+• Total Principal Invested: ₹${(Number(totalInvestedPrincipal) || 0).toLocaleString('en-IN')}
+• Portfolio Items: ${investments.length > 0 ? investments.map(inv => `${inv.name || inv.type || 'Investment'} (Invested: ₹${(Number(inv.amount) || 0).toLocaleString('en-IN')}, Value: ₹${(Number(inv.currentValue || inv.amount) || 0).toLocaleString('en-IN')}, Type: ${inv.type || 'MF'})`).join('; ') : 'No investments logged yet'}
 
 === UDHAAR KHATA (DEBTS & RECEIVABLES) ===
-• Money you will receive (Lent pending): ₹${pendingLent.toLocaleString('en-IN')}
-• Money you have to give (Borrowed pending): ₹${pendingBorrowed.toLocaleString('en-IN')}
+• Money you will receive (Lent pending): ₹${(Number(pendingLent) || 0).toLocaleString('en-IN')}
+• Money you have to give (Borrowed pending): ₹${(Number(pendingBorrowed) || 0).toLocaleString('en-IN')}
 
 === DEDICATED GOALS & PIGGY BANK FUNDS ===
-${goals.length > 0 ? goals.map((g: any) => `• ${g.name}: Saved ₹${(g.currentBalance || g.currentAmount || 0).toLocaleString('en-IN')} / Target ₹${(g.targetAmount || 0).toLocaleString('en-IN')}`).join('\n') : 'No dedicated goal funds created yet'}
+${goals.length > 0 ? goals.map((g: any) => `• ${g.name || 'Goal'}: Saved ₹${(Number(g.currentBalance || g.currentAmount) || 0).toLocaleString('en-IN')} / Target ₹${(Number(g.targetAmount) || 0).toLocaleString('en-IN')}`).join('\n') : 'No dedicated goal funds created yet'}
 
 === TOP EXPENSE CATEGORIES ===
-${Object.entries(categoryTotals).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([cat, amt]) => `• ${cat}: ₹${amt.toLocaleString('en-IN')}`).join('\n') || 'No expenses logged'}
+${Object.entries(categoryTotals).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([cat, amt]) => `• ${cat}: ₹${(Number(amt) || 0).toLocaleString('en-IN')}`).join('\n') || 'No expenses logged'}
 
 === DETECTED FALTU / AVOIDABLE SPENDS ===
-• Total Avoidable: ₹${ruleBasedAvoidable.totalAvoidableAmount.toLocaleString('en-IN')} (${ruleBasedAvoidable.percentageOfExpenses}% of expenses)
-• Items: ${ruleBasedAvoidable.items.map(i => `${i.title} (₹${i.amount} - ${i.reason})`).join(', ') || 'None'}
+• Total Avoidable: ₹${(Number(ruleBasedAvoidable?.totalAvoidableAmount) || 0).toLocaleString('en-IN')} (${Number(ruleBasedAvoidable?.percentageOfExpenses) || 0}% of expenses)
+• Items: ${ruleBasedAvoidable?.items?.map(i => `${i.title} (₹${(Number(i.amount) || 0).toLocaleString('en-IN')} - ${i.reason})`).join(', ') || 'None'}
 
 === RECENT TRANSACTIONS (LAST 15) ===
-${store.transactions.slice(0, 15).map(t => `[${t.date}] ${t.type === 'income' ? '+' : '-'}₹${t.amount} | ${t.description} | ${t.category} | ${t.account || t.paymentMethod}`).join('\n') || 'None'}
+${(store.transactions || []).slice(0, 15).map(t => `[${t.date}] ${t.type === 'income' ? '+' : '-'}₹${(Number(t.amount) || 0).toLocaleString('en-IN')} | ${t.description} | ${t.category} | ${t.account || t.paymentMethod}`).join('\n') || 'None'}
 =====================================================
 
 USER'S QUESTION:
@@ -10523,23 +10524,25 @@ INSTRUCTIONS FOR ANSWERING:
 
   // Smart Rule-Based Financial Advisor Fallback (if Gemini key is unavailable or during network outage)
   let fallbackAnswer = `🤖 <b>FINANCIAL ADVISORY SUMMARY FOR ${user.name.toUpperCase()}</b>\n━━━━━━━━━━━━━━━━━━━━\n`;
-  fallbackAnswer += `💰 <b>Monthly Income:</b> ₹${summary.totalIncome.toLocaleString('en-IN')}\n`;
-  fallbackAnswer += `🔴 <b>Total Expenses:</b> ₹${summary.totalExpense.toLocaleString('en-IN')}\n`;
-  fallbackAnswer += `🟢 <b>Net Savings:</b> ₹${(summary.totalNetSavings || summary.netSavings).toLocaleString('en-IN')} (Bachat Dar: <b>${summary.savingsRate}%</b>)\n\n`;
+  fallbackAnswer += `💰 <b>Monthly Income:</b> ₹${(Number(summary?.totalIncome) || 0).toLocaleString('en-IN')}\n`;
+  fallbackAnswer += `🔴 <b>Total Expenses:</b> ₹${(Number(summary?.totalExpense) || 0).toLocaleString('en-IN')}\n`;
+  fallbackAnswer += `🟢 <b>Net Savings:</b> ₹${(Number(summary?.totalNetSavings || summary?.netSavings) || 0).toLocaleString('en-IN')} (Bachat Dar: <b>${Number(summary?.savingsRate) || 0}%</b>)\n\n`;
 
   fallbackAnswer += `📊 <b>SMART ACTION PLAN:</b>\n`;
-  if (summary.savingsRate < 20) {
-    fallbackAnswer += `• <b>Bachat Badhayein:</b> Aapki current bachat rate ${summary.savingsRate}% hai. Ideal target kam se kam 20%-30% hona chahiye (₹${Math.round(summary.totalIncome * 0.25).toLocaleString('en-IN')}/mahina).\n`;
+  const sRate = Number(summary?.savingsRate) || 0;
+  if (sRate < 20) {
+    fallbackAnswer += `• <b>Bachat Badhayein:</b> Aapki current bachat rate ${sRate}% hai. Ideal target kam se kam 20%-30% hona chahiye (₹${Math.round((Number(summary?.totalIncome) || 0) * 0.25).toLocaleString('en-IN')}/mahina).\n`;
   } else {
-    fallbackAnswer += `• <b>Bachat Rate Strong Hai:</b> Aapki bachat dar ${summary.savingsRate}% hai jo kaafi healthy hai! Ise smart investments me allocate karein.\n`;
+    fallbackAnswer += `• <b>Bachat Rate Strong Hai:</b> Aapki bachat dar ${sRate}% hai jo kaafi healthy hai! Ise smart investments me allocate karein.\n`;
   }
 
-  if (ruleBasedAvoidable.totalAvoidableAmount > 0) {
-    fallbackAnswer += `• <b>Faltu Kharcha Cut:</b> Lagbhag ₹${ruleBasedAvoidable.totalAvoidableAmount.toLocaleString('en-IN')} ka avoidable kharcha detect hua hai. Ise rokne se saal me <b>₹${(ruleBasedAvoidable.totalAvoidableAmount * 12).toLocaleString('en-IN')}</b> ki extra bachat hogi!\n`;
+  const avoidableAmt = Number(ruleBasedAvoidable?.totalAvoidableAmount) || 0;
+  if (avoidableAmt > 0) {
+    fallbackAnswer += `• <b>Faltu Kharcha Cut:</b> Lagbhag ₹${avoidableAmt.toLocaleString('en-IN')} ka avoidable kharcha detect hua hai. Ise rokne se saal me <b>₹${(avoidableAmt * 12).toLocaleString('en-IN')}</b> ki extra bachat hogi!\n`;
   }
 
   if (creditCards.length > 0) {
-    const totalCcDue = creditCards.reduce((sum, [_, c]) => sum + (c.currentOutstanding || 0), 0);
+    const totalCcDue = creditCards.reduce((sum, [_, c]) => sum + (Number(c?.currentOutstanding) || 0), 0);
     if (totalCcDue > 0) {
       fallbackAnswer += `• <b>Credit Card Priority:</b> Aapka kul CC due ₹${totalCcDue.toLocaleString('en-IN')} hai. Interest se bachne ke liye due date se pehle full payment karein.\n`;
     }
