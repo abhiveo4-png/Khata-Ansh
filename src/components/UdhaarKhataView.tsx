@@ -22,22 +22,41 @@ import { ALL_ACCOUNTS, ACCOUNTS_CONFIG } from '../utils/accounts';
 
 interface UdhaarKhataViewProps {
   records?: UdhaarRecord[];
+  udhaars?: UdhaarRecord[];
   isPrivacyMode?: boolean;
   onAddRecord?: (record: Omit<UdhaarRecord, 'id' | 'createdAt'>) => Promise<void>;
+  onAddUdhaar?: (record: Omit<UdhaarRecord, 'id' | 'createdAt'>) => Promise<void>;
   onSettleRecord?: (id: string) => Promise<void>;
+  onSettleUdhaar?: (id: string) => Promise<void>;
   onDeleteRecord?: (id: string) => Promise<void>;
+  onDeleteUdhaar?: (id: string) => Promise<void>;
   onUpdateRecord?: (id: string, updates: Partial<UdhaarRecord>) => Promise<void>;
+  onUpdateUdhaar?: (id: string, updates: Partial<UdhaarRecord>) => Promise<void>;
 }
 
 export const UdhaarKhataView: React.FC<UdhaarKhataViewProps> = ({
-  records = [],
+  records,
+  udhaars,
   isPrivacyMode = false,
   onAddRecord,
+  onAddUdhaar,
   onSettleRecord,
+  onSettleUdhaar,
   onDeleteRecord,
+  onDeleteUdhaar,
   onUpdateRecord,
+  onUpdateUdhaar,
 }) => {
-  const safeRecords = Array.isArray(records) ? records : [];
+  const actualRecords = (Array.isArray(records) && records.length > 0)
+    ? records
+    : (Array.isArray(udhaars) ? udhaars : Array.isArray(records) ? records : []);
+  const safeRecords = actualRecords;
+
+  const handleAdd = onAddRecord || onAddUdhaar;
+  const handleSettle = onSettleRecord || onSettleUdhaar;
+  const handleDelete = onDeleteRecord || onDeleteUdhaar;
+  const handleUpdate = onUpdateRecord || onUpdateUdhaar;
+
   const [viewMode, setViewMode] = useState<'grouped' | 'list'>('grouped');
   const [filter, setFilter] = useState<'all' | 'lent' | 'borrowed' | 'settled'>('all');
   const [searchQuery, setSearchQuery] = useState('');
@@ -148,13 +167,13 @@ export const UdhaarKhataView: React.FC<UdhaarKhataViewProps> = ({
 
   const handleSaveRecord = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!editingRecord || !onUpdateRecord) return;
+    if (!editingRecord || !handleUpdate) return;
     const parsedAmt = parseFloat(editAmount);
     if (!editPersonName.trim() || isNaN(parsedAmt) || parsedAmt <= 0) return;
 
     setIsSavingRecord(true);
     try {
-      await onUpdateRecord(editingRecord.id, {
+      await handleUpdate(editingRecord.id, {
         personName: editPersonName.trim(),
         amount: parsedAmt,
         type: editType,
@@ -181,11 +200,11 @@ export const UdhaarKhataView: React.FC<UdhaarKhataViewProps> = ({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!personName.trim() || !amount || parseFloat(amount) <= 0 || !onAddRecord) return;
+    if (!personName.trim() || !amount || parseFloat(amount) <= 0 || !handleAdd) return;
 
     setIsSubmitting(true);
     try {
-      await onAddRecord({
+      await handleAdd({
         userId: '',
         personName: personName.trim(),
         amount: parseFloat(amount),
@@ -616,7 +635,7 @@ export const UdhaarKhataView: React.FC<UdhaarKhataViewProps> = ({
 
                             {!itemIsSettled && (
                               <button
-                                onClick={() => onSettleRecord && onSettleRecord(item.id)}
+                                onClick={() => handleSettle && handleSettle(item.id)}
                                 className="px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] font-medium flex items-center space-x-1 cursor-pointer transition-all shadow-sm active:scale-95"
                                 title="Settle karein"
                               >
@@ -625,9 +644,9 @@ export const UdhaarKhataView: React.FC<UdhaarKhataViewProps> = ({
                               </button>
                             )}
 
-                            {onDeleteRecord && (
+                            {handleDelete && (
                               <button
-                                onClick={() => onDeleteRecord(item.id)}
+                                onClick={() => handleDelete(item.id)}
                                 className="p-1 text-slate-500 hover:text-rose-400 rounded-lg hover:bg-rose-500/10 transition-colors cursor-pointer"
                                 title="Delete"
                               >
@@ -750,9 +769,9 @@ export const UdhaarKhataView: React.FC<UdhaarKhataViewProps> = ({
                         <span className="text-[11px] hidden sm:inline">Remind</span>
                       </button>
                     )}
-                    {!isSettled && onSettleRecord && (
+                    {!isSettled && handleSettle && (
                       <button
-                        onClick={() => onSettleRecord(item.id)}
+                        onClick={() => handleSettle(item.id)}
                         className="px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-medium flex items-center space-x-1 cursor-pointer transition-all active:scale-95 shadow-sm"
                       >
                         <CheckCircle2 className="w-3.5 h-3.5" />
@@ -761,9 +780,9 @@ export const UdhaarKhataView: React.FC<UdhaarKhataViewProps> = ({
                     )}
                   </div>
 
-                  {onDeleteRecord && (
+                  {handleDelete && (
                     <button
-                      onClick={() => onDeleteRecord(item.id)}
+                      onClick={() => handleDelete(item.id)}
                       className="p-1.5 text-slate-500 hover:text-rose-400 rounded-lg hover:bg-rose-500/10 transition-colors cursor-pointer"
                       title="Delete Entry"
                     >

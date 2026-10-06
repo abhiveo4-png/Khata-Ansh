@@ -780,11 +780,16 @@ export const WealthKhataHub: React.FC<WealthKhataHubProps> = ({
       {activeSubTab === 'udhaar' && (
         <div className="space-y-4">
           <UdhaarKhataView
+            records={udhaars}
             udhaars={udhaars}
             isPrivacyMode={isPrivacyMode}
+            onAddRecord={onAddUdhaar}
             onAddUdhaar={onAddUdhaar}
+            onSettleRecord={onSettleUdhaar}
             onSettleUdhaar={onSettleUdhaar}
+            onDeleteRecord={onDeleteUdhaar}
             onDeleteUdhaar={onDeleteUdhaar}
+            onUpdateRecord={onUpdateUdhaar}
             onUpdateUdhaar={onUpdateUdhaar}
           />
         </div>
