@@ -108,6 +108,7 @@ export interface CategoryDef {
   isCustom?: boolean;
   isDefault?: boolean;
   description?: string;
+  excludeFromBudget?: boolean;
 }
 
 export interface CategoryBudget {

@@ -94,6 +94,7 @@ export const CategoryManager: React.FC<CategoryManagerProps> = ({
   const [color, setColor] = useState('#06B6D4');
   const [keywordsText, setKeywordsText] = useState('');
   const [description, setDescription] = useState('');
+  const [excludeFromBudget, setExcludeFromBudget] = useState(false);
   const [error, setError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -105,6 +106,7 @@ export const CategoryManager: React.FC<CategoryManagerProps> = ({
     setColor('#06B6D4');
     setKeywordsText('');
     setDescription('');
+    setExcludeFromBudget(false);
     setError('');
     setIsModalOpen(true);
   };
@@ -117,6 +119,7 @@ export const CategoryManager: React.FC<CategoryManagerProps> = ({
     setColor(cat.color || '#06B6D4');
     setKeywordsText(cat.keywords ? cat.keywords.join(', ') : '');
     setDescription(cat.description || '');
+    setExcludeFromBudget(Boolean(cat.excludeFromBudget));
     setError('');
     setIsModalOpen(true);
   };
@@ -150,12 +153,13 @@ export const CategoryManager: React.FC<CategoryManagerProps> = ({
             color,
             keywords,
             description: description.trim(),
+            excludeFromBudget,
           });
         } else {
           const { data } = await safeFetchJson<{ categories?: CategoryDef[] }>(`/api/categories/${editingCategory.id}`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name: name.trim(), type, icon, color, keywords, description: description.trim() }),
+            body: JSON.stringify({ name: name.trim(), type, icon, color, keywords, description: description.trim(), excludeFromBudget }),
           });
           if (data?.categories && onCategoriesChange) onCategoriesChange(data.categories);
         }
@@ -169,12 +173,13 @@ export const CategoryManager: React.FC<CategoryManagerProps> = ({
             keywords,
             description: description.trim(),
             isCustom: true,
+            excludeFromBudget,
           });
         } else {
           const { data } = await safeFetchJson<{ categories?: CategoryDef[] }>('/api/categories', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name: name.trim(), type, icon, color, keywords, description: description.trim(), isCustom: true }),
+            body: JSON.stringify({ name: name.trim(), type, icon, color, keywords, description: description.trim(), isCustom: true, excludeFromBudget }),
           });
           if (data?.categories && onCategoriesChange) onCategoriesChange(data.categories);
         }
@@ -425,6 +430,23 @@ export const CategoryManager: React.FC<CategoryManagerProps> = ({
                     </button>
                   ))}
                 </div>
+              </div>
+
+              <div>
+                <label className="flex items-start gap-3 p-3 bg-slate-950 border border-slate-800 rounded-xl cursor-pointer hover:border-purple-500/50 transition-all">
+                  <input
+                    type="checkbox"
+                    checked={excludeFromBudget}
+                    onChange={(e) => setExcludeFromBudget(e.target.checked)}
+                    className="mt-0.5 w-4 h-4 rounded text-purple-500 bg-slate-900 border-slate-700 cursor-pointer"
+                  />
+                  <div>
+                    <div className="text-white font-bold">Monthly Budget se Exclude Karein (Exempt from Budget)</div>
+                    <div className="text-[11px] text-slate-400 mt-0.5">
+                      Bank balance se minus hoga, par mahine ke total monthly budget / kharcha limit me count nahi hoga (jaise Wife Transfer, CC Payment).
+                    </div>
+                  </div>
+                </label>
               </div>
 
               <div>

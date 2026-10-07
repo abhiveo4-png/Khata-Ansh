@@ -563,6 +563,20 @@ function syncBudgetsWithCategories(store: UserDataStore): boolean {
     changed = true;
   }
 
+  // Ensure all DEFAULT_CATEGORIES exist in store.categories
+  for (const defCat of DEFAULT_CATEGORIES) {
+    const existingIdx = store.categories.findIndex(c => c.name.toLowerCase() === defCat.name.toLowerCase() || c.id === defCat.id);
+    if (existingIdx === -1) {
+      store.categories.push({ ...defCat });
+      changed = true;
+    } else {
+      if (defCat.excludeFromBudget !== undefined && store.categories[existingIdx].excludeFromBudget === undefined) {
+        store.categories[existingIdx].excludeFromBudget = defCat.excludeFromBudget;
+        changed = true;
+      }
+    }
+  }
+
   // Categories that can have budgets (expense, both, or uncategorized)
   const budgetableCategories = store.categories.filter(c => c.type === 'expense' || c.type === 'both' || !c.type);
 
@@ -7963,7 +7977,7 @@ app.get('/api/categories', (req, res) => {
 app.post('/api/categories', (req, res) => {
   const user = getRequestUser(req);
   const store = getUserData(user.id);
-  const { name, type, icon, color, keywords, description, budgetLimit } = req.body;
+  const { name, type, icon, color, keywords, description, budgetLimit, excludeFromBudget } = req.body;
 
   if (!name || !name.trim()) {
     return res.status(400).json({ error: 'Category name is required' });
@@ -7984,6 +7998,7 @@ app.post('/api/categories', (req, res) => {
     keywords: Array.isArray(keywords) ? keywords : (keywords ? keywords.split(',').map((k: string) => k.trim()).filter(Boolean) : [categoryName.toLowerCase()]),
     isCustom: true,
     description: description || '',
+    excludeFromBudget: Boolean(excludeFromBudget),
   };
 
   store.categories.push(newCat);
@@ -8009,7 +8024,7 @@ app.put('/api/categories/:id', (req, res) => {
   const user = getRequestUser(req);
   const store = getUserData(user.id);
   const { id } = req.params;
-  const { name, type, icon, color, keywords, description } = req.body;
+  const { name, type, icon, color, keywords, description, excludeFromBudget } = req.body;
 
   const catIdx = store.categories.findIndex(c => c.id === id || c.name === id);
   if (catIdx === -1) {
@@ -8027,6 +8042,7 @@ app.put('/api/categories/:id', (req, res) => {
     color: color || store.categories[catIdx].color,
     keywords: Array.isArray(keywords) ? keywords : store.categories[catIdx].keywords,
     description: description !== undefined ? description : store.categories[catIdx].description,
+    excludeFromBudget: excludeFromBudget !== undefined ? Boolean(excludeFromBudget) : store.categories[catIdx].excludeFromBudget,
   };
 
   // If category name changed, update all transactions and budgets under it

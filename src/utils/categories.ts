@@ -121,6 +121,7 @@ export const DEFAULT_CATEGORIES: CategoryDef[] = [
     bgLight: 'bg-purple-50 text-purple-700 border-purple-200',
     keywords: ['wife transfer', 'wife', 'wife ko', 'patni', 'wife ko diya', 'wife sent', 'wife payment'],
     description: 'Bank transfer to wife (deducted from bank balance, excluded from monthly budget)',
+    excludeFromBudget: true,
   },
   {
     id: 'cc_payment',
@@ -131,6 +132,7 @@ export const DEFAULT_CATEGORIES: CategoryDef[] = [
     bgLight: 'bg-pink-50 text-pink-700 border-pink-200',
     keywords: ['cc payment', 'credit card payment', 'credit card bill', 'cc bill', 'credit card bhar diya', 'cc bill paid'],
     description: 'Credit Card bill payment for previous month spends (deducted from bank balance, excluded from monthly budget)',
+    excludeFromBudget: true,
   },
   {
     id: 'other_expense',
