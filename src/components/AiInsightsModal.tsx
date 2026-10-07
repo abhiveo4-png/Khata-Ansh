@@ -177,7 +177,7 @@ export const AiInsightsModal: React.FC<AiInsightsModalProps> = ({
           sender: 'ai',
           text: data.text,
           timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-          model: data.model || 'Gemini 2.5 Flash'
+          model: data.model || 'Gemini 3.8 Flash'
         };
         setMessages(prev => [...prev, aiMsg]);
       } else {
