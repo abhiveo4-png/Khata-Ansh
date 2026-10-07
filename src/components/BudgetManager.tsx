@@ -153,7 +153,11 @@ export const BudgetManager: React.FC<BudgetManagerProps> = ({
         tx.type === 'expense' &&
         !tx.isReimbursement &&
         tx.category?.toLowerCase() !== 'reimbursement' &&
-        !tx.isSavingsTransfer
+        !tx.isSavingsTransfer &&
+        !tx.isWifeTransfer &&
+        tx.category?.toLowerCase() !== 'wife transfer' &&
+        !tx.isCcPayment &&
+        tx.category?.toLowerCase() !== 'cc payment'
       ) {
         const catName = tx.category || 'Uncategorized';
         map[catName.toLowerCase()] = (map[catName.toLowerCase()] || 0) + (Number(tx.amount) || 0);

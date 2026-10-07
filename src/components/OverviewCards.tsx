@@ -96,7 +96,7 @@ export const OverviewCards: React.FC<OverviewCardsProps> = ({
         if (t.reimbursementStatus !== 'settled' && rem > 0) {
           prevPendingRim += rem;
         }
-      } else if (!t.isSavingsTransfer) {
+      } else if (!t.isSavingsTransfer && !t.isWifeTransfer && t.category !== 'Wife Transfer' && !t.isCcPayment && t.category !== 'CC Payment') {
         prevPersonalExpense += amt;
       }
     }
@@ -130,7 +130,7 @@ export const OverviewCards: React.FC<OverviewCardsProps> = ({
         if (t.reimbursementStatus !== 'settled' && rem > 0) {
           monthPendingRim += rem;
         }
-      } else if (!t.isSavingsTransfer) {
+      } else if (!t.isSavingsTransfer && !t.isWifeTransfer && t.category !== 'Wife Transfer' && !t.isCcPayment && t.category !== 'CC Payment') {
         monthPersonalExpense += amt;
       }
     }

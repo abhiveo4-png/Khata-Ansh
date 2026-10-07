@@ -113,6 +113,26 @@ export const DEFAULT_CATEGORIES: CategoryDef[] = [
     description: 'Office or business claimable expenses (does not eat personal monthly budget)',
   },
   {
+    id: 'wife_transfer',
+    name: 'Wife Transfer',
+    type: 'expense',
+    icon: 'UserCheck',
+    color: '#8B5CF6', // Purple
+    bgLight: 'bg-purple-50 text-purple-700 border-purple-200',
+    keywords: ['wife transfer', 'wife', 'wife ko', 'patni', 'wife ko diya', 'wife sent', 'wife payment'],
+    description: 'Bank transfer to wife (deducted from bank balance, excluded from monthly budget)',
+  },
+  {
+    id: 'cc_payment',
+    name: 'CC Payment',
+    type: 'expense',
+    icon: 'CreditCard',
+    color: '#EC4899', // Pink
+    bgLight: 'bg-pink-50 text-pink-700 border-pink-200',
+    keywords: ['cc payment', 'credit card payment', 'credit card bill', 'cc bill', 'credit card bhar diya', 'cc bill paid'],
+    description: 'Credit Card bill payment for previous month spends (deducted from bank balance, excluded from monthly budget)',
+  },
+  {
     id: 'other_expense',
     name: 'Other Expense',
     type: 'expense',

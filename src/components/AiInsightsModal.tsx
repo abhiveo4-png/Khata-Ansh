@@ -17,10 +17,32 @@ import {
   User,
   ShieldCheck,
   CreditCard,
-  Target
+  Target,
+  Key,
+  Check,
+  ChevronDown,
+  ChevronUp
 } from 'lucide-react';
 import { FinancialSummary, AiFinancialInsights, AiChatMessage } from '../types';
 import { safeFetchJson } from '../utils/api';
+
+function FormattedAiMessage({ text }: { text: string }) {
+  // Convert markdown bold and HTML tags to clean formatted HTML safely
+  const formattedHtml = text
+    .replace(/\*\*(.*?)\*\*/g, '<b>$1</b>')
+    .replace(/(?<!\*)\*(.*?)\*(?!\*)/g, '<i>$1</i>')
+    .replace(/<b>(.*?)<\/b>/g, '<strong class="font-bold text-white tracking-wide">$1</strong>')
+    .replace(/<i>(.*?)<\/i>/g, '<em class="italic text-cyan-200/90">$1</em>')
+    .replace(/<code>(.*?)<\/code>/g, '<code class="bg-cyan-950/90 px-1.5 py-0.5 rounded text-cyan-300 border border-cyan-500/40 font-mono text-[11px]">$1</code>')
+    .replace(/\n/g, '<br />');
+
+  return (
+    <div
+      className="text-xs leading-relaxed font-sans"
+      dangerouslySetInnerHTML={{ __html: formattedHtml }}
+    />
+  );
+}
 
 interface AiInsightsModalProps {
   isOpen: boolean;
@@ -37,12 +59,19 @@ export const AiInsightsModal: React.FC<AiInsightsModalProps> = ({
   const [loading, setLoading] = useState(false);
   const [insights, setInsights] = useState<AiFinancialInsights | null>(null);
 
+  // Key status and inline key configuration
+  const [geminiKeyInfo, setGeminiKeyInfo] = useState<{ hasKey: boolean; maskedKey?: string } | null>(null);
+  const [showKeyBar, setShowKeyBar] = useState(false);
+  const [keyInput, setKeyInput] = useState('');
+  const [isSavingKey, setIsSavingKey] = useState(false);
+  const [keySaveMsg, setKeySaveMsg] = useState<string | null>(null);
+
   // Chat state
   const [messages, setMessages] = useState<AiChatMessage[]>([
     {
       id: 'welcome_msg',
       sender: 'ai',
-      text: `Namaste! Main aapka **Gemini AI Financial Planner & Wealth Advisor** hoon. 🤖\n\nAapka live khata (Bank balances, Credit Card dues, Expenses, Investments, Udhaar aur Goals) mere paas connected hai.\n\nAap mujhse **financial planning, goal strategy, investments (Mutual Funds, FD, Gold), credit card management ya kharcha kam karne** ke baare me kuch bhi poochh sakte hain!`,
+      text: `Namaste! Main aapka <b>Gemini AI Financial Planner & Wealth Advisor</b> hoon. 🤖\n\nAapka live khata (Bank balances, Credit Card dues, Expenses, Investments, Udhaar aur Goals) mere paas connected hai.\n\nAap mujhse <b>financial planning, goal strategy, investments (Mutual Funds, FD, Gold), credit card management ya kharcha kam karne</b> ke baare me kuch bhi poochh sakte hain!`,
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       model: 'Gemini 3.8 Flash'
     }
@@ -50,6 +79,40 @@ export const AiInsightsModal: React.FC<AiInsightsModalProps> = ({
   const [inputValue, setInputValue] = useState('');
   const [isAsking, setIsAsking] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  const checkGeminiKey = async () => {
+    const { data } = await safeFetchJson<{ hasKey: boolean; maskedKey?: string }>('/api/gemini/config');
+    if (data) {
+      setGeminiKeyInfo(data);
+    }
+  };
+
+  const handleSaveGeminiKey = async () => {
+    const cleanKey = keyInput.trim();
+    if (!cleanKey) return;
+    setIsSavingKey(true);
+    setKeySaveMsg(null);
+    try {
+      const { data } = await safeFetchJson<{ success?: boolean; message?: string }>('/api/gemini/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ apiKey: cleanKey }),
+      });
+      if (data?.success) {
+        setKeySaveMsg('✅ API Key successfully saved and active!');
+        setKeyInput('');
+        checkGeminiKey();
+        setTimeout(() => {
+          setShowKeyBar(false);
+          setKeySaveMsg(null);
+        }, 2000);
+      } else {
+        setKeySaveMsg('Key saved.');
+      }
+    } finally {
+      setIsSavingKey(false);
+    }
+  };
 
   const fetchInsights = async () => {
     setLoading(true);
@@ -67,8 +130,11 @@ export const AiInsightsModal: React.FC<AiInsightsModalProps> = ({
   };
 
   useEffect(() => {
-    if (isOpen && !insights) {
-      fetchInsights();
+    if (isOpen) {
+      checkGeminiKey();
+      if (!insights) {
+        fetchInsights();
+      }
     }
   }, [isOpen]);
 
@@ -211,6 +277,65 @@ export const AiInsightsModal: React.FC<AiInsightsModalProps> = ({
         {activeTab === 'chat' && (
           <div className="flex-1 flex flex-col min-h-0 bg-[#070b14]">
             
+            {/* Gemini API Key Status & Quick Setup Bar */}
+            <div className="px-3 py-2 bg-slate-950 border-b border-slate-800/80 flex flex-wrap items-center justify-between gap-2 text-[11px]">
+              <div className="flex items-center gap-2">
+                <span className={`w-2 h-2 rounded-full ${geminiKeyInfo?.hasKey ? 'bg-emerald-400 animate-pulse' : 'bg-cyan-400'}`} />
+                <span className="text-slate-300 font-medium">
+                  {geminiKeyInfo?.hasKey ? (
+                    <>
+                      <span className="text-emerald-400 font-bold">Gemini Pro & Flash Active</span>
+                      {geminiKeyInfo.maskedKey && <span className="text-slate-400 font-mono text-[10px] ml-1.5">({geminiKeyInfo.maskedKey})</span>}
+                    </>
+                  ) : (
+                    <>
+                      <span className="text-cyan-300 font-bold">Smart Local Engine Active</span>
+                      <span className="text-slate-400 ml-1.5">• Google AI Studio key jod kar live Gemini reasoning activate karein</span>
+                    </>
+                  )}
+                </span>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setShowKeyBar(prev => !prev)}
+                className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 text-cyan-300 border border-cyan-500/30 text-[10px] font-semibold cursor-pointer transition-all"
+              >
+                <Key className="w-3 h-3 text-cyan-400" />
+                <span>{showKeyBar ? 'Hide Key' : geminiKeyInfo?.hasKey ? 'Change Key' : '🔑 Set Gemini Key'}</span>
+                {showKeyBar ? <ChevronUp className="w-3 h-3 ml-0.5" /> : <ChevronDown className="w-3 h-3 ml-0.5" />}
+              </button>
+            </div>
+
+            {/* Inline Key Configuration Bar */}
+            {showKeyBar && (
+              <div className="p-3 bg-cyan-950/40 border-b border-cyan-500/30 flex flex-col sm:flex-row items-stretch sm:items-center gap-2 text-xs animate-in fade-in">
+                <div className="flex-1 flex items-center gap-2">
+                  <input
+                    type="password"
+                    value={keyInput}
+                    onChange={(e) => setKeyInput(e.target.value)}
+                    placeholder="Google AI Studio (aistudio.google.com) key paste karein (AIzaSy...)"
+                    className="flex-1 bg-slate-950 text-white border border-slate-700 focus:border-cyan-400 rounded-xl px-3 py-1.5 text-xs font-mono focus:outline-none"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleSaveGeminiKey}
+                    disabled={isSavingKey || !keyInput.trim()}
+                    className="px-3.5 py-1.5 rounded-xl bg-cyan-500 hover:bg-cyan-400 disabled:opacity-50 text-slate-950 font-bold text-xs flex items-center gap-1.5 cursor-pointer shrink-0 transition-all"
+                  >
+                    <Check className="w-3.5 h-3.5" />
+                    <span>{isSavingKey ? 'Saving...' : 'Save & Activate'}</span>
+                  </button>
+                </div>
+                {keySaveMsg && (
+                  <span className="text-[11px] text-emerald-300 font-medium sm:ml-2">
+                    {keySaveMsg}
+                  </span>
+                )}
+              </div>
+            )}
+
             {/* Quick Prompt Pills */}
             <div className="p-3 border-b border-slate-800/80 bg-slate-900/40 flex items-center gap-2 overflow-x-auto shrink-0 scrollbar-none">
               <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider shrink-0 flex items-center gap-1">
@@ -256,9 +381,13 @@ export const AiInsightsModal: React.FC<AiInsightsModalProps> = ({
                       <span className="font-mono">{m.timestamp}</span>
                     </div>
 
-                    <div className="text-xs leading-relaxed whitespace-pre-line font-sans">
-                      {m.text}
-                    </div>
+                    {m.sender === 'ai' ? (
+                      <FormattedAiMessage text={m.text} />
+                    ) : (
+                      <div className="text-xs leading-relaxed whitespace-pre-line font-sans">
+                        {m.text}
+                      </div>
+                    )}
 
                     {m.model && (
                       <div className="text-[9px] font-mono text-cyan-400/80 pt-1">

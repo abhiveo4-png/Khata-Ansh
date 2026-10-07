@@ -92,6 +92,8 @@ export interface Transaction {
   reimbursementStatus?: 'pending' | 'settled' | 'partial';
   reimbursementSettledAmount?: number;
   isSavingsTransfer?: boolean;
+  isWifeTransfer?: boolean;
+  isCcPayment?: boolean;
   isInvestment?: boolean;
 }
 

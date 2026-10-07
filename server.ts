@@ -433,6 +433,26 @@ export const DEFAULT_CATEGORIES: CategoryDef[] = [
     isDefault: true,
   },
   {
+    id: 'wife_transfer',
+    name: 'Wife Transfer',
+    type: 'expense',
+    icon: 'Heart',
+    color: '#EC4899',
+    bgLight: 'bg-pink-50 text-pink-700 border-pink-200',
+    keywords: ['wife transfer', 'transfer to wife', 'patni', 'wife savings', 'wife'],
+    isDefault: true,
+  },
+  {
+    id: 'cc_payment',
+    name: 'CC Payment',
+    type: 'expense',
+    icon: 'CreditCard',
+    color: '#6366F1',
+    bgLight: 'bg-indigo-50 text-indigo-700 border-indigo-200',
+    keywords: ['cc payment', 'credit card payment', 'card payment', 'cc bill', 'credit card bill', 'bill payment sbi', 'bill payment icici', 'axis cc payment', 'pay cc'],
+    isDefault: true,
+  },
+  {
     id: 'other_expense',
     name: 'Other Expense',
     type: 'expense',
@@ -1204,8 +1224,11 @@ function calculateUserSummary(userId: string): FinancialSummary {
 
       if (isCurrentMonth) currentMonthTotalExpense += amt;
 
-      // Check if reimbursement (exempt from budget and personal expense)
+      // Check if reimbursement, wife transfer, or CC payment (exempt from monthly budget and personal expense)
       const isRim = Boolean(t.isReimbursement || t.category === 'Reimbursement');
+      const isWifeTr = Boolean(t.isWifeTransfer || t.category === 'Wife Transfer');
+      const isCcPay = Boolean(t.isCcPayment || t.category === 'CC Payment' || t.category.toLowerCase().includes('cc payment') || t.category.toLowerCase().includes('credit card payment') || t.category.toLowerCase().includes('cc bill'));
+
       if (isRim) {
         const settledAmt = t.reimbursementStatus === 'settled'
           ? amt
@@ -1214,8 +1237,10 @@ function calculateUserSummary(userId: string): FinancialSummary {
         if (t.reimbursementStatus !== 'settled' && remaining > 0) {
           pendingReimbursements += remaining;
         }
-      } else if (t.isSavingsTransfer) {
-        savingsTransfers += amt;
+      } else if (t.isSavingsTransfer || isWifeTr || isCcPay) {
+        if (t.isSavingsTransfer || isWifeTr) {
+          savingsTransfers += amt;
+        }
       } else {
         // True personal expense that consumes budget
         personalExpense += amt;
@@ -1957,8 +1982,10 @@ function parseFallback(rawText: string, userCategories: CategoryDef[]): Array<{
     // Detect Reimbursement (Point 1: Rim, reimburse, claim)
     const isReimbursement = /\b(rim|reimburse|reimbursement|office claim|client trip|reimbursable|claim)\b/i.test(seg);
 
-    // Detect Savings Transfer to Wife (Point 5)
-    const isSavingsTransfer = /\b(wife|patni|savings transfer|transfer to wife|bachat wife)\b/i.test(seg);
+    // Detect Savings Transfer to Wife / Wife Transfer
+    const isWifeTransfer = /\b(wife transfer|wife ko|transfer to wife|patni|wife savings)\b/i.test(seg);
+    const isCcPayment = /\b(cc payment|credit card payment|credit card bill|cc bill|cc bhar diya|credit card bill paid)\b/i.test(seg);
+    const isSavingsTransfer = /\b(savings transfer|bachat wife)\b/i.test(seg) || isWifeTransfer;
 
     // Detect Investment (RD, FD, Mutual Fund)
     const isInvestment = /\b(rd|fd|recurring deposit|fixed deposit|mutual fund|sip|gold|ppf|investment|invest)\b/i.test(seg);
@@ -2013,6 +2040,10 @@ function parseFallback(rawText: string, userCategories: CategoryDef[]): Array<{
     let matchedCategory = 'Uncategorized';
     if (isReimbursement) {
       matchedCategory = 'Reimbursement';
+    } else if (isWifeTransfer) {
+      matchedCategory = 'Wife Transfer';
+    } else if (isCcPayment) {
+      matchedCategory = 'CC Payment';
     } else if (isFamilyTripPooja) {
       matchedCategory = 'Family Trip & Pooja';
     } else if (isInvestment) {
@@ -2046,6 +2077,8 @@ function parseFallback(rawText: string, userCategories: CategoryDef[]): Array<{
       isReimbursement,
       reimbursementStatus: isReimbursement ? 'pending' : undefined,
       isSavingsTransfer,
+      isWifeTransfer,
+      isCcPayment,
       isInvestment,
     });
   }
@@ -11059,16 +11092,158 @@ CORE ADVISORY GUIDELINES (BE HUMAN, CONVERSATIONAL, SHARP & NATURAL):
   const totalCcLimit = creditCards.reduce((sum, [_, c]) => sum + (Number(c?.creditLimit) || 0), 0);
   const cardEmis = store.cardEmis || [];
 
+  // Comprehensive month alias lookup supporting abbreviations (sep, oct, etc.) and Hindi names
+  const MONTH_ALIASES: Record<string, string[]> = {
+    '01': ['january', 'jan', 'janwari', 'janwary'],
+    '02': ['february', 'feb', 'farwari', 'farwary'],
+    '03': ['march', 'mar'],
+    '04': ['april', 'apr', 'aprail'],
+    '05': ['may', 'mai'],
+    '06': ['june', 'jun'],
+    '07': ['july', 'jul'],
+    '08': ['august', 'aug', 'agast'],
+    '09': ['september', 'sep', 'sept', 'sitambar', 'setember'],
+    '10': ['october', 'oct', 'aktubar', 'oktober'],
+    '11': ['november', 'nov', 'navambar'],
+    '12': ['december', 'dec', 'disambar'],
+  };
+
+  function findMonthFromQuery(text: string): MonthSummaryData | undefined {
+    for (const [monthNum, aliases] of Object.entries(MONTH_ALIASES)) {
+      for (const alias of aliases) {
+        const regex = new RegExp(`\\b${alias}\\b`, 'i');
+        if (regex.test(text)) {
+          const found = sortedMonths.find(m => m.monthKey.endsWith(`-${monthNum}`));
+          if (found) return found;
+        }
+      }
+    }
+    return undefined;
+  }
+
   // Check if a specific month is requested
-  const matchedMonth = sortedMonths.find(m => {
-    const mNameLow = m.monthName.toLowerCase();
-    const mKeyLow = m.monthKey.toLowerCase();
-    return qLower.includes(mNameLow.split(' ')[0]) || qLower.includes(mKeyLow);
-  });
+  const matchedMonth = findMonthFromQuery(qLower);
   const isPrevMonthQuery = qLower.includes('pichle') || qLower.includes('pichla') || qLower.includes('last month') || qLower.includes('previous');
   const targetMonth = matchedMonth || (isPrevMonthQuery && sortedMonths.length > 1 ? sortedMonths[1] : currentMonthData);
 
-  // 1. GREETINGS & CASUAL INTROS
+  // 1. EXPENSE TREND, FORECASTING & FUTURE PREDICTION INTENT
+  // Directly handles queries like: "sep ka expense trend dekho or batao oct me kitna kharcha hoga"
+  const isTrendOrForecastQuery =
+    qLower.includes('trend') ||
+    qLower.includes('kitna kharcha hoga') ||
+    qLower.includes('kitna kharch hoga') ||
+    qLower.includes('kitna hoga') ||
+    qLower.includes('kharcha hoga') ||
+    qLower.includes('forecast') ||
+    qLower.includes('prediction') ||
+    qLower.includes('predict') ||
+    qLower.includes('estimate') ||
+    qLower.includes('andaza') ||
+    qLower.includes('projection') ||
+    qLower.includes('aage ka kharcha') ||
+    qLower.includes('future spend') ||
+    qLower.includes('future expense');
+
+  if (isTrendOrForecastQuery) {
+    // Determine source comparison month (e.g. September) and target projection month (e.g. October)
+    let sourceMonth: MonthSummaryData | undefined;
+    let targetMonthToProject: MonthSummaryData = currentMonthData;
+
+    for (const [monthNum, aliases] of Object.entries(MONTH_ALIASES)) {
+      for (const alias of aliases) {
+        const regex = new RegExp(`\\b${alias}\\b`, 'i');
+        if (regex.test(qLower)) {
+          const m = sortedMonths.find(sm => sm.monthKey.endsWith(`-${monthNum}`));
+          if (m && m.monthKey !== currentMonthPrefix && !sourceMonth) {
+            sourceMonth = m;
+          } else if (m && m.monthKey === currentMonthPrefix) {
+            targetMonthToProject = m;
+          }
+        }
+      }
+    }
+
+    // Default source month to previous recorded month
+    if (!sourceMonth) {
+      sourceMonth = sortedMonths.find(m => m.monthKey < currentMonthPrefix && (m.personalExpense > 0 || m.transactionCount > 0)) ||
+        (sortedMonths.length > 1 ? sortedMonths[1] : undefined);
+    }
+
+    const currentDay = parseInt(istInfo.date.substring(8, 10), 10) || 1;
+    const [cYear, cMonth] = currentMonthPrefix.split('-').map(Number);
+    const daysInCurrentMonth = new Date(cYear, cMonth, 0).getDate() || 31;
+    const daysRemaining = Math.max(0, daysInCurrentMonth - currentDay);
+
+    const sourceName = sourceMonth ? sourceMonth.monthName : 'Pichla Mahina';
+    const sourceSpent = sourceMonth ? sourceMonth.personalExpense : (summary.monthlySpent || 20000);
+    const sourceDailyBurnRate = sourceSpent > 0 ? Math.round(sourceSpent / 30) : 0;
+    const topSourceCats = sourceMonth
+      ? Object.entries(sourceMonth.categories).sort((a, b) => b[1] - a[1])
+      : [];
+
+    const currentSpent = targetMonthToProject.personalExpense;
+    const currentDailyPace = currentDay > 0 ? Math.round(currentSpent / currentDay) : 0;
+
+    // Projected spend calculations
+    const projectedRemainingAtPastRate = sourceDailyBurnRate * daysRemaining;
+    const projectedTotalPastPace = currentSpent + projectedRemainingAtPastRate;
+    const projectedTotalCurrentPace = currentSpent + (currentDailyPace * daysRemaining);
+
+    const projectedLow = Math.min(projectedTotalPastPace, projectedTotalCurrentPace);
+    const projectedHigh = Math.max(projectedTotalPastPace, projectedTotalCurrentPace);
+    const monthlyBudget = summary.monthlyBudget || (sourceSpent > 0 ? sourceSpent : 35000);
+    const safeDailyLimit = daysRemaining > 0 && monthlyBudget > currentSpent
+      ? Math.round((monthlyBudget - currentSpent) / daysRemaining)
+      : Math.round(monthlyBudget / daysInCurrentMonth);
+
+    let trendMsg = `📊 <b>EXPENSE TREND & ${targetMonthToProject.monthName.toUpperCase()} PROJECTION REPORT:</b>\n━━━━━━━━━━━━━━━━━━━━\n\n`;
+
+    if (sourceMonth && sourceSpent > 0) {
+      trendMsg += `🗓️ <b>1. ${sourceMonth.monthName} Ka Kharcha Trend:</b>\n`;
+      trendMsg += `• <b>Kul Kharcha:</b> <b>₹${sourceSpent.toLocaleString('en-IN')}</b>\n`;
+      trendMsg += `• <b>Roz Ka Ausat (Daily Burn Rate):</b> <b>₹${sourceDailyBurnRate.toLocaleString('en-IN')}/din</b>\n`;
+      if (topSourceCats.length > 0) {
+        trendMsg += `• <b>Top Spending Categories:</b>\n`;
+        for (const [c, a] of topSourceCats.slice(0, 3)) {
+          trendMsg += `   - ${c}: ₹${a.toLocaleString('en-IN')}\n`;
+        }
+      }
+      trendMsg += `\n`;
+    }
+
+    trendMsg += `🗓️ <b>2. ${targetMonthToProject.monthName} Ki Live Situation (${currentDay}/${daysInCurrentMonth} Din):</b>\n`;
+    trendMsg += `• <b>Ab Tak Ka Kharcha:</b> <b>₹${currentSpent.toLocaleString('en-IN')}</b> (${currentDay} dino me)\n`;
+    trendMsg += `• <b>Current Daily Pace:</b> ₹${currentDailyPace.toLocaleString('en-IN')}/din\n`;
+    trendMsg += `• <b>Mahine Me Baaki Din:</b> <b>${daysRemaining} din</b>\n\n`;
+
+    trendMsg += `🔮 <b>3. ${targetMonthToProject.monthName} Me Kitna Kharcha Hoga? (Prediction):</b>\n`;
+    if (projectedLow === projectedHigh || Math.abs(projectedHigh - projectedLow) < 500) {
+      trendMsg += `• <b>Estimated Total Month Spend:</b> <b>₹${projectedLow.toLocaleString('en-IN')}</b>\n`;
+    } else {
+      trendMsg += `• <b>Estimated Total Month Spend:</b> <b>₹${projectedLow.toLocaleString('en-IN')} – ₹${projectedHigh.toLocaleString('en-IN')}</b>\n`;
+    }
+    if (sourceSpent > 0 && daysRemaining > 0) {
+      trendMsg += `<i>• Agar agle ${daysRemaining} din aap ${sourceName} ke average (₹${sourceDailyBurnRate.toLocaleString('en-IN')}/din) par chalte hain, to lagbhag <b>₹${projectedTotalPastPace.toLocaleString('en-IN')}</b> par settle hoga.</i>\n\n`;
+    } else {
+      trendMsg += `\n`;
+    }
+
+    trendMsg += `🎯 <b>Advisor Recommendation (Budget & Bachat):</b>\n`;
+    trendMsg += `• <b>Monthly Budget:</b> ₹${monthlyBudget.toLocaleString('en-IN')}\n`;
+    if (projectedTotalPastPace > monthlyBudget) {
+      trendMsg += `• ⚠️ <b>Alert:</b> Current trend ke hisaab se monthly budget se thoda zyada kharcha hone ka risk hai!\n`;
+    } else {
+      trendMsg += `• ✅ <b>Control Me Hai:</b> Current pace par aapka kharcha budget ke safe zone me rahega.\n`;
+    }
+    trendMsg += `• <b>Safe Daily Limit (Agle ${daysRemaining} Dino Ke Liye):</b> Har din kharcha <b>₹${safeDailyLimit.toLocaleString('en-IN')}/din</b> ke andar rakhein taaki surplus bacha rahe.\n`;
+    if (topSourceCats[0]) {
+      trendMsg += `• 💡 <b>Smart Tip:</b> ${topSourceCats[0][0]} aur daily discretionary kharchon par thoda dhyan rakhein.`;
+    }
+
+    return { text: trendMsg, model: 'SmartAdvisor-Engine', source: 'rule_fallback' };
+  }
+
+  // 1.1 GREETINGS & CASUAL INTROS
   const isGreeting = /^(hi|hello|hey|namaste|pranam|kaise ho|kya hal|good morning|good afternoon|good evening)\b/i.test(qLower) || qLower === 'hi' || qLower === 'hello';
   if (isGreeting) {
     const greetingText = `👋 <b>Namaste ${user.name}!</b> 🙏
