@@ -562,9 +562,36 @@ function syncBudgetsWithCategories(store: UserDataStore): boolean {
     store.budgets = [];
     changed = true;
   }
+  if (!store.deletedCategories) {
+    store.deletedCategories = [];
+  }
 
-  // Ensure all DEFAULT_CATEGORIES exist in store.categories
+  // Deduplicate store.categories by name & id
+  const seenIds = new Set<string>();
+  const seenNames = new Set<string>();
+  const uniqueCats: CategoryDef[] = [];
+  for (const c of store.categories) {
+    const idKey = c.id;
+    const nameKey = (c.name || '').toLowerCase().trim();
+    if (!seenIds.has(idKey) && !seenNames.has(nameKey)) {
+      seenIds.add(idKey);
+      seenNames.add(nameKey);
+      uniqueCats.push(c);
+    } else {
+      changed = true;
+    }
+  }
+  if (uniqueCats.length !== store.categories.length) {
+    store.categories = uniqueCats;
+    changed = true;
+  }
+
+  // Ensure all DEFAULT_CATEGORIES exist in store.categories unless explicitly deleted
+  const deletedSet = new Set(store.deletedCategories.map(d => d.toLowerCase()));
   for (const defCat of DEFAULT_CATEGORIES) {
+    if (deletedSet.has(defCat.id.toLowerCase()) || deletedSet.has(defCat.name.toLowerCase())) {
+      continue;
+    }
     const existingIdx = store.categories.findIndex(c => c.name.toLowerCase() === defCat.name.toLowerCase() || c.id === defCat.id);
     if (existingIdx === -1) {
       store.categories.push({ ...defCat });
@@ -8086,6 +8113,12 @@ app.delete('/api/categories/:id', (req, res) => {
       t.category = 'Uncategorized';
     }
   }
+
+  if (!store.deletedCategories) {
+    store.deletedCategories = [];
+  }
+  store.deletedCategories.push(targetCat.id);
+  store.deletedCategories.push(targetCat.name.toLowerCase());
 
   store.categories = store.categories.filter(c => c.id !== targetCat.id && c.name.toLowerCase() !== targetCat.name.toLowerCase());
   store.budgets = store.budgets.filter(b => b.category.toLowerCase() !== targetCat.name.toLowerCase());
