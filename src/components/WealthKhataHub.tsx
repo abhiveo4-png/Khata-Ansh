@@ -1219,6 +1219,7 @@ export const WealthKhataHub: React.FC<WealthKhataHubProps> = ({
                   <span className="absolute left-3 top-2.5 text-slate-400 font-bold font-mono">₹</span>
                   <input
                     type="number"
+                    step="any"
                     placeholder="e.g. 25000"
                     value={newWifeBaseInput}
                     onChange={(e) => setNewWifeBaseInput(e.target.value)}

@@ -1,10 +1,12 @@
-export function formatCurrency(amount: number): string {
+export function formatCurrency(amount: number, forceDecimals?: boolean): string {
   const isNegative = amount < 0;
   const abs = Math.abs(amount);
+  const hasDecimals = forceDecimals || (abs % 1 !== 0);
   
   // Format in Indian number system (lakhs, crores)
   const formatted = new Intl.NumberFormat('en-IN', {
-    maximumFractionDigits: 0,
+    minimumFractionDigits: hasDecimals ? 2 : 0,
+    maximumFractionDigits: hasDecimals ? 2 : 0,
   }).format(abs);
 
   return `${isNegative ? '-' : ''}₹${formatted}`;

@@ -623,11 +623,16 @@
   "goals": [],
   "udhaars": [],
   "fuelLogs": [],
-  "dataVersion": 35613,
+  "dataVersion": 35621,
   "accountBaseBalances": {
-    "IC Bank": 45000,
-    "AX Bank": 80000,
-    "Cash": 5000
+    "IC Bank": 0,
+    "AX Bank": 0,
+    "Cash": 0,
+    "ICICI CC 0000": 0,
+    "SBI CC 5733": 0,
+    "SBI CC 6526": 0,
+    "AX CC 8210": 0,
+    "AX CC 5376": 0
   },
   "wifeBaseBalance": 0,
   "savingsTransfers": [
@@ -643,9 +648,14 @@
     }
   ],
   "accountBalanceSetTimestamps": {
-    "IC Bank": "2026-10-05T15:36:00.405Z",
-    "AX Bank": "2026-10-05T15:36:00.405Z",
-    "Cash": "2026-10-05T15:36:00.405Z"
+    "IC Bank": "2026-10-07T09:14:01.359Z",
+    "AX Bank": "2026-10-07T09:14:01.359Z",
+    "Cash": "2026-10-07T09:14:01.359Z",
+    "ICICI CC 0000": "2026-10-07T09:37:00.188Z",
+    "SBI CC 5733": "2026-10-07T09:37:00.188Z",
+    "SBI CC 6526": "2026-10-07T09:37:00.188Z",
+    "AX CC 8210": "2026-10-07T09:37:00.188Z",
+    "AX CC 5376": "2026-10-07T09:37:00.188Z"
   },
   "wifeBalanceSetTimestamp": "2026-10-05T15:36:00.405Z",
   "deletedCategories": []

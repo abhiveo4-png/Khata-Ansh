@@ -2856,6 +2856,12 @@ export function calculateAccountsBalances(userId: string) {
     for (const t of txs) {
       const tAcc = t.account || 'ICICI CC 0000';
       if (tAcc === accId) {
+        const txTimeMs = t.createdAt ? new Date(t.createdAt).getTime() : (t.date ? new Date(t.date).getTime() : 0);
+        // Only apply transactions occurring on or after opening balance was set
+        if (setTimeMs > 0 && txTimeMs > 0 && txTimeMs < setTimeMs) {
+          continue;
+        }
+
         const amt = Number(t.amount) || 0;
         if (t.type === 'income') {
           credits += amt;
@@ -2869,6 +2875,11 @@ export function calculateAccountsBalances(userId: string) {
     if (!isCard) {
       for (const s of savingsTransfers) {
         if (s.fromAccount === accId) {
+          const sTimeMs = s.createdAt ? new Date(s.createdAt).getTime() : (s.date ? new Date(s.date).getTime() : 0);
+          if (setTimeMs > 0 && sTimeMs > 0 && sTimeMs < setTimeMs) {
+            continue;
+          }
+
           const sAmt = Number(s.amount) || 0;
           const isDupe = txs.some(
             t => t.account === accId &&
@@ -2886,8 +2897,8 @@ export function calculateAccountsBalances(userId: string) {
     if (isCard) {
       const customLimit = Number(cardLimits[accId]);
       const creditLimit = (customLimit && customLimit > 0) ? customLimit : (meta.creditLimit || 100000);
-      const currentOutstanding = Math.max(0, base + debits - credits);
-      const availableLimit = Math.max(0, creditLimit - currentOutstanding);
+      const currentOutstanding = Math.round((Math.max(0, base + debits - credits) + Number.EPSILON) * 100) / 100;
+      const availableLimit = Math.round((Math.max(0, creditLimit - currentOutstanding) + Number.EPSILON) * 100) / 100;
 
       accounts[accId] = {
         accountId: accId,
@@ -2897,8 +2908,8 @@ export function calculateAccountsBalances(userId: string) {
         badge: meta.badge,
         color: meta.color,
         baseBalance: base,
-        credits,
-        debits,
+        credits: Math.round((credits + Number.EPSILON) * 100) / 100,
+        debits: Math.round((debits + Number.EPSILON) * 100) / 100,
         currentBalance: availableLimit,
         creditLimit,
         availableLimit,
@@ -2908,7 +2919,7 @@ export function calculateAccountsBalances(userId: string) {
       totalCardAvailableLimit += availableLimit;
       totalCardOutstanding += currentOutstanding;
     } else {
-      const currentBalance = base + credits - debits;
+      const currentBalance = Math.round((base + credits - debits + Number.EPSILON) * 100) / 100;
 
       accounts[accId] = {
         accountId: accId,
@@ -2918,8 +2929,8 @@ export function calculateAccountsBalances(userId: string) {
         badge: meta.badge,
         color: meta.color,
         baseBalance: base,
-        credits,
-        debits,
+        credits: Math.round((credits + Number.EPSILON) * 100) / 100,
+        debits: Math.round((debits + Number.EPSILON) * 100) / 100,
         currentBalance,
       };
 
@@ -2927,13 +2938,26 @@ export function calculateAccountsBalances(userId: string) {
     }
   }
 
+  totalBankCashBalance = Math.round((totalBankCashBalance + Number.EPSILON) * 100) / 100;
+  totalCardAvailableLimit = Math.round((totalCardAvailableLimit + Number.EPSILON) * 100) / 100;
+  totalCardOutstanding = Math.round((totalCardOutstanding + Number.EPSILON) * 100) / 100;
+
   // Calculate Wife Savings Balance:
+  const wifeBaseTimeMs = wifeBaseTimestamp ? new Date(wifeBaseTimestamp).getTime() : 0;
   let totalTransferred = 0;
   for (const s of savingsTransfers) {
+    const sTimeMs = s.createdAt ? new Date(s.createdAt).getTime() : (s.date ? new Date(s.date).getTime() : 0);
+    if (wifeBaseTimeMs > 0 && sTimeMs > 0 && sTimeMs < wifeBaseTimeMs) {
+      continue;
+    }
     totalTransferred += (Number(s.amount) || 0);
   }
   for (const t of txs) {
     if (t.isSavingsTransfer || t.isWifeTransfer || t.category === 'Wife Transfer' || t.category?.toLowerCase() === 'wife transfer') {
+      const tTimeMs = t.createdAt ? new Date(t.createdAt).getTime() : (t.date ? new Date(t.date).getTime() : 0);
+      if (wifeBaseTimeMs > 0 && tTimeMs > 0 && tTimeMs < wifeBaseTimeMs) {
+        continue;
+      }
       const tAmt = Number(t.amount) || 0;
       const isDupe = savingsTransfers.some(
         s => Number(s.amount) === tAmt && s.date === t.date

@@ -1696,6 +1696,7 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
                         <span className="absolute left-3 top-2.5 text-slate-400 font-bold">₹</span>
                         <input
                           type="number"
+                          step="any"
                           placeholder="e.g. 50000"
                           value={editBaseBalances[acc.id] || ''}
                           onChange={(e) => setEditBaseBalances({ ...editBaseBalances, [acc.id]: e.target.value })}
@@ -1731,6 +1732,7 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
                       <span className="absolute left-3 top-2.5 text-rose-400 font-bold">₹</span>
                       <input
                         type="number"
+                        step="any"
                         placeholder="e.g. 25000"
                         value={editWifeBalance}
                         onChange={(e) => setEditWifeBalance(e.target.value)}
@@ -1783,6 +1785,7 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
                                 <span className="absolute left-3 top-2 text-slate-400 font-bold">₹</span>
                                 <input
                                   type="number"
+                                  step="any"
                                   placeholder={String(card.creditLimit || 100000)}
                                   value={editCardLimits[card.id] || ''}
                                   onChange={(e) => setEditCardLimits({ ...editCardLimits, [card.id]: e.target.value })}
@@ -1799,6 +1802,7 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
                                 <span className="absolute left-3 top-2 text-slate-400 font-bold">₹</span>
                                 <input
                                   type="number"
+                                  step="any"
                                   placeholder="0"
                                   value={editBaseBalances[card.id] || ''}
                                   onChange={(e) => setEditBaseBalances({ ...editBaseBalances, [card.id]: e.target.value })}
