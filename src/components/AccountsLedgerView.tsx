@@ -362,7 +362,7 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
 
   // Account stats
   const totalAccountExpense = filteredTxs
-    .filter((t) => t.type === 'expense' && !t.isSavingsTransfer)
+    .filter((t) => t.type === 'expense')
     .reduce((sum, t) => sum + (t.amount || 0), 0);
 
   const totalAccountIncome = filteredTxs
@@ -370,7 +370,7 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
     .reduce((sum, t) => sum + (t.amount || 0), 0);
 
   const currentMonthExpense = filteredTxs
-    .filter((t) => t.type === 'expense' && t.date?.startsWith(currentMonthStr) && !t.isSavingsTransfer)
+    .filter((t) => t.type === 'expense' && t.date?.startsWith(currentMonthStr))
     .reduce((sum, t) => sum + (t.amount || 0), 0);
 
   // Active EMIs for this card
@@ -392,7 +392,7 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
   );
 
   const modalPreviewDebits = modalPreviewTxs
-    .filter((t) => t.type === 'expense' && !t.isSavingsTransfer)
+    .filter((t) => t.type === 'expense')
     .reduce((sum, t) => sum + (t.amount || 0), 0);
 
   const modalPreviewCredits = modalPreviewTxs

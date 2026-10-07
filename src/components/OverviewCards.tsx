@@ -429,7 +429,7 @@ export const OverviewCards: React.FC<OverviewCardsProps> = ({
 
           <div className="mt-3 flex items-center justify-between text-xs pt-2.5 border-t border-white/[0.08] relative z-10">
             <span className="text-slate-300 text-[11px] font-medium">
-              {isFamily ? '🔒 Limits Masked' : `Kharcha: ₹${displayAmount(monthlySpent)}`}
+              {isFamily ? '🔒 Limits Masked' : `Laga: ₹${displayAmount(monthlySpent)} • Bacha: ₹${displayAmount(Math.max(0, monthlyBudgetLimit - monthlySpent))}`}
             </span>
             <span className={`font-bold font-mono ${budgetPercentage > 100 ? 'text-rose-400' : 'text-cyan-400'}`}>
               {isFamily ? '••%' : `${budgetPercentage}%`}
