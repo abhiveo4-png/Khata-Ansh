@@ -112,7 +112,7 @@ export interface Transaction {
   time?: string;
   paymentMethod?: PaymentMethod;
   account?: string;
-  source: 'telegram' | 'manual' | 'simulator' | 'import';
+  source: 'telegram' | 'manual' | 'simulator' | 'import' | 'wealth';
   telegramChatId?: string;
   telegramMessageId?: number;
   telegramUser?: string;
@@ -123,7 +123,10 @@ export interface Transaction {
   reimbursementStatus?: 'pending' | 'settled' | 'partial';
   reimbursementSettledAmount?: number;
   isSavingsTransfer?: boolean;
+  isWifeTransfer?: boolean;
+  isCcPayment?: boolean;
   isInvestment?: boolean;
+  linkedTransferId?: string;
 }
 
 export interface CardEmi {
@@ -181,6 +184,7 @@ export interface CategoryDef {
   isCustom?: boolean;
   isDefault?: boolean;
   description?: string;
+  excludeFromBudget?: boolean;
 }
 
 export interface CategoryBudget {
@@ -682,6 +686,7 @@ interface UserDataStore {
   wifeBaseBalance?: number;
   wifeBalanceSetTimestamp?: string;
   cardCreditLimits?: Record<string, number>;
+  deletedCategories?: string[];
 }
 
 let users: UserProfile[] = loadJson<UserProfile[]>(USERS_FILE, []);
@@ -1044,7 +1049,40 @@ export function getUserData(userId: string): UserDataStore {
       }
     }
 
-    if (synced || timeAdjusted || descAdjusted) {
+    // Auto-sync any savings transfers into store.transactions so ledger and budgets stay consistent
+    let savingsSynced = false;
+    if (store.savingsTransfers && store.savingsTransfers.length > 0) {
+      for (const st of store.savingsTransfers) {
+        const found = store.transactions.some(
+          t => t.id === (st as any).linkedTransactionId ||
+               ((t.isWifeTransfer || t.category === 'Wife Transfer') && Number(t.amount) === Number(st.amount) && t.date === st.date)
+        );
+        if (!found) {
+          const linkedTx: Transaction = {
+            id: (st as any).linkedTransactionId || `tx_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
+            userId,
+            type: 'expense',
+            amount: Number(st.amount),
+            category: 'Wife Transfer',
+            description: st.notes || `Transfer to ${st.recipient || "Wife's Account"}`,
+            date: st.date,
+            time: '12:00',
+            paymentMethod: 'UPI',
+            account: st.fromAccount || 'AX Bank',
+            source: 'wealth',
+            createdAt: st.createdAt || new Date().toISOString(),
+            tags: ['wife-transfer', 'savings'],
+            isSavingsTransfer: true,
+            isWifeTransfer: true,
+          };
+          (st as any).linkedTransactionId = linkedTx.id;
+          store.transactions.unshift(linkedTx);
+          savingsSynced = true;
+        }
+      }
+    }
+
+    if (synced || timeAdjusted || descAdjusted || savingsSynced) {
       saveJson(filePath, store);
       persistToPg(`user_data:${userId}`, store).catch(() => {});
     }
@@ -1265,10 +1303,12 @@ function calculateUserSummary(userId: string): FinancialSummary {
 
       if (isCurrentMonth) currentMonthTotalExpense += amt;
 
-      // Check if reimbursement, wife transfer, or CC payment (exempt from monthly budget and personal expense)
+      // Check if reimbursement, wife transfer, CC payment, or custom excluded category
       const isRim = Boolean(t.isReimbursement || t.category === 'Reimbursement');
-      const isWifeTr = Boolean(t.isWifeTransfer || t.category === 'Wife Transfer');
-      const isCcPay = Boolean(t.isCcPayment || t.category === 'CC Payment' || t.category.toLowerCase().includes('cc payment') || t.category.toLowerCase().includes('credit card payment') || t.category.toLowerCase().includes('cc bill'));
+      const isWifeTr = Boolean(t.isWifeTransfer || t.category === 'Wife Transfer' || (t.category && t.category.toLowerCase().includes('wife')));
+      const isCcPay = Boolean(t.isCcPayment || t.category === 'CC Payment' || (t.category && t.category.toLowerCase().includes('cc payment')) || (t.category && t.category.toLowerCase().includes('credit card payment')) || (t.category && t.category.toLowerCase().includes('cc bill')));
+      const catDef = (store.categories || []).find(c => c.name.toLowerCase() === (t.category || '').toLowerCase());
+      const isExemptFromBudget = Boolean(catDef?.excludeFromBudget) || isRim || isWifeTr || isCcPay;
 
       if (isRim) {
         const settledAmt = t.reimbursementStatus === 'settled'
@@ -1278,19 +1318,21 @@ function calculateUserSummary(userId: string): FinancialSummary {
         if (t.reimbursementStatus !== 'settled' && remaining > 0) {
           pendingReimbursements += remaining;
         }
-      } else if (t.isSavingsTransfer || isWifeTr || isCcPay) {
-        if (t.isSavingsTransfer || isWifeTr) {
-          savingsTransfers += amt;
-        }
       } else {
-        // True personal expense that consumes budget
         personalExpense += amt;
         if (t.isInvestment) {
           investmentsTotal += amt;
         }
+        if (t.isSavingsTransfer || isWifeTr) {
+          savingsTransfers += amt;
+        }
+
+        // Allocated monthly budget spent (excludes Wife Transfer, CC Payment, Reimbursements)
         if (isCurrentMonth) {
-          monthlySpent += amt;
           currentMonthPersonalExpense += amt;
+          if (!isExemptFromBudget) {
+            monthlySpent += amt;
+          }
         }
         if (isPrevMonth) {
           prevPersonalExpense += amt;
@@ -1300,8 +1342,9 @@ function calculateUserSummary(userId: string): FinancialSummary {
   }
 
   const openingCarryforward = prevIncome - prevPersonalExpense;
-  const currentMonthNetSavings = currentMonthIncome - currentMonthPersonalExpense;
-  const totalNetSavings = openingCarryforward + currentMonthNetSavings;
+  // Net Savings deducts all cash expenses (including Wife Transfers & CC Payments) from income
+  const currentMonthNetSavings = currentMonthIncome - currentMonthTotalExpense;
+  const totalNetSavings = totalIncome - totalExpense;
 
   // True Net Savings = Income - Personal Expense
   const cashBalance = totalIncome - totalExpense;
@@ -1889,6 +1932,8 @@ function detectAccountFromText(text: string): string | undefined {
   if ((lower.includes('axis') && !lower.includes('cc') && !lower.includes('card')) || lower.includes('ax bank') || lower.includes('axis bank')) return 'AX Bank';
   if (lower.includes('cash') || lower.includes('nagad') || lower.includes('rokda') || lower.includes('haath me')) return 'Cash';
   if (lower.includes('upi') || lower.includes('gpay') || lower.includes('paytm') || lower.includes('phonepe')) return 'AX Bank';
+  if (lower.includes('wife') || lower.includes('patni') || lower.includes('transfer to wife') || lower.includes('savings transfer') || lower.includes('bachat wife')) return 'AX Bank';
+  if (lower.includes('cc payment') || lower.includes('credit card payment') || lower.includes('cc bill') || lower.includes('pay cc')) return 'AX Bank';
   return undefined;
 }
 
@@ -1971,6 +2016,8 @@ function parseFallback(rawText: string, userCategories: CategoryDef[]): Array<{
   isReimbursement?: boolean;
   reimbursementStatus?: 'pending' | 'settled';
   isSavingsTransfer?: boolean;
+  isWifeTransfer?: boolean;
+  isCcPayment?: boolean;
   isInvestment?: boolean;
 }> {
   const results: Array<{
@@ -1985,6 +2032,8 @@ function parseFallback(rawText: string, userCategories: CategoryDef[]): Array<{
     isReimbursement?: boolean;
     reimbursementStatus?: 'pending' | 'settled';
     isSavingsTransfer?: boolean;
+    isWifeTransfer?: boolean;
+    isCcPayment?: boolean;
     isInvestment?: boolean;
   }> = [];
 
@@ -2017,16 +2066,16 @@ function parseFallback(rawText: string, userCategories: CategoryDef[]): Array<{
 
     if (isNaN(amount) || amount <= 0) continue;
 
-    // Detect Account / Card / Cash
-    const detectedAccount = detectAccountFromText(seg) || 'ICICI CC 0000';
-
     // Detect Reimbursement (Point 1: Rim, reimburse, claim)
     const isReimbursement = /\b(rim|reimburse|reimbursement|office claim|client trip|reimbursable|claim)\b/i.test(seg);
 
     // Detect Savings Transfer to Wife / Wife Transfer
-    const isWifeTransfer = /\b(wife transfer|wife ko|transfer to wife|patni|wife savings)\b/i.test(seg);
-    const isCcPayment = /\b(cc payment|credit card payment|credit card bill|cc bill|cc bhar diya|credit card bill paid)\b/i.test(seg);
+    const isWifeTransfer = /\b(wife transfer|wife ko|transfer to wife|patni|wife savings|wife|biwi|transfer wife)\b/i.test(seg);
+    const isCcPayment = /\b(cc payment|credit card payment|credit card bill|cc bill|cc bhar diya|credit card bill paid|pay cc)\b/i.test(seg);
     const isSavingsTransfer = /\b(savings transfer|bachat wife)\b/i.test(seg) || isWifeTransfer;
+
+    // Detect Account / Card / Cash
+    const detectedAccount = detectAccountFromText(seg) || (isWifeTransfer || isCcPayment ? 'AX Bank' : 'ICICI CC 0000');
 
     // Detect Investment (RD, FD, Mutual Fund)
     const isInvestment = /\b(rd|fd|recurring deposit|fixed deposit|mutual fund|sip|gold|ppf|investment|invest)\b/i.test(seg);
@@ -2356,8 +2405,11 @@ export function getCategoryBudgetStatus(userId: string) {
       .filter(t => t.type === 'expense' && t.date && t.date.startsWith(currentMonthPrefix) && t.category.toLowerCase() === cat.name.toLowerCase())
       .reduce((sum, t) => sum + (Number(t.amount) || 0), 0);
 
-    totalAllocatedBudget += limit;
-    totalSpentThisMonth += spent;
+    const isExempt = Boolean(cat.excludeFromBudget) || ['reimbursement', 'wife transfer', 'cc payment'].includes(cat.name.toLowerCase());
+    if (!isExempt) {
+      totalAllocatedBudget += limit;
+      totalSpentThisMonth += spent;
+    }
 
     const remaining = limit > 0 ? (limit - spent) : 0;
     const percentage = limit > 0 ? Math.round((spent / limit) * 100) : (spent > 0 ? 100 : 0);
@@ -2804,14 +2856,6 @@ export function calculateAccountsBalances(userId: string) {
     for (const t of txs) {
       const tAcc = t.account || 'ICICI CC 0000';
       if (tAcc === accId) {
-        // Skip transactions that existed on or before this baseline was set as of today
-        if (setTimeMs > 0) {
-          const tTimeMs = t.createdAt ? new Date(t.createdAt).getTime() : 0;
-          if (tTimeMs > 0 && tTimeMs <= setTimeMs) {
-            continue;
-          }
-        }
-
         const amt = Number(t.amount) || 0;
         if (t.type === 'income') {
           credits += amt;
@@ -2825,17 +2869,10 @@ export function calculateAccountsBalances(userId: string) {
     if (!isCard) {
       for (const s of savingsTransfers) {
         if (s.fromAccount === accId) {
-          if (setTimeMs > 0) {
-            const sTimeMs = s.createdAt ? new Date(s.createdAt).getTime() : 0;
-            if (sTimeMs > 0 && sTimeMs <= setTimeMs) {
-              continue;
-            }
-          }
-
           const sAmt = Number(s.amount) || 0;
           const isDupe = txs.some(
             t => t.account === accId &&
-                 t.isSavingsTransfer &&
+                 (t.isSavingsTransfer || t.isWifeTransfer || t.category === 'Wife Transfer' || t.category?.toLowerCase() === 'wife transfer') &&
                  Number(t.amount) === sAmt &&
                  t.date === s.date
           );
@@ -2891,32 +2928,12 @@ export function calculateAccountsBalances(userId: string) {
   }
 
   // Calculate Wife Savings Balance:
-  let wifeSetTimeStr = wifeBaseTimestamp;
-  if (!wifeSetTimeStr && store.wifeBaseBalance !== undefined && store.wifeBaseBalance > 0) {
-    wifeSetTimeStr = new Date().toISOString();
-    store.wifeBalanceSetTimestamp = wifeSetTimeStr;
-    needsSave = true;
-  }
-  const wifeSetTimeMs = wifeSetTimeStr ? new Date(wifeSetTimeStr).getTime() : 0;
-
   let totalTransferred = 0;
   for (const s of savingsTransfers) {
-    if (wifeSetTimeMs > 0) {
-      const sTimeMs = s.createdAt ? new Date(s.createdAt).getTime() : 0;
-      if (sTimeMs > 0 && sTimeMs <= wifeSetTimeMs) {
-        continue;
-      }
-    }
     totalTransferred += (Number(s.amount) || 0);
   }
   for (const t of txs) {
-    if (t.isSavingsTransfer) {
-      if (wifeSetTimeMs > 0) {
-        const tTimeMs = t.createdAt ? new Date(t.createdAt).getTime() : 0;
-        if (tTimeMs > 0 && tTimeMs <= wifeSetTimeMs) {
-          continue;
-        }
-      }
+    if (t.isSavingsTransfer || t.isWifeTransfer || t.category === 'Wife Transfer' || t.category?.toLowerCase() === 'wife transfer') {
       const tAmt = Number(t.amount) || 0;
       const isDupe = savingsTransfers.some(
         s => Number(s.amount) === tAmt && s.date === t.date
@@ -8186,6 +8203,8 @@ app.post('/api/transactions', (req, res) => {
   }
 
   const isRim = Boolean(isReimbursement || category === 'Reimbursement');
+  const isWifeTr = Boolean(req.body.isWifeTransfer || category === 'Wife Transfer' || (category && category.toLowerCase().includes('wife')) || detectSavingsTransfer(description || ''));
+  const isCcPay = Boolean(req.body.isCcPayment || category === 'CC Payment' || (category && category.toLowerCase().includes('cc payment')) || (category && category.toLowerCase().includes('credit card payment')) || (category && category.toLowerCase().includes('cc bill')));
   const nowInfo = getAppDateTime();
   const txAmount = Math.abs(Number(amount));
   const initSettledAmt = Number(reimbursementSettledAmount) || (reimbursementStatus === 'settled' ? txAmount : 0);
@@ -8193,28 +8212,54 @@ app.post('/api/transactions', (req, res) => {
     ? (reimbursementStatus || (initSettledAmt >= txAmount ? 'settled' : (initSettledAmt > 0 ? 'partial' : 'pending')))
     : undefined;
 
+  const finalAccount = account || ((isWifeTr || isCcPay) ? 'AX Bank' : 'ICICI CC 0000');
+
   const newTx: Transaction = {
     id: `tx_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
     userId: user.id,
     type: type === 'income' ? 'income' : 'expense',
     amount: txAmount,
-    category: isRim ? 'Reimbursement' : (category || (type === 'income' ? 'Salary & Employment' : 'Uncategorized')),
+    category: isRim ? 'Reimbursement' : isWifeTr ? 'Wife Transfer' : isCcPay ? 'CC Payment' : (category || (type === 'income' ? 'Salary & Employment' : 'Uncategorized')),
     description: (description || 'Manual Entry').trim(),
     date: date || nowInfo.date,
     time: req.body.time || nowInfo.time,
     paymentMethod: paymentMethod || 'UPI',
-    account: account || 'ICICI CC 0000',
+    account: finalAccount,
     source: 'manual',
     createdAt: nowInfo.iso,
     tags: Array.isArray(tags) ? tags : [],
     isReimbursement: isRim,
     reimbursementStatus: finalRimStatus,
     reimbursementSettledAmount: isRim ? initSettledAmt : undefined,
-    isSavingsTransfer: Boolean(isSavingsTransfer),
+    isSavingsTransfer: isWifeTr || Boolean(isSavingsTransfer),
+    isWifeTransfer: isWifeTr,
+    isCcPayment: isCcPay,
     isInvestment: Boolean(isInvestment),
   };
 
   store.transactions.unshift(newTx);
+
+  // Keep savingsTransfers in sync if wife transfer added
+  if (isWifeTr) {
+    if (!store.savingsTransfers) store.savingsTransfers = [];
+    const alreadyInSavings = store.savingsTransfers.some(
+      s => Number(s.amount) === txAmount && s.date === newTx.date
+    );
+    if (!alreadyInSavings) {
+      store.savingsTransfers.unshift({
+        id: `sav_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+        userId: user.id,
+        amount: txAmount,
+        date: newTx.date,
+        recipient: "Wife's Account",
+        fromAccount: newTx.account,
+        notes: newTx.description,
+        createdAt: newTx.createdAt,
+      });
+    }
+  }
+
+  saveUserData(user.id, store);
   saveUserData(user.id, store);
 
   const summary = calculateUserSummary(user.id);
@@ -8260,8 +8305,16 @@ app.patch('/api/transactions/:id/category', (req, res) => {
   }
 
   tx.category = category.trim();
-  saveUserData(user.id, store);
+  if (tx.category.toLowerCase() === 'wife transfer') {
+    tx.isWifeTransfer = true;
+    tx.isSavingsTransfer = true;
+    if (!tx.account || tx.account.includes('CC')) tx.account = 'AX Bank';
+  } else if (tx.category.toLowerCase() === 'cc payment') {
+    tx.isCcPayment = true;
+    if (!tx.account || tx.account.includes('CC')) tx.account = 'AX Bank';
+  }
 
+  saveUserData(user.id, store);
   res.json({ success: true, transaction: tx, summary: calculateUserSummary(user.id) });
 });
 
@@ -8270,7 +8323,7 @@ app.put('/api/transactions/:id', (req, res) => {
   const user = getRequestUser(req);
   const store = getUserData(user.id);
   const { id } = req.params;
-  const { type, amount, category, description, date, paymentMethod, account, tags, isReimbursement, reimbursementStatus, reimbursementSettledAmount, isSavingsTransfer, isInvestment } = req.body;
+  const { type, amount, category, description, date, paymentMethod, account, tags, isReimbursement, reimbursementStatus, reimbursementSettledAmount, isSavingsTransfer, isWifeTransfer, isCcPayment, isInvestment } = req.body;
 
   const tx = store.transactions.find(t => t.id === id);
   if (!tx) {
@@ -8279,7 +8332,17 @@ app.put('/api/transactions/:id', (req, res) => {
 
   if (type) tx.type = type;
   if (amount !== undefined) tx.amount = Math.abs(Number(amount));
-  if (category) tx.category = category.trim();
+  if (category) {
+    tx.category = category.trim();
+    if (tx.category.toLowerCase() === 'wife transfer') {
+      tx.isWifeTransfer = true;
+      tx.isSavingsTransfer = true;
+      if (!tx.account || tx.account.includes('CC')) tx.account = 'AX Bank';
+    } else if (tx.category.toLowerCase() === 'cc payment') {
+      tx.isCcPayment = true;
+      if (!tx.account || tx.account.includes('CC')) tx.account = 'AX Bank';
+    }
+  }
   if (description) tx.description = description.trim();
   if (date) tx.date = date;
   if (paymentMethod) tx.paymentMethod = paymentMethod;
@@ -8289,6 +8352,8 @@ app.put('/api/transactions/:id', (req, res) => {
   if (reimbursementStatus !== undefined) tx.reimbursementStatus = reimbursementStatus;
   if (reimbursementSettledAmount !== undefined) tx.reimbursementSettledAmount = Number(reimbursementSettledAmount) || 0;
   if (isSavingsTransfer !== undefined) tx.isSavingsTransfer = Boolean(isSavingsTransfer);
+  if (isWifeTransfer !== undefined) tx.isWifeTransfer = Boolean(isWifeTransfer);
+  if (isCcPayment !== undefined) tx.isCcPayment = Boolean(isCcPayment);
   if (isInvestment !== undefined) tx.isInvestment = Boolean(isInvestment);
 
   // Auto-sync status if settled amount matches or exceeds
@@ -8498,26 +8563,63 @@ app.post('/api/savings-transfers', (req, res) => {
   const store = getUserData(user.id);
   if (!store.savingsTransfers) store.savingsTransfers = [];
   const { amount, date, recipient, fromAccount, notes } = req.body;
+  const numAmt = Math.abs(Number(amount)) || 0;
+  const txDate = date || getAppDateTime().date;
+  const acc = fromAccount || 'AX Bank';
+  const desc = (notes || `Transfer to ${recipient || "Wife's Account"}`).trim();
+  const nowIso = new Date().toISOString();
+
   const newTransfer: SavingsTransfer = {
     id: `sav_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
     userId: user.id,
-    amount: Math.abs(Number(amount)) || 0,
-    date: date || getAppDateTime().date,
+    amount: numAmt,
+    date: txDate,
     recipient: (recipient || "Wife's Account").trim(),
-    fromAccount: fromAccount || 'AX Bank',
+    fromAccount: acc,
     notes: notes || '',
-    createdAt: new Date().toISOString(),
+    createdAt: nowIso,
   };
   store.savingsTransfers.unshift(newTransfer);
+
+  // Auto-create linked transaction in store.transactions so ledger and budgets are in 100% sync
+  const linkedTx: Transaction = {
+    id: `tx_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
+    userId: user.id,
+    type: 'expense',
+    amount: numAmt,
+    category: 'Wife Transfer',
+    description: desc,
+    date: txDate,
+    time: getAppDateTime().time,
+    paymentMethod: 'UPI',
+    account: acc,
+    source: 'wealth',
+    createdAt: nowIso,
+    tags: ['wife-transfer', 'savings'],
+    isSavingsTransfer: true,
+    isWifeTransfer: true,
+  };
+  (newTransfer as any).linkedTransactionId = linkedTx.id;
+  store.transactions.unshift(linkedTx);
+
   saveUserData(user.id, store);
-  res.json({ success: true, savingsTransfer: newTransfer, savingsTransfers: store.savingsTransfers, summary: calculateUserSummary(user.id) });
+  res.json({ success: true, savingsTransfer: newTransfer, savingsTransfers: store.savingsTransfers, transaction: linkedTx, summary: calculateUserSummary(user.id) });
 });
 
 app.delete('/api/savings-transfers/:id', (req, res) => {
   const user = getRequestUser(req);
   const store = getUserData(user.id);
   if (!store.savingsTransfers) store.savingsTransfers = [];
+  const target = store.savingsTransfers.find(s => s.id === req.params.id);
   store.savingsTransfers = store.savingsTransfers.filter(s => s.id !== req.params.id);
+
+  if (target) {
+    store.transactions = store.transactions.filter(t =>
+      t.id !== (target as any).linkedTransactionId &&
+      !(t.isWifeTransfer && Number(t.amount) === Number(target.amount) && t.date === target.date)
+    );
+  }
+
   saveUserData(user.id, store);
   res.json({ success: true, savingsTransfers: store.savingsTransfers, summary: calculateUserSummary(user.id) });
 });

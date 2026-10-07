@@ -150,17 +150,24 @@ export const BudgetManager: React.FC<BudgetManagerProps> = ({
       const txMonth = (tx.date || '').substring(0, 7);
       if (
         txMonth === activeMonth &&
-        tx.type === 'expense' &&
-        !tx.isReimbursement &&
-        tx.category?.toLowerCase() !== 'reimbursement' &&
-        !tx.isSavingsTransfer &&
-        !tx.isWifeTransfer &&
-        tx.category?.toLowerCase() !== 'wife transfer' &&
-        !tx.isCcPayment &&
-        tx.category?.toLowerCase() !== 'cc payment'
+        tx.type === 'expense'
       ) {
         const catName = tx.category || 'Uncategorized';
-        map[catName.toLowerCase()] = (map[catName.toLowerCase()] || 0) + (Number(tx.amount) || 0);
+        const lowerCat = catName.toLowerCase();
+        const amt = Number(tx.amount) || 0;
+        map[lowerCat] = (map[lowerCat] || 0) + amt;
+
+        // Also ensure specific flags map to their canonical category keys
+        if (tx.isWifeTransfer || tx.isSavingsTransfer || lowerCat.includes('wife')) {
+          if (lowerCat !== 'wife transfer') {
+            map['wife transfer'] = (map['wife transfer'] || 0) + amt;
+          }
+        }
+        if (tx.isCcPayment || lowerCat.includes('cc payment') || lowerCat.includes('credit card payment') || lowerCat.includes('cc bill')) {
+          if (lowerCat !== 'cc payment') {
+            map['cc payment'] = (map['cc payment'] || 0) + amt;
+          }
+        }
       }
     });
     return map;
@@ -271,8 +278,13 @@ export const BudgetManager: React.FC<BudgetManagerProps> = ({
   }, [displayBudgets]);
 
   const totalSpent = useMemo(() => {
-    return (displayBudgets || []).reduce((acc, b) => acc + (b?.spent || 0), 0);
-  }, [displayBudgets]);
+    return (displayBudgets || []).reduce((acc, b) => {
+      const catDef = categories.find(c => c.name.toLowerCase() === b.category.toLowerCase());
+      const isExempt = catDef?.excludeFromBudget || ['reimbursement', 'wife transfer', 'cc payment'].includes(b.category.toLowerCase());
+      if (isExempt) return acc;
+      return acc + (b?.spent || 0);
+    }, 0);
+  }, [displayBudgets, categories]);
 
   const exceededCount = useMemo(() => {
     return (displayBudgets || []).filter((b) => b && b.limit > 0 && b.spent > b.limit).length;
@@ -807,6 +819,10 @@ export const BudgetManager: React.FC<BudgetManagerProps> = ({
                       {isReimbursementCat ? (
                         <span className="text-[9px] font-mono px-1.5 py-0.2 rounded-sm bg-cyan-950/90 border border-cyan-500/40 text-cyan-300 font-bold">
                           BUDGET EXEMPTED
+                        </span>
+                      ) : (b.categoryDef?.excludeFromBudget || ['wife transfer', 'cc payment'].includes(b.category.toLowerCase())) ? (
+                        <span className="text-[9px] font-mono px-1.5 py-0.2 rounded-sm bg-purple-950/90 border border-purple-500/40 text-purple-300 font-bold">
+                          NON-BUDGET OUTFLOW
                         </span>
                       ) : (
                         <>

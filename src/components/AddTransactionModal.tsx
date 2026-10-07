@@ -69,6 +69,10 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
     // Auto-detect savings transfer to wife (Point 5)
     if (detectSavingsTransfer(val)) {
       setIsSavingsTransfer(true);
+      if (categories.some((c) => c.name.toLowerCase() === 'wife transfer')) {
+        setCategory('Wife Transfer');
+      }
+      setAccount('AX Bank');
     }
 
     // Auto-detect investment
@@ -99,6 +103,10 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
       return;
     }
 
+    const isWifeTr = category.toLowerCase() === 'wife transfer' || isSavingsTransfer;
+    const isCcPay = category.toLowerCase() === 'cc payment';
+    const finalAccount = (isWifeTr || isCcPay) && (!account || account.includes('CC')) ? 'AX Bank' : account;
+
     setIsSubmitting(true);
     try {
       await onAddTransaction({
@@ -108,10 +116,12 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
         description: description.trim(),
         date: date || getCurrentDateStr(),
         paymentMethod,
-        account,
+        account: finalAccount,
         isReimbursement,
         reimbursementStatus: isReimbursement ? 'pending' : undefined,
-        isSavingsTransfer,
+        isSavingsTransfer: isWifeTr,
+        isWifeTransfer: isWifeTr,
+        isCcPayment: isCcPay,
         isInvestment,
         source: 'manual',
         tags,
@@ -325,6 +335,11 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
                 setCategory(val);
                 if (val.toLowerCase() === 'reimbursement') {
                   setIsReimbursement(true);
+                } else if (val.toLowerCase() === 'wife transfer') {
+                  setIsSavingsTransfer(true);
+                  setAccount('AX Bank');
+                } else if (val.toLowerCase() === 'cc payment') {
+                  setAccount('AX Bank');
                 }
               }}
               className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-700 rounded-xl text-xs text-cyan-300 focus:outline-hidden focus:border-cyan-400 cursor-pointer"

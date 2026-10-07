@@ -288,7 +288,7 @@ export const WealthKhataHub: React.FC<WealthKhataHubProps> = ({
     let total = savingsTransfers.reduce((sum, s) => sum + (Number(s.amount) || 0), 0);
     if (transactions && transactions.length > 0) {
       for (const t of transactions) {
-        if (t.isSavingsTransfer) {
+        if (t.isSavingsTransfer || t.isWifeTransfer || t.category === 'Wife Transfer' || t.category?.toLowerCase() === 'wife transfer') {
           const tAmt = Number(t.amount) || 0;
           const isDupe = savingsTransfers.some(
             s => Number(s.amount) === tAmt && s.date === t.date

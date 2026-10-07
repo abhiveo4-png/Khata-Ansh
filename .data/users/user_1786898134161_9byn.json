@@ -1,6 +1,26 @@
 {
   "transactions": [
     {
+      "id": "tx_wife_transfer_25k_9byn",
+      "userId": "user_1786898134161_9byn",
+      "type": "expense",
+      "amount": 25000,
+      "category": "Wife Transfer",
+      "description": "Wife transfer",
+      "date": "2026-10-06",
+      "time": "12:00",
+      "paymentMethod": "UPI",
+      "account": "AX Bank",
+      "source": "wealth",
+      "tags": [
+        "wife-transfer",
+        "savings"
+      ],
+      "isSavingsTransfer": true,
+      "isWifeTransfer": true,
+      "linkedTransferId": "sav_9byn_wife_25k"
+    },
+    {
       "id": "tx_1786898197192_v6xf76",
       "userId": "user_1786898134161_9byn",
       "type": "expense",
@@ -558,5 +578,23 @@
     }
   ],
   "fuelLogs": [],
-  "dataVersion": 4
+  "accountBaseBalances": {
+    "IC Bank": 45000,
+    "AX Bank": 80000,
+    "Cash": 5000
+  },
+  "wifeBaseBalance": 0,
+  "savingsTransfers": [
+    {
+      "id": "sav_9byn_wife_25k",
+      "userId": "user_1786898134161_9byn",
+      "amount": 25000,
+      "date": "2026-10-06",
+      "recipient": "Wife's Account",
+      "fromAccount": "AX Bank",
+      "notes": "Wife transfer",
+      "createdAt": "2026-10-06T12:00:00.000Z"
+    }
+  ],
+  "dataVersion": 5
 }

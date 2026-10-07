@@ -1,5 +1,26 @@
 {
-  "transactions": [],
+  "transactions": [
+    {
+      "id": "tx_wife_transfer_25k_ansh",
+      "userId": "user_ansh",
+      "type": "expense",
+      "amount": 25000,
+      "category": "Wife Transfer",
+      "description": "Wife transfer",
+      "date": "2026-10-06",
+      "time": "12:00",
+      "paymentMethod": "UPI",
+      "account": "AX Bank",
+      "source": "wealth",
+      "tags": [
+        "wife-transfer",
+        "savings"
+      ],
+      "isSavingsTransfer": true,
+      "isWifeTransfer": true,
+      "linkedTransferId": "sav_ansh_wife_25k"
+    }
+  ],
   "budgets": [
     {
       "category": "Food & Dining",
@@ -61,6 +82,30 @@
     },
     {
       "category": "Uncategorized",
+      "limit": 0,
+      "spent": 0,
+      "period": "monthly"
+    },
+    {
+      "category": "Family Trip & Pooja",
+      "limit": 0,
+      "spent": 0,
+      "period": "monthly"
+    },
+    {
+      "category": "Reimbursement",
+      "limit": 0,
+      "spent": 0,
+      "period": "monthly"
+    },
+    {
+      "category": "Wife Transfer",
+      "limit": 0,
+      "spent": 0,
+      "period": "monthly"
+    },
+    {
+      "category": "CC Payment",
       "limit": 0,
       "spent": 0,
       "period": "monthly"
@@ -490,24 +535,118 @@
       ],
       "isDefault": true,
       "description": "Auto-assigned when item does not match existing categories or needs review"
+    },
+    {
+      "id": "family_trip_pooja",
+      "name": "Family Trip & Pooja",
+      "type": "expense",
+      "icon": "Sparkles",
+      "color": "#F59E0B",
+      "bgLight": "bg-amber-50 text-amber-700 border-amber-200",
+      "keywords": [
+        "pooja",
+        "puja",
+        "trip",
+        "family trip",
+        "mandir",
+        "prasad",
+        "pandit",
+        "samagri",
+        "havan",
+        "yatra",
+        "darshan",
+        "holiday",
+        "vacation",
+        "temple",
+        "religious",
+        "ganga",
+        "kedarnath",
+        "tirupati"
+      ],
+      "isDefault": true
+    },
+    {
+      "id": "reimbursement",
+      "name": "Reimbursement",
+      "type": "expense",
+      "icon": "Briefcase",
+      "color": "#06B6D4",
+      "bgLight": "bg-cyan-50 text-cyan-700 border-cyan-200",
+      "keywords": [
+        "rim",
+        "reimburse",
+        "reimbursement",
+        "office claim",
+        "client trip",
+        "claim"
+      ],
+      "isDefault": true
+    },
+    {
+      "id": "wife_transfer",
+      "name": "Wife Transfer",
+      "type": "expense",
+      "icon": "Heart",
+      "color": "#EC4899",
+      "bgLight": "bg-pink-50 text-pink-700 border-pink-200",
+      "keywords": [
+        "wife transfer",
+        "transfer to wife",
+        "patni",
+        "wife savings",
+        "wife"
+      ],
+      "isDefault": true
+    },
+    {
+      "id": "cc_payment",
+      "name": "CC Payment",
+      "type": "expense",
+      "icon": "CreditCard",
+      "color": "#6366F1",
+      "bgLight": "bg-indigo-50 text-indigo-700 border-indigo-200",
+      "keywords": [
+        "cc payment",
+        "credit card payment",
+        "card payment",
+        "cc bill",
+        "credit card bill",
+        "bill payment sbi",
+        "bill payment icici",
+        "axis cc payment",
+        "pay cc"
+      ],
+      "isDefault": true
     }
   ],
   "debts": [],
   "goals": [],
   "udhaars": [],
   "fuelLogs": [],
-  "dataVersion": 35611,
+  "dataVersion": 35613,
   "accountBaseBalances": {
     "IC Bank": 45000,
     "AX Bank": 80000,
     "Cash": 5000
   },
-  "wifeBaseBalance": 25000,
-  "savingsTransfers": [],
+  "wifeBaseBalance": 0,
+  "savingsTransfers": [
+    {
+      "id": "sav_ansh_wife_25k",
+      "userId": "user_ansh",
+      "amount": 25000,
+      "date": "2026-10-06",
+      "recipient": "Wife's Account",
+      "fromAccount": "AX Bank",
+      "notes": "Wife transfer",
+      "createdAt": "2026-10-06T12:00:00.000Z"
+    }
+  ],
   "accountBalanceSetTimestamps": {
     "IC Bank": "2026-10-05T15:36:00.405Z",
     "AX Bank": "2026-10-05T15:36:00.405Z",
     "Cash": "2026-10-05T15:36:00.405Z"
   },
-  "wifeBalanceSetTimestamp": "2026-10-05T15:36:00.405Z"
+  "wifeBalanceSetTimestamp": "2026-10-05T15:36:00.405Z",
+  "deletedCategories": []
 }

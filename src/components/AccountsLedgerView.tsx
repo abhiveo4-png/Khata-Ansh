@@ -129,6 +129,23 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
     fetchBalances();
   }, [transactions]);
 
+  // Live calculation of wife transfers to ensure seamless real-time sync with Wealth Hub
+  const liveWifeTransferred = React.useMemo(() => {
+    return transactions.reduce((acc, t) => {
+      if (t.isSavingsTransfer || t.isWifeTransfer || t.category === 'Wife Transfer' || t.category?.toLowerCase() === 'wife transfer') {
+        return acc + (Number(t.amount) || 0);
+      }
+      return acc;
+    }, 0);
+  }, [transactions]);
+
+  const displayWifeBalance = React.useMemo(() => {
+    const base = Number(balancesData?.wifeBaseBalance ?? balancesData?.wifeSavings?.baseBalance) || 0;
+    const serverTransferred = Number(balancesData?.wifeSavings?.totalTransferred) || 0;
+    const effectiveTransferred = Math.max(serverTransferred, liveWifeTransferred);
+    return base + effectiveTransferred;
+  }, [balancesData, liveWifeTransferred]);
+
   const handleSaveBalances = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsSavingBalances(true);
@@ -610,7 +627,7 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
             </span>
           </div>
           <div className="text-xl sm:text-2xl font-bold font-mono text-white mt-1.5">
-            {isFamily || isPrivacyMode ? '••••••' : `₹${(balancesData?.wifeSavings.currentBalance || 0).toLocaleString('en-IN')}`}
+            {isFamily || isPrivacyMode ? '••••••' : `₹${(displayWifeBalance || balancesData?.wifeSavings?.currentBalance || 0).toLocaleString('en-IN')}`}
           </div>
           <div className="text-[11px] text-slate-400 mt-1 flex items-center justify-between">
             <span>Base + Transfers</span>

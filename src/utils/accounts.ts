@@ -171,6 +171,28 @@ export function detectAccount(text: string): AccountId | undefined {
     return 'Cash';
   }
 
+  // Wife Transfer / Savings Transfer (defaults to bank account)
+  if (
+    lower.includes('wife') ||
+    lower.includes('patni') ||
+    lower.includes('transfer to wife') ||
+    lower.includes('savings transfer') ||
+    lower.includes('bachat wife')
+  ) {
+    return 'AX Bank';
+  }
+
+  // CC Payment / Credit Card Bill Payment (paid from salary bank account)
+  if (
+    lower.includes('cc payment') ||
+    lower.includes('credit card payment') ||
+    lower.includes('cc bill') ||
+    lower.includes('pay cc') ||
+    lower.includes('card payment')
+  ) {
+    return 'AX Bank';
+  }
+
   return undefined;
 }
 

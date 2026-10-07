@@ -148,11 +148,12 @@ export const OverviewCards: React.FC<OverviewCardsProps> = ({
     .reduce((sum, t) => sum + (t.amount || 0), 0);
 
   const displayPersonalExpense = isFamily ? memberPersonalExpense : monthPersonalExpense;
-  const monthNetSavings = monthIncome - displayPersonalExpense;
+  // Net Savings strictly deducts all cash outflows (personal expenses + wife transfers + CC payments) from income
+  const monthNetSavings = monthIncome - monthTotalExpense;
   const monthCashBalance = monthIncome - monthTotalExpense;
 
   // Cumulative / Total at the end of selected month
-  const totalNetSavings = openingNetSavings + monthNetSavings;
+  const totalNetSavings = openingCashBalance + monthNetSavings;
   const totalCashBalance = openingCashBalance + monthCashBalance;
   const totalPendingRim = prevPendingRim + monthPendingRim;
 
@@ -410,29 +411,39 @@ export const OverviewCards: React.FC<OverviewCardsProps> = ({
           <div className="absolute top-0 right-0 -mr-8 -mt-8 w-28 h-28 rounded-full bg-cyan-500/10 blur-2xl group-hover:bg-cyan-500/20 transition-all pointer-events-none" />
 
           <div className="flex items-center justify-between relative z-10">
-            <span className="text-xs font-bold uppercase tracking-wider text-cyan-400">
+            <span className="text-xs font-bold uppercase tracking-wider text-cyan-400 flex items-center gap-1.5">
+              <PieChart className="w-3.5 h-3.5 text-cyan-400" />
               Monthly Budget
             </span>
-            <div className="w-9 h-9 rounded-xl icon-badge-cyan flex items-center justify-center transition-transform group-hover:scale-110">
-              <PieChart className="w-4 h-4" />
-            </div>
+            <span className={`text-[11px] font-mono font-bold px-2 py-0.5 rounded-lg border ${
+              budgetPercentage > 100 
+                ? 'bg-rose-950/70 border-rose-500/50 text-rose-300' 
+                : budgetPercentage >= 80 
+                ? 'bg-amber-950/70 border-amber-500/50 text-amber-300'
+                : 'bg-cyan-950/70 border-cyan-500/40 text-cyan-300'
+            }`}>
+              {isFamily ? '••%' : `${budgetPercentage}% Lag Gaya`}
+            </span>
           </div>
 
           <div className="mt-3 relative z-10">
             <div className="text-2xl sm:text-3xl font-extrabold text-white tracking-tight flex items-baseline font-mono">
               <span className="text-cyan-400 mr-1 text-xl font-medium">₹</span>
               <span className={isFamily ? 'tracking-widest text-slate-400' : ''}>
-                {displayAmount(monthlyBudgetLimit)}
+                {displayAmount(monthlySpent)}
+              </span>
+              <span className="text-xs font-sans font-medium text-slate-400 ml-2">
+                / ₹{displayAmount(monthlyBudgetLimit)} Limit
               </span>
             </div>
           </div>
 
-          <div className="mt-3 flex items-center justify-between text-xs pt-2.5 border-t border-white/[0.08] relative z-10">
-            <span className="text-slate-300 text-[11px] font-medium">
-              {isFamily ? '🔒 Limits Masked' : `Laga: ₹${displayAmount(monthlySpent)} • Bacha: ₹${displayAmount(Math.max(0, monthlyBudgetLimit - monthlySpent))}`}
+          <div className="mt-3 flex items-center justify-between text-xs pt-2.5 border-t border-white/[0.08] relative z-10 gap-2">
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-rose-500/15 border border-rose-500/30 text-rose-300 text-[11px] font-mono font-bold">
+              📉 Laga: ₹{displayAmount(monthlySpent)}
             </span>
-            <span className={`font-bold font-mono ${budgetPercentage > 100 ? 'text-rose-400' : 'text-cyan-400'}`}>
-              {isFamily ? '••%' : `${budgetPercentage}%`}
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-[11px] font-mono font-bold">
+              🟢 Bacha: ₹{displayAmount(Math.max(0, monthlyBudgetLimit - monthlySpent))}
             </span>
           </div>
         </div>
