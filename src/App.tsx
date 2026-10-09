@@ -1083,6 +1083,13 @@ export default function App() {
         onLogout={handleLogout}
       />
 
+      <AddTransactionModal
+        isOpen={isAddTransactionOpen}
+        categories={categories}
+        onClose={() => setIsAddTransactionOpen(false)}
+        onAddTransaction={handleAddTransaction}
+      />
+
       <ReimbursementSummaryModal
         isOpen={isReimbursementModalOpen}
         onClose={() => {

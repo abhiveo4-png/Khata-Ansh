@@ -2046,6 +2046,7 @@ function parseFallback(rawText: string, userCategories: CategoryDef[]): Array<{
   paymentMethod?: PaymentMethod;
   account?: string;
   isReimbursement?: boolean;
+  isReimbursementInflow?: boolean;
   reimbursementStatus?: 'pending' | 'settled';
   isSavingsTransfer?: boolean;
   isWifeTransfer?: boolean;
@@ -2062,6 +2063,7 @@ function parseFallback(rawText: string, userCategories: CategoryDef[]): Array<{
     paymentMethod?: PaymentMethod;
     account?: string;
     isReimbursement?: boolean;
+    isReimbursementInflow?: boolean;
     reimbursementStatus?: 'pending' | 'settled';
     isSavingsTransfer?: boolean;
     isWifeTransfer?: boolean;
@@ -2230,6 +2232,7 @@ export async function parseMessageWithGemini(
   paymentMethod: PaymentMethod;
   account?: string;
   isReimbursement?: boolean;
+  isReimbursementInflow?: boolean;
   reimbursementStatus?: 'pending' | 'settled';
   isSavingsTransfer?: boolean;
   isInvestment?: boolean;
