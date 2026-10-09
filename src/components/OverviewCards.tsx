@@ -83,8 +83,14 @@ export const OverviewCards: React.FC<OverviewCardsProps> = ({
 
   for (const t of prevTransactions) {
     const amt = Number(t.amount) || 0;
+    const isRimInflow = Boolean(
+      t.isReimbursementInflow ||
+      (t.type === 'income' && (t.isReimbursement || t.category === 'Reimbursement' || t.category === 'Reimbursement Received'))
+    );
     if (t.type === 'income') {
-      prevIncome += amt;
+      if (!isRimInflow) {
+        prevIncome += amt;
+      }
     } else {
       prevTotalExpense += amt;
       const isRim = Boolean(t.isReimbursement || t.category === 'Reimbursement');
@@ -107,6 +113,7 @@ export const OverviewCards: React.FC<OverviewCardsProps> = ({
 
   // 3. Selected Month figures
   let monthIncome = 0;
+  let monthRimRecovery = 0;
   let monthTotalExpense = 0;
   let monthPersonalExpense = 0;
   let monthPendingRim = 0;
@@ -115,9 +122,17 @@ export const OverviewCards: React.FC<OverviewCardsProps> = ({
 
   for (const t of monthTransactions) {
     const amt = Number(t.amount) || 0;
+    const isRimInflow = Boolean(
+      t.isReimbursementInflow ||
+      (t.type === 'income' && (t.isReimbursement || t.category === 'Reimbursement' || t.category === 'Reimbursement Received'))
+    );
     if (t.type === 'income') {
-      monthIncome += amt;
-      monthIncomeCount++;
+      if (!isRimInflow) {
+        monthIncome += amt;
+        monthIncomeCount++;
+      } else {
+        monthRimRecovery += amt;
+      }
     } else {
       monthTotalExpense += amt;
       monthExpenseCount++;
@@ -325,6 +340,11 @@ export const OverviewCards: React.FC<OverviewCardsProps> = ({
                 {displayAmount(monthIncome)}
               </span>
             </div>
+            {monthRimRecovery > 0 && !isFamily && (
+              <div className="text-[10px] text-cyan-300 font-medium mt-1 flex items-center gap-1">
+                <span>💼 +₹{displayAmount(monthRimRecovery)} Rim Recovery (Exempt from Salary)</span>
+              </div>
+            )}
           </div>
 
           <div className="mt-3 flex items-center justify-between text-xs pt-2.5 border-t border-white/[0.08] relative z-10">

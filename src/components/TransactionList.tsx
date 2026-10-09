@@ -915,7 +915,12 @@ export const TransactionList: React.FC<TransactionListProps> = ({
                       <span className="font-semibold text-white truncate text-sm">{tx.description}</span>
                       
                       {/* Reimbursement Badge with Clickable Status & Settlement Launcher */}
-                      {(tx.isReimbursement || tx.category === 'Reimbursement') && (
+                      {Boolean(tx.isReimbursementInflow || (tx.type === 'income' && (tx.isReimbursement || tx.category === 'Reimbursement'))) ? (
+                        <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-cyan-500/20 text-cyan-300 border border-cyan-500/40">
+                          <Briefcase className="w-2.5 h-2.5" />
+                          <span>Rim Inflow (Bank Credited)</span>
+                        </span>
+                      ) : (tx.isReimbursement || tx.category === 'Reimbursement') && (
                         <button
                           onClick={() => {
                             if (onOpenReimbursementSummary) {

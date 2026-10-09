@@ -89,6 +89,7 @@ export interface Transaction {
   createdAt: string; // ISO string
   tags?: string[];
   isReimbursement?: boolean;
+  isReimbursementInflow?: boolean;
   reimbursementStatus?: 'pending' | 'settled' | 'partial';
   reimbursementSettledAmount?: number;
   isSavingsTransfer?: boolean;

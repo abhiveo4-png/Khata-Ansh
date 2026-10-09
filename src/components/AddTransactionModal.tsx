@@ -117,8 +117,9 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
         date: date || getCurrentDateStr(),
         paymentMethod,
         account: finalAccount,
-        isReimbursement,
-        reimbursementStatus: isReimbursement ? 'pending' : undefined,
+        isReimbursement: isReimbursement || category === 'Reimbursement',
+        isReimbursementInflow: type === 'income' && (isReimbursement || category === 'Reimbursement'),
+        reimbursementStatus: (type === 'income' && (isReimbursement || category === 'Reimbursement')) ? 'settled' : (isReimbursement ? 'pending' : undefined),
         isSavingsTransfer: isWifeTr,
         isWifeTransfer: isWifeTr,
         isCcPayment: isCcPay,
@@ -319,6 +320,45 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
                   </div>
                   <div className="text-[10px] text-slate-400">
                     Wife ke account me bheja bachat fund — monthly budget limit se deduct nahi hoga.
+                  </div>
+                </div>
+              </label>
+            </div>
+          )}
+
+          {/* Special Toggle for Reimbursement Inflow (Income Mode) */}
+          {type === 'income' && (
+            <div className="p-3 bg-slate-950/80 border border-slate-800 rounded-xl space-y-2">
+              <label className="flex items-start gap-2.5 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={isReimbursement || category === 'Reimbursement'}
+                  onChange={(e) => {
+                    const checked = e.target.checked;
+                    setIsReimbursement(checked);
+                    if (checked) {
+                      setCategory('Reimbursement');
+                      if (!description || description.trim() === 'Income') {
+                        setDescription('Office Reimbursement Received');
+                      }
+                      if (account && account.includes('CC')) {
+                        setAccount('AX Bank');
+                      }
+                    } else {
+                      if (category === 'Reimbursement') {
+                        setCategory('Salary & Employment');
+                      }
+                    }
+                  }}
+                  className="mt-0.5 w-4 h-4 rounded text-cyan-500 bg-slate-900 border-slate-700 cursor-pointer"
+                />
+                <div>
+                  <div className="font-bold text-cyan-300 flex items-center gap-1.5">
+                    <Briefcase className="w-3.5 h-3.5" />
+                    Office Reimbursement / Claim Settlement (Recovery)
+                  </div>
+                  <div className="text-[10px] text-slate-400">
+                    Yeh Salary / Kamai nahi hai — Bank Account me paisa credit (+) hoga, lekin Monthly Salary / Income me count NAHI hoga.
                   </div>
                 </div>
               </label>

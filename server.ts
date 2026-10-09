@@ -120,6 +120,7 @@ export interface Transaction {
   createdAt: string;
   tags?: string[];
   isReimbursement?: boolean;
+  isReimbursementInflow?: boolean;
   reimbursementStatus?: 'pending' | 'settled' | 'partial';
   reimbursementSettledAmount?: number;
   isSavingsTransfer?: boolean;
@@ -429,11 +430,11 @@ export const DEFAULT_CATEGORIES: CategoryDef[] = [
   {
     id: 'reimbursement',
     name: 'Reimbursement',
-    type: 'expense',
+    type: 'both',
     icon: 'Briefcase',
     color: '#06B6D4',
     bgLight: 'bg-cyan-50 text-cyan-700 border-cyan-200',
-    keywords: ['rim', 'reimburse', 'reimbursement', 'office claim', 'client trip', 'claim'],
+    keywords: ['rim', 'reimburse', 'reimbursement', 'office claim', 'client trip', 'claim', 'rim mila', 'rim aaya', 'reimbursement credit', 'office refund'],
     isDefault: true,
   },
   {
@@ -1292,11 +1293,18 @@ function calculateUserSummary(userId: string): FinancialSummary {
       currentMonthCount++;
     }
 
+    const isRimInflow = Boolean(
+      t.isReimbursementInflow ||
+      (t.type === 'income' && (t.isReimbursement || t.category === 'Reimbursement' || t.category === 'Reimbursement Received'))
+    );
+
     if (t.type === 'income') {
-      totalIncome += amt;
-      incomeCount++;
-      if (isCurrentMonth) currentMonthIncome += amt;
-      if (isPrevMonth) prevIncome += amt;
+      if (!isRimInflow) {
+        totalIncome += amt;
+        incomeCount++;
+        if (isCurrentMonth) currentMonthIncome += amt;
+        if (isPrevMonth) prevIncome += amt;
+      }
     } else {
       totalExpense += amt;
       expenseCount++;
@@ -1694,6 +1702,11 @@ export function parseUdhaarIntentAndData(rawText: string): {
   const cleanText = rawText.trim();
   const lower = cleanText.toLowerCase();
 
+  // If this is a reimbursement, wife transfer, or investment, it is NOT an udhaar loan!
+  if (detectReimbursement(rawText) || detectSavingsTransfer(rawText) || detectInvestment(rawText)) {
+    return null;
+  }
+
   // Udhaar keywords check
   const isLent = /\b(diya|diye|de\s+diya|lent|give|gave|bheja|send\s+kiya|transfer\s+kiya)\b/i.test(lower);
   const isBorrowed = /\b(liya|liye|le\s+liya|mila|mile|wapas\s+mila|borrowed|borrow|received|take|took)\b/i.test(lower);
@@ -1950,6 +1963,15 @@ function detectReimbursement(text: string): boolean {
   return rimPattern.test(lower);
 }
 
+function detectReimbursementInflow(text: string): boolean {
+  if (!text) return false;
+  const lower = text.toLowerCase();
+  const isRim = /\b(rim|reimburse|reimbursement|office claim|client trip|reimbursable|claim)\b/i.test(lower);
+  if (!isRim) return false;
+  return /\b(mila|mile|mil gaya|aaya|aaye|aa gaya|credit|credited|received|receive|settle|settled|settlement|wapas|waapas|refund|refunded|deposit|deposited|inflow)\b/i.test(lower) ||
+    /^\s*\+\s*\d+/i.test(lower);
+}
+
 function detectSavingsTransfer(text: string): boolean {
   if (!text) return false;
   const lower = text.toLowerCase();
@@ -1990,6 +2012,7 @@ function cleanTransactionDescription(rawDesc: string, detectedCategory?: string)
     .replace(/\b(?:00|33|26|76)\b/g, '')
     .replace(/\b(?:cash|nagad|rokda|upi|gpay|paytm|phonepe|net\s*banking|credit\s*card|debit\s*card|card|cc)\b/gi, '')
     .replace(/\b(?:rim|reimburse|reimbursement|office\s*claim|client\s*trip|claim)\b/gi, '')
+    .replace(/\b(?:mila|mile|mil\s*gaya|aaya|aaye|aa\s*gaya|credit|credited|received|settled?|wapas)\b/gi, '')
     .replace(/\b(?:yesterday|kal|beeta kal|parso|today|aaj)\b/gi, '')
     .replace(/\s+/g, ' ')
     .trim();
@@ -2002,6 +2025,9 @@ function cleanTransactionDescription(rawDesc: string, detectedCategory?: string)
   cleaned = cleaned.replace(/^[-–—:,.\s]+|[-–—:,.\s]+$/g, '').trim();
 
   if (!cleaned || cleaned.length < 2) {
+    if (detectedCategory === 'Reimbursement') {
+      return 'Office Reimbursement';
+    }
     return detectedCategory && detectedCategory !== 'Uncategorized' ? detectedCategory : (rawDesc || 'Expense');
   }
 
@@ -2073,7 +2099,8 @@ function parseFallback(rawText: string, userCategories: CategoryDef[]): Array<{
     if (isNaN(amount) || amount <= 0) continue;
 
     // Detect Reimbursement (Point 1: Rim, reimburse, claim)
-    const isReimbursement = /\b(rim|reimburse|reimbursement|office claim|client trip|reimbursable|claim)\b/i.test(seg);
+    const isReimbursement = detectReimbursement(seg);
+    const isRimInflow = detectReimbursementInflow(seg);
 
     // Detect Savings Transfer to Wife / Wife Transfer
     const isWifeTransfer = /\b(wife transfer|wife ko|transfer to wife|patni|wife savings|wife|biwi|transfer wife)\b/i.test(seg);
@@ -2081,7 +2108,7 @@ function parseFallback(rawText: string, userCategories: CategoryDef[]): Array<{
     const isSavingsTransfer = /\b(savings transfer|bachat wife)\b/i.test(seg) || isWifeTransfer;
 
     // Detect Account / Card / Cash
-    const detectedAccount = detectAccountFromText(seg) || (isWifeTransfer || isCcPayment ? 'AX Bank' : 'ICICI CC 0000');
+    const detectedAccount = detectAccountFromText(seg) || (isWifeTransfer || isCcPayment || isRimInflow ? 'AX Bank' : 'ICICI CC 0000');
 
     // Detect Investment (RD, FD, Mutual Fund)
     const isInvestment = /\b(rd|fd|recurring deposit|fixed deposit|mutual fund|sip|gold|ppf|investment|invest)\b/i.test(seg);
@@ -2095,6 +2122,7 @@ function parseFallback(rawText: string, userCategories: CategoryDef[]): Array<{
     // Detect Income vs Expense
     const isIncome =
       !isSavingsTransfer && (
+        isRimInflow ||
         segLower.includes('income') ||
         segLower.includes('salary') ||
         segLower.includes('credited') ||
@@ -2129,12 +2157,14 @@ function parseFallback(rawText: string, userCategories: CategoryDef[]): Array<{
       .trim();
 
     if (!cleanDesc || cleanDesc.length < 2) {
-      cleanDesc = isIncome ? 'Income' : (isReimbursement ? 'Office Reimbursement' : 'Expense');
+      cleanDesc = isRimInflow
+        ? 'Office Reimbursement Received'
+        : (isIncome ? 'Income' : (isReimbursement ? 'Office Reimbursement' : 'Expense'));
     }
 
     // Match against user's categories
     let matchedCategory = 'Uncategorized';
-    if (isReimbursement) {
+    if (isReimbursement || isRimInflow) {
       matchedCategory = 'Reimbursement';
     } else if (isWifeTransfer) {
       matchedCategory = 'Wife Transfer';
@@ -2159,7 +2189,9 @@ function parseFallback(rawText: string, userCategories: CategoryDef[]): Array<{
       }
     }
 
-    const finalDescription = cleanTransactionDescription(cleanDesc, matchedCategory);
+    const finalDescription = isRimInflow && (!cleanDesc || cleanDesc.length < 2 || cleanDesc === 'Income' || cleanDesc === 'Expense')
+      ? 'Office Reimbursement Received'
+      : cleanTransactionDescription(cleanDesc, matchedCategory);
 
     results.push({
       type,
@@ -2168,10 +2200,11 @@ function parseFallback(rawText: string, userCategories: CategoryDef[]): Array<{
       description: finalDescription,
       date: extractedDate || getAppDateTime().date,
       time: extractedTime,
-      paymentMethod,
+      paymentMethod: isRimInflow ? 'Bank Transfer' : paymentMethod,
       account: detectedAccount,
-      isReimbursement,
-      reimbursementStatus: isReimbursement ? 'pending' : undefined,
+      isReimbursement: isReimbursement || isRimInflow,
+      isReimbursementInflow: isRimInflow,
+      reimbursementStatus: isRimInflow ? 'settled' : (isReimbursement ? 'pending' : undefined),
       isSavingsTransfer,
       isWifeTransfer,
       isCcPayment,
@@ -2246,7 +2279,11 @@ Current time (Indian Standard Time): ${nowInfo.time} (${nowInfo.time12})
 CRITICAL RULES:
 1. Extract every transaction (income or expense).
 2. Reimbursement detection:
-   - If user wrote "Rim", "reimburse", "claim", or "office claim", set isReimbursement: true, category: "Reimbursement" (or relevant transport/dining), reimbursementStatus: "pending".
+   - If user SPENT money for office/claim (e.g. "Rim 100 Cab", "office claim 500"):
+     type: "expense", isReimbursement: true, isReimbursementInflow: false, category: "Reimbursement", reimbursementStatus: "pending".
+   - If user RECEIVED reimbursement / claim money into bank (e.g. "reimbursement mila 15000 axis me", "office rim aaya 8000 axis", "12000 claim settled in icici", "reimbursement received 5000"):
+     type: "income", isReimbursement: true, isReimbursementInflow: true, category: "Reimbursement", reimbursementStatus: "settled", paymentMethod: "Bank Transfer".
+     Account MUST BE a Bank Account (e.g. "AX Bank" or "IC Bank"). This credits bank account balance but is EXEMPT from personal salary/income calculations.
 3. Family Trip & Pooja detection:
    - If user ends description or mentions "pooja", "puja", "trip", "mandir", "yatra" (and NOT an office rim), category MUST BE "Family Trip & Pooja".
 4. Account detection:
@@ -2303,6 +2340,7 @@ ${rawText}
             paymentMethod: { type: Type.STRING, enum: ['UPI', 'Cash', 'Card', 'Net Banking', 'Bank Transfer', 'UPI/Cash', 'Other'] },
             account: { type: Type.STRING },
             isReimbursement: { type: Type.BOOLEAN },
+            isReimbursementInflow: { type: Type.BOOLEAN },
             isSavingsTransfer: { type: Type.BOOLEAN },
             isInvestment: { type: Type.BOOLEAN },
             tags: { type: Type.ARRAY, items: { type: Type.STRING } },
@@ -2319,14 +2357,24 @@ ${rawText}
         if (item.type === 'expense' && !hasExplicitPaymentMethod(rawText)) {
           finalPm = 'UPI/Cash';
         }
+        const isRimInflow = Boolean(item.isReimbursementInflow || detectReimbursementInflow(rawText));
+        const isRim = Boolean(item.isReimbursement || detectReimbursement(rawText) || isRimInflow);
+        const rimStatus = isRimInflow ? 'settled' : (isRim ? 'pending' : undefined);
+        const finalAcc = item.account || detectAccountFromText(rawText) || (isRimInflow ? 'AX Bank' : 'ICICI CC 0000');
         const cleanedDesc = cleanTransactionDescription(item.description, item.category);
+
         return {
           ...item,
-          description: cleanedDesc,
-          paymentMethod: finalPm,
-          account: item.account || detectAccountFromText(rawText) || 'ICICI CC 0000',
-          isReimbursement: Boolean(item.isReimbursement || detectReimbursement(rawText)),
-          reimbursementStatus: (item.isReimbursement || detectReimbursement(rawText)) ? 'pending' : undefined,
+          type: isRimInflow ? 'income' : item.type,
+          category: (isRim || isRimInflow) ? 'Reimbursement' : item.category,
+          description: isRimInflow && (!cleanedDesc || cleanedDesc.length < 2 || cleanedDesc === 'Income' || cleanedDesc === 'Expense')
+            ? 'Office Reimbursement Received'
+            : cleanedDesc,
+          paymentMethod: isRimInflow ? 'Bank Transfer' : finalPm,
+          account: finalAcc,
+          isReimbursement: isRim,
+          isReimbursementInflow: isRimInflow,
+          reimbursementStatus: rimStatus,
           isSavingsTransfer: Boolean(item.isSavingsTransfer || detectSavingsTransfer(rawText)),
           isInvestment: Boolean(item.isInvestment || detectInvestment(rawText)),
         };
@@ -7188,6 +7236,157 @@ ${personNet > 0
     }
   }
 
+  // 8.95 Reimbursement & Office Claims Commands
+  const isRimSummaryQuery =
+    command === '/rim' ||
+    command === '/reimburse' ||
+    command === '/reimbursement' ||
+    command === '/reimbursements' ||
+    command === '/claims' ||
+    lowerText === 'reimbursement' ||
+    lowerText === 'reimbursements' ||
+    lowerText === 'rim status' ||
+    lowerText === 'office claim' ||
+    lowerText === 'office claims';
+
+  if (isRimSummaryQuery) {
+    const rimTxs = (userStore.transactions || []).filter(
+      t => t.isReimbursement || t.category === 'Reimbursement'
+    );
+    let totalClaimed = 0;
+    let totalSettled = 0;
+    let pendingCount = 0;
+    const pendingList: string[] = [];
+
+    rimTxs.forEach(t => {
+      if (t.type === 'expense') {
+        const amt = Number(t.amount) || 0;
+        totalClaimed += amt;
+        const sAmt = t.reimbursementStatus === 'settled'
+          ? amt
+          : Math.min(amt, Math.max(0, Number(t.reimbursementSettledAmount) || 0));
+        totalSettled += sAmt;
+        const rem = Math.max(0, amt - sAmt);
+        if (t.reimbursementStatus !== 'settled' && rem > 0) {
+          pendingCount++;
+          if (pendingList.length < 5) {
+            pendingList.push(`• <b>₹${rem.toLocaleString('en-IN')}</b> - ${t.description} <i>(${t.date})</i>`);
+          }
+        }
+      }
+    });
+
+    const totalRemaining = Math.max(0, totalClaimed - totalSettled);
+
+    const rimMsg = `💼 <b>OFFICE REIMBURSEMENT & CLAIMS SUMMARY</b>
+━━━━━━━━━━━━━━━━━━━━
+⏳ <b>Kul Pending Claim (Office se lena hai):</b> <b>₹${totalRemaining.toLocaleString('en-IN')}</b>
+✅ <b>Kul Settle Ho Chuka:</b> ₹${totalSettled.toLocaleString('en-IN')}
+📋 <b>Total Claims:</b> ₹${totalClaimed.toLocaleString('en-IN')}
+
+${pendingCount > 0 ? `📌 <b>Pending Claims (${pendingCount}):</b>\n${pendingList.join('\n')}\n\n` : `🎉 <i>Sabhi office claims settled hain! Koi pending claim nahi hai.</i>\n\n`}💡 <b>Bot se Entry Kaise Karein:</b>
+• <b>Office kharcha add karne ke liye:</b>
+  <code>rim 100 cab</code> ya <code>500 office lunch claim</code>
+• <b>Reimbursement aane par (Bank credit, No income):</b>
+  <code>reimbursement mila 15000 axis me</code>
+  <code>office rim aaya 8000 axis</code>
+  <code>claim settle hua 5000 icici</code>
+  ya <code>/rim_received 15000 axis</code>`;
+
+    await sendTelegramReply(botToken, chatId, rimMsg, {
+      inline_keyboard: [
+        [
+          { text: '💰 Net Balance', callback_data: 'cmd_balance' },
+          { text: '📊 Summary', callback_data: 'cmd_summary' },
+        ],
+      ],
+    });
+    return;
+  }
+
+  if (command === '/rim_received' || command === '/reimburse_received' || command === '/claim_settle') {
+    const parts = rawText.trim().split(/\s+/).slice(1);
+    const amountVal = parseFloat(parts[0]?.replace(/[^\d.]/g, '') || '');
+    if (!amountVal || isNaN(amountVal) || amountVal <= 0) {
+      await sendTelegramReply(botToken, chatId, `❓ <i>Usage:</i> <code>/rim_received 15000 axis</code>\n\nIsse ₹15,000 Axis Bank me add ho jayenge bina monthly income me count huye.`);
+      return;
+    }
+    const accHint = parts.slice(1).join(' ');
+    const detectedAcc = detectAccountFromText(accHint) || 'AX Bank';
+    const nowInfo = getAppDateTime();
+
+    const newTx: Transaction = {
+      id: `tx_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
+      userId,
+      type: 'income',
+      amount: amountVal,
+      category: 'Reimbursement',
+      description: 'Office Reimbursement Received',
+      date: nowInfo.date,
+      time: nowInfo.time,
+      paymentMethod: 'Bank Transfer',
+      account: detectedAcc,
+      isReimbursement: true,
+      isReimbursementInflow: true,
+      reimbursementStatus: 'settled',
+      source: 'telegram',
+      telegramChatId: chatId,
+      telegramMessageId: messageObj.message_id,
+      telegramUser: senderDisplayName,
+      createdAt: nowInfo.iso,
+      tags: ['reimbursement', 'settlement'],
+    };
+    userTransactions.unshift(newTx);
+
+    // Auto-settle matching pending reimbursement claims
+    let remainingToSettle = amountVal;
+    let settledCount = 0;
+    for (const prevTx of userTransactions) {
+      if (remainingToSettle <= 0) break;
+      if (
+        prevTx.id !== newTx.id &&
+        prevTx.type === 'expense' &&
+        (prevTx.isReimbursement || prevTx.category === 'Reimbursement') &&
+        prevTx.reimbursementStatus !== 'settled'
+      ) {
+        const prevAmt = Number(prevTx.amount) || 0;
+        const currentSettled = Number(prevTx.reimbursementSettledAmount) || 0;
+        const pendingForThis = Math.max(0, prevAmt - currentSettled);
+        const settleAmt = Math.min(pendingForThis, remainingToSettle);
+        prevTx.reimbursementSettledAmount = currentSettled + settleAmt;
+        prevTx.reimbursementStatus = prevTx.reimbursementSettledAmount >= prevAmt ? 'settled' : 'partial';
+        remainingToSettle -= settleAmt;
+        settledCount++;
+      }
+    }
+
+    saveUserData(userId, userStore);
+    const summary = calculateUserSummary(userId);
+
+    const successReply = `💼 🟢 <b>OFFICE REIMBURSEMENT RECEIVED</b>
+💰 <b>+₹${amountVal.toLocaleString('en-IN')}</b>
+🏦 <b>Account Credited:</b> ${detectedAcc} (Live Balance badh gaya)
+📁 <b>Category:</b> Reimbursement Recovery
+📅 <b>Tareeq:</b> ${nowInfo.date} • ${nowInfo.time} (IST)
+
+━━━━━━━━━━━━━━━━━━━━
+🛡️ <b>Accounting Protection:</b>
+• Yeh amount aapke <b>${detectedAcc} Balance me add (+)</b> ho gaya hai.
+• Lekin aapki <b>Monthly Salary / Income me count NAHI hua hai</b> (Kyunki yeh aapke kharche ki recovery hai).
+${settledCount > 0 ? `🎉 <i>${settledCount} purane pending office claim(s) automatically settled mark ho gaye!</i>\n` : ''}
+💵 <b>Live Net Balance:</b> ₹${(summary.totalNetSavings || summary.netSavings).toLocaleString('en-IN')}`;
+
+    await sendTelegramReply(botToken, chatId, successReply, {
+      inline_keyboard: [
+        [
+          { text: '💰 Balance Check', callback_data: 'cmd_balance' },
+          { text: '💼 Claims Summary', callback_data: 'cmd_rim' },
+        ],
+      ],
+    });
+    return;
+  }
+
   // 9. AI & Fallback Transaction Parser
   try {
     const parsedList = await parseMessageWithGemini(rawText, userCategories);
@@ -7255,26 +7454,38 @@ ${personNet > 0
       }
     }
 
+    let totalSettledClaimsCount = 0;
     for (const parsed of parsedList) {
       const finalTime = (parsed.time && /^\d{2}:\d{2}$/.test(parsed.time)) ? parsed.time : msgTimeInfo.time;
       const finalDate = (parsed.date && /^\d{4}-\d{2}-\d{2}$/.test(parsed.date)) ? parsed.date : msgTimeInfo.date;
       const itemRaw = parsedList.length > 1 ? `${parsed.amount} ${parsed.description}` : rawText;
 
-      const cleanedDesc = cleanTransactionDescription(parsed.description, parsed.category);
+      const isRimInflow = Boolean(
+        parsed.isReimbursementInflow ||
+        (parsed.type === 'income' && (parsed.isReimbursement || parsed.category === 'Reimbursement'))
+      );
+      const isRim = Boolean(parsed.isReimbursement || isRimInflow || parsed.category === 'Reimbursement');
+
+      const cleanedDesc = isRimInflow && (!parsed.description || parsed.description === 'Income' || parsed.description === 'Expense')
+        ? 'Office Reimbursement Received'
+        : cleanTransactionDescription(parsed.description, (isRim || isRimInflow) ? 'Reimbursement' : parsed.category);
+
+      const finalAcc = parsed.account || detectAccountFromText(itemRaw) || (isRimInflow ? 'AX Bank' : 'ICICI CC 0000');
 
       const newTx: Transaction = {
         id: `tx_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
         userId,
-        type: parsed.type,
+        type: isRimInflow ? 'income' : parsed.type,
         amount: parsed.amount,
-        category: parsed.category,
+        category: (isRim || isRimInflow) ? 'Reimbursement' : parsed.category,
         description: cleanedDesc,
         date: finalDate,
         time: finalTime,
-        paymentMethod: parsed.paymentMethod,
-        account: parsed.account || detectAccountFromText(itemRaw) || 'ICICI CC 0000',
-        isReimbursement: Boolean(parsed.isReimbursement),
-        reimbursementStatus: parsed.isReimbursement ? 'pending' : undefined,
+        paymentMethod: isRimInflow ? 'Bank Transfer' : parsed.paymentMethod,
+        account: finalAcc,
+        isReimbursement: isRim,
+        isReimbursementInflow: isRimInflow,
+        reimbursementStatus: isRimInflow ? 'settled' : (isRim ? 'pending' : undefined),
         isSavingsTransfer: Boolean(parsed.isSavingsTransfer),
         isInvestment: Boolean(parsed.isInvestment),
         source: 'telegram',
@@ -7286,6 +7497,29 @@ ${personNet > 0
         tags: parsed.tags || [],
       };
       userTransactions.unshift(newTx);
+
+      // Auto-settle pending reimbursement expense claims if this is a reimbursement inflow
+      if (isRimInflow) {
+        let remainingToSettle = Number(newTx.amount) || 0;
+        for (const prevTx of userTransactions) {
+          if (remainingToSettle <= 0) break;
+          if (
+            prevTx.id !== newTx.id &&
+            prevTx.type === 'expense' &&
+            (prevTx.isReimbursement || prevTx.category === 'Reimbursement') &&
+            prevTx.reimbursementStatus !== 'settled'
+          ) {
+            const prevAmt = Number(prevTx.amount) || 0;
+            const currentSettled = Number(prevTx.reimbursementSettledAmount) || 0;
+            const pendingForThis = Math.max(0, prevAmt - currentSettled);
+            const settleAmt = Math.min(pendingForThis, remainingToSettle);
+            prevTx.reimbursementSettledAmount = currentSettled + settleAmt;
+            prevTx.reimbursementStatus = prevTx.reimbursementSettledAmount >= prevAmt ? 'settled' : 'partial';
+            remainingToSettle -= settleAmt;
+            totalSettledClaimsCount++;
+          }
+        }
+      }
     }
 
     saveUserData(userId, userStore);
@@ -7297,6 +7531,10 @@ ${personNet > 0
 
     if (parsedList.length === 1) {
       const item = parsedList[0];
+      const isRimInflowItem = Boolean(
+        item.isReimbursementInflow ||
+        (item.type === 'income' && (item.isReimbursement || item.category === 'Reimbursement'))
+      );
       const isInc = item.type === 'income';
       const isUncat = item.category === 'Uncategorized';
       const itemTime = (item.time && /^\d{2}:\d{2}$/.test(item.time)) ? item.time : msgTimeInfo.time;
@@ -7306,7 +7544,21 @@ ${personNet > 0
         ? '<b>UPI/Cash</b> <i>(Mode baad me assign kar sakte hain)</i>'
         : (item.paymentMethod || 'UPI/Cash');
 
-      if (isSenderOwner) {
+      if (isRimInflowItem) {
+        replyText = `💼 🟢 <b>OFFICE REIMBURSEMENT RECEIVED</b>
+💰 <b>+₹${item.amount.toLocaleString('en-IN')}</b>
+🏦 <b>Account Credited:</b> ${item.account || 'AX Bank'} (Live Balance badh gaya)
+📁 <b>Category:</b> Reimbursement Recovery
+📝 <b>Vivaran:</b> ${item.description}${memberTag}
+📅 <b>Tareeq va Samay:</b> ${itemDate} • ${itemTime} (IST)
+
+━━━━━━━━━━━━━━━━━━━━
+🛡️ <b>Accounting Protection:</b>
+• Yeh amount aapke <b>Bank Balance me add (+) ho gaya hai</b>.
+• Lekin aapki <b>Monthly Salary / Income me count NAHI hua hai</b> (Kyunki yeh aapke kharche ki recovery hai).
+${totalSettledClaimsCount > 0 ? `🎉 <i>${totalSettledClaimsCount} purane pending office claim(s) automatically settled mark ho gaye!</i>\n` : ''}
+💵 <b>Live Net Balance:</b> ₹${(summary.totalNetSavings || summary.netSavings).toLocaleString('en-IN')}`;
+      } else if (isSenderOwner) {
         replyText = `${isInc ? '🟢 <b>INCOME ADD HO GAYI</b>' : '🔴 <b>KHARCHA RECORD HO GAYA</b>'}
 💰 <b>₹${item.amount.toLocaleString('en-IN')}</b>
 📁 <b>Category:</b> ${item.category}${isUncat ? ' <i>(Web par Category assign karein)</i>' : ''}
@@ -8260,39 +8512,44 @@ app.get('/api/transactions', (req, res) => {
 app.post('/api/transactions', (req, res) => {
   const user = getRequestUser(req);
   const store = getUserData(user.id);
-  const { type, amount, category, description, date, paymentMethod, account, tags, isReimbursement, reimbursementStatus, reimbursementSettledAmount, isSavingsTransfer, isInvestment } = req.body;
+  const { type, amount, category, description, date, paymentMethod, account, tags, isReimbursement, reimbursementStatus, reimbursementSettledAmount, isSavingsTransfer, isInvestment, isReimbursementInflow } = req.body;
 
   if (!amount || isNaN(Number(amount))) {
     return res.status(400).json({ error: 'Valid amount is required' });
   }
 
-  const isRim = Boolean(isReimbursement || category === 'Reimbursement');
+  const isRimInflow = Boolean(
+    isReimbursementInflow ||
+    (type === 'income' && (isReimbursement || category === 'Reimbursement' || category === 'Reimbursement Received'))
+  );
+  const isRim = Boolean(isReimbursement || category === 'Reimbursement' || isRimInflow);
   const isWifeTr = Boolean(req.body.isWifeTransfer || category === 'Wife Transfer' || (category && category.toLowerCase().includes('wife')) || detectSavingsTransfer(description || ''));
   const isCcPay = Boolean(req.body.isCcPayment || category === 'CC Payment' || (category && category.toLowerCase().includes('cc payment')) || (category && category.toLowerCase().includes('credit card payment')) || (category && category.toLowerCase().includes('cc bill')));
   const nowInfo = getAppDateTime();
   const txAmount = Math.abs(Number(amount));
-  const initSettledAmt = Number(reimbursementSettledAmount) || (reimbursementStatus === 'settled' ? txAmount : 0);
+  const initSettledAmt = Number(reimbursementSettledAmount) || ((isRimInflow || reimbursementStatus === 'settled') ? txAmount : 0);
   const finalRimStatus = isRim
-    ? (reimbursementStatus || (initSettledAmt >= txAmount ? 'settled' : (initSettledAmt > 0 ? 'partial' : 'pending')))
+    ? (isRimInflow ? 'settled' : (reimbursementStatus || (initSettledAmt >= txAmount ? 'settled' : (initSettledAmt > 0 ? 'partial' : 'pending'))))
     : undefined;
 
-  const finalAccount = account || ((isWifeTr || isCcPay) ? 'AX Bank' : 'ICICI CC 0000');
+  const finalAccount = account || ((isWifeTr || isCcPay || isRimInflow) ? 'AX Bank' : 'ICICI CC 0000');
 
   const newTx: Transaction = {
     id: `tx_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
     userId: user.id,
-    type: type === 'income' ? 'income' : 'expense',
+    type: isRimInflow ? 'income' : (type === 'income' ? 'income' : 'expense'),
     amount: txAmount,
     category: isRim ? 'Reimbursement' : isWifeTr ? 'Wife Transfer' : isCcPay ? 'CC Payment' : (category || (type === 'income' ? 'Salary & Employment' : 'Uncategorized')),
-    description: (description || 'Manual Entry').trim(),
+    description: (description || (isRimInflow ? 'Office Reimbursement Received' : 'Manual Entry')).trim(),
     date: date || nowInfo.date,
     time: req.body.time || nowInfo.time,
-    paymentMethod: paymentMethod || 'UPI',
+    paymentMethod: isRimInflow ? 'Bank Transfer' : (paymentMethod || 'UPI'),
     account: finalAccount,
     source: 'manual',
     createdAt: nowInfo.iso,
     tags: Array.isArray(tags) ? tags : [],
     isReimbursement: isRim,
+    isReimbursementInflow: isRimInflow,
     reimbursementStatus: finalRimStatus,
     reimbursementSettledAmount: isRim ? initSettledAmt : undefined,
     isSavingsTransfer: isWifeTr || Boolean(isSavingsTransfer),
@@ -8302,6 +8559,28 @@ app.post('/api/transactions', (req, res) => {
   };
 
   store.transactions.unshift(newTx);
+
+  // If this is a reimbursement inflow, auto-settle matching pending claims
+  if (isRimInflow) {
+    let remainingToSettle = txAmount;
+    for (const prevTx of store.transactions) {
+      if (remainingToSettle <= 0) break;
+      if (
+        prevTx.id !== newTx.id &&
+        prevTx.type === 'expense' &&
+        (prevTx.isReimbursement || prevTx.category === 'Reimbursement') &&
+        prevTx.reimbursementStatus !== 'settled'
+      ) {
+        const prevAmt = Number(prevTx.amount) || 0;
+        const currentSettled = Number(prevTx.reimbursementSettledAmount) || 0;
+        const pendingForThis = Math.max(0, prevAmt - currentSettled);
+        const settleAmt = Math.min(pendingForThis, remainingToSettle);
+        prevTx.reimbursementSettledAmount = currentSettled + settleAmt;
+        prevTx.reimbursementStatus = prevTx.reimbursementSettledAmount >= prevAmt ? 'settled' : 'partial';
+        remainingToSettle -= settleAmt;
+      }
+    }
+  }
 
   // Keep savingsTransfers in sync if wife transfer added
   if (isWifeTr) {
@@ -8413,6 +8692,7 @@ app.put('/api/transactions/:id', (req, res) => {
   if (account !== undefined) tx.account = account;
   if (tags) tx.tags = tags;
   if (isReimbursement !== undefined) tx.isReimbursement = Boolean(isReimbursement);
+  if (req.body.isReimbursementInflow !== undefined) tx.isReimbursementInflow = Boolean(req.body.isReimbursementInflow);
   if (reimbursementStatus !== undefined) tx.reimbursementStatus = reimbursementStatus;
   if (reimbursementSettledAmount !== undefined) tx.reimbursementSettledAmount = Number(reimbursementSettledAmount) || 0;
   if (isSavingsTransfer !== undefined) tx.isSavingsTransfer = Boolean(isSavingsTransfer);

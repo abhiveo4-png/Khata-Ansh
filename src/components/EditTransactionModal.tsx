@@ -36,6 +36,7 @@ export const EditTransactionModal: React.FC<EditTransactionModalProps> = ({
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('UPI');
   const [account, setAccount] = useState<AccountId>('ICICI CC 0000');
   const [isReimbursement, setIsReimbursement] = useState(false);
+  const [isReimbursementInflow, setIsReimbursementInflow] = useState(false);
   const [reimbursementStatus, setReimbursementStatus] = useState<'pending' | 'settled' | 'partial'>('pending');
   const [reimbursementSettledAmount, setReimbursementSettledAmount] = useState<string>('');
   const [isSavingsTransfer, setIsSavingsTransfer] = useState(false);
@@ -53,6 +54,7 @@ export const EditTransactionModal: React.FC<EditTransactionModalProps> = ({
       setPaymentMethod(transaction.paymentMethod || 'UPI');
       setAccount((transaction.account as AccountId) || 'ICICI CC 0000');
       setIsReimbursement(Boolean(transaction.isReimbursement));
+      setIsReimbursementInflow(Boolean(transaction.isReimbursementInflow || (transaction.type === 'income' && (transaction.isReimbursement || transaction.category === 'Reimbursement'))));
       setReimbursementStatus(transaction.reimbursementStatus || 'pending');
       setReimbursementSettledAmount(
         transaction.reimbursementSettledAmount !== undefined
@@ -107,8 +109,9 @@ export const EditTransactionModal: React.FC<EditTransactionModalProps> = ({
         date,
         paymentMethod,
         account,
-        isReimbursement,
-        reimbursementStatus: isReimbursement ? reimbursementStatus : undefined,
+        isReimbursement: isReimbursement || isReimbursementInflow,
+        isReimbursementInflow: type === 'income' ? isReimbursementInflow : false,
+        reimbursementStatus: type === 'income' ? (isReimbursementInflow ? 'settled' : undefined) : (isReimbursement ? reimbursementStatus : undefined),
         reimbursementSettledAmount: isReimbursement ? (Number(reimbursementSettledAmount) || 0) : undefined,
         isSavingsTransfer,
         isInvestment,
@@ -384,6 +387,36 @@ export const EditTransactionModal: React.FC<EditTransactionModalProps> = ({
                     checked={isInvestment}
                     onChange={(e) => setIsInvestment(e.target.checked)}
                     className="w-4 h-4 rounded text-emerald-500 bg-slate-900 border-slate-700 cursor-pointer"
+                  />
+                </label>
+              </div>
+            )}
+
+            {/* Income Reimbursement Recovery Toggle */}
+            {type === 'income' && (
+              <div className="p-3 bg-slate-950/80 border border-slate-800 rounded-xl space-y-2.5">
+                <label className="flex items-center justify-between cursor-pointer">
+                  <div>
+                    <span className="font-bold text-cyan-300 flex items-center gap-1.5">
+                      <Briefcase className="w-3.5 h-3.5" />
+                      Office Reimbursement Recovery
+                    </span>
+                    <span className="text-[10px] text-slate-400 block mt-0.5">
+                      Bank me credit (+) hoga, par Monthly Salary / Income me count nahi hoga.
+                    </span>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={isReimbursementInflow}
+                    onChange={(e) => {
+                      const checked = e.target.checked;
+                      setIsReimbursementInflow(checked);
+                      if (checked) {
+                        setCategory('Reimbursement');
+                        if (account && account.includes('CC')) setAccount('AX Bank');
+                      }
+                    }}
+                    className="w-4 h-4 rounded text-cyan-500 bg-slate-900 border-slate-700 cursor-pointer"
                   />
                 </label>
               </div>

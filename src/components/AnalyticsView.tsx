@@ -68,8 +68,14 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({ transactions }) =>
       if (!map[d]) {
         map[d] = { date: d, income: 0, expense: 0 };
       }
+      const isRimInflow = Boolean(
+        tx.isReimbursementInflow ||
+        (tx.type === 'income' && (tx.isReimbursement || tx.category === 'Reimbursement' || tx.category === 'Reimbursement Received'))
+      );
       if (tx.type === 'income') {
-        map[d].income += tx.amount;
+        if (!isRimInflow) {
+          map[d].income += tx.amount;
+        }
       } else {
         map[d].expense += tx.amount;
       }
