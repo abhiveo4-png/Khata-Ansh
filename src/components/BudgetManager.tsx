@@ -280,7 +280,7 @@ export const BudgetManager: React.FC<BudgetManagerProps> = ({
   const totalSpent = useMemo(() => {
     return (displayBudgets || []).reduce((acc, b) => {
       const catDef = categories.find(c => c.name.toLowerCase() === b.category.toLowerCase());
-      const isExempt = catDef?.excludeFromBudget || ['reimbursement', 'wife transfer', 'cc payment'].includes(b.category.toLowerCase());
+      const isExempt = catDef?.excludeFromBudget || ['reimbursement', 'wife transfer', 'cc payment', 'udhaar given', 'udhaar', 'loan given'].includes(b.category.toLowerCase());
       if (isExempt) return acc;
       return acc + (b?.spent || 0);
     }, 0);
@@ -820,8 +820,8 @@ export const BudgetManager: React.FC<BudgetManagerProps> = ({
                         <span className="text-[9px] font-mono px-1.5 py-0.2 rounded-sm bg-cyan-950/90 border border-cyan-500/40 text-cyan-300 font-bold">
                           BUDGET EXEMPTED
                         </span>
-                      ) : (b.categoryDef?.excludeFromBudget || ['wife transfer', 'cc payment'].includes(b.category.toLowerCase())) ? (
-                        <span className="text-[9px] font-mono px-1.5 py-0.2 rounded-sm bg-purple-950/90 border border-purple-500/40 text-purple-300 font-bold">
+                      ) : (b.categoryDef?.excludeFromBudget || ['wife transfer', 'cc payment', 'udhaar given', 'udhaar'].includes(b.category.toLowerCase())) ? (
+                        <span className="text-[9px] font-mono px-1.5 py-0.2 rounded-sm bg-amber-950/90 border border-amber-500/40 text-amber-300 font-bold">
                           NON-BUDGET OUTFLOW
                         </span>
                       ) : (

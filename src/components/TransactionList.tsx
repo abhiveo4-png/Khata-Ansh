@@ -6,7 +6,8 @@ import {
   Calendar, 
   CalendarRange,
   ArrowUpRight, 
-  ArrowDownRight, 
+  ArrowDownRight,
+  ArrowDownLeft, 
   Bot, 
   User, 
   Laptop, 
@@ -962,6 +963,22 @@ export const TransactionList: React.FC<TransactionListProps> = ({
                         <span className="inline-flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.2 rounded bg-rose-500/20 text-rose-300 border border-rose-500/30">
                           <HeartHandshake className="w-2.5 h-2.5 text-rose-400" />
                           <span>Wife A/c</span>
+                        </span>
+                      )}
+
+                      {/* Udhaar Diya (Lent) Badge */}
+                      {Boolean(tx.isUdhaarLent || tx.category === 'Udhaar Given') && (
+                        <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/40" title="Udhaar Diya: Account se kat gaya, par Monthly Budget se minus nahi hua">
+                          <ArrowUpRight className="w-2.5 h-2.5 text-amber-400" />
+                          <span>Udhaar Diya{tx.udhaarPersonName ? ` (${tx.udhaarPersonName})` : ''} • Budget Free</span>
+                        </span>
+                      )}
+
+                      {/* Udhaar Wapas (Recovery) Badge */}
+                      {Boolean(tx.isUdhaarRecovery || tx.category === 'Udhaar Received') && (
+                        <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40" title="Udhaar Wapas Aaya: Account me jud gaya, non-salary">
+                          <ArrowDownLeft className="w-2.5 h-2.5 text-emerald-400" />
+                          <span>Udhaar Wapas{tx.udhaarPersonName ? ` (${tx.udhaarPersonName})` : ''}</span>
                         </span>
                       )}
                     </div>

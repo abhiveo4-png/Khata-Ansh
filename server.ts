@@ -127,6 +127,10 @@ export interface Transaction {
   isWifeTransfer?: boolean;
   isCcPayment?: boolean;
   isInvestment?: boolean;
+  isUdhaarLent?: boolean;
+  isUdhaarRecovery?: boolean;
+  linkedUdhaarId?: string;
+  udhaarPersonName?: string;
   linkedTransferId?: string;
 }
 
@@ -262,6 +266,7 @@ export interface UdhaarRecord {
   time?: string;
   status: 'pending' | 'settled';
   account?: string;
+  linkedTransactionId?: string;
   settledAt?: string;
   createdAt: string;
 }
@@ -456,6 +461,19 @@ export const DEFAULT_CATEGORIES: CategoryDef[] = [
     bgLight: 'bg-indigo-50 text-indigo-700 border-indigo-200',
     keywords: ['cc payment', 'credit card payment', 'card payment', 'cc bill', 'credit card bill', 'bill payment sbi', 'bill payment icici', 'axis cc payment', 'pay cc'],
     isDefault: true,
+    excludeFromBudget: true,
+  },
+  {
+    id: 'udhaar_given',
+    name: 'Udhaar Given',
+    type: 'expense',
+    icon: 'ArrowUpRight',
+    color: '#F59E0B',
+    bgLight: 'bg-amber-50 text-amber-700 border-amber-200',
+    keywords: ['udhaar diya', 'udhar diya', 'udhar', 'udhaar', 'loan diya', 'lent', 'advance diya', 'dost ko diya'],
+    isDefault: true,
+    excludeFromBudget: true,
+    description: 'Money lent to someone (deducted from Bank/Card/Cash account balance, but EXCLUDED from monthly expense budget)',
   },
   {
     id: 'other_expense',
@@ -517,6 +535,17 @@ export const DEFAULT_CATEGORIES: CategoryDef[] = [
     bgLight: 'bg-pink-50 text-pink-700 border-pink-200',
     keywords: ['gift', 'pocket money', 'allowance', 'papa sent', 'mom sent', 'shagun', 'prize', 'won'],
     isDefault: true,
+  },
+  {
+    id: 'udhaar_recovery',
+    name: 'Udhaar Received',
+    type: 'income',
+    icon: 'ArrowDownLeft',
+    color: '#10B981',
+    bgLight: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+    keywords: ['udhaar wapas', 'udhar wapas', 'udhar mila', 'udhaar mila', 'udhar aaya', 'loan repayment', 'khata settled'],
+    isDefault: true,
+    description: 'Udhaar money returned by friend/family (adds to bank/cash, excluded from regular salary income)',
   },
   {
     id: 'other_income',
@@ -1297,9 +1326,13 @@ function calculateUserSummary(userId: string): FinancialSummary {
       t.isReimbursementInflow ||
       (t.type === 'income' && (t.isReimbursement || t.category === 'Reimbursement' || t.category === 'Reimbursement Received'))
     );
+    const isUdhaarRecovery = Boolean(
+      t.isUdhaarRecovery ||
+      (t.type === 'income' && (t.category === 'Udhaar Recovery' || t.category === 'Udhaar Received' || t.category === 'Udhaar Settle'))
+    );
 
     if (t.type === 'income') {
-      if (!isRimInflow) {
+      if (!isRimInflow && !isUdhaarRecovery) {
         totalIncome += amt;
         incomeCount++;
         if (isCurrentMonth) currentMonthIncome += amt;
@@ -1311,12 +1344,19 @@ function calculateUserSummary(userId: string): FinancialSummary {
 
       if (isCurrentMonth) currentMonthTotalExpense += amt;
 
-      // Check if reimbursement, wife transfer, CC payment, or custom excluded category
+      // Check if reimbursement, wife transfer, CC payment, udhaar lent, or custom excluded category
       const isRim = Boolean(t.isReimbursement || t.category === 'Reimbursement');
       const isWifeTr = Boolean(t.isWifeTransfer || t.category === 'Wife Transfer' || (t.category && t.category.toLowerCase().includes('wife')));
       const isCcPay = Boolean(t.isCcPayment || t.category === 'CC Payment' || (t.category && t.category.toLowerCase().includes('cc payment')) || (t.category && t.category.toLowerCase().includes('credit card payment')) || (t.category && t.category.toLowerCase().includes('cc bill')));
+      const isUdhaarLent = Boolean(
+        t.isUdhaarLent ||
+        t.category === 'Udhaar Given' ||
+        t.category === 'Loan Given' ||
+        (t.category && t.category.toLowerCase().includes('udhaar') && t.type === 'expense') ||
+        (t.tags && t.tags.includes('udhaar-lent'))
+      );
       const catDef = (store.categories || []).find(c => c.name.toLowerCase() === (t.category || '').toLowerCase());
-      const isExemptFromBudget = Boolean(catDef?.excludeFromBudget) || isRim || isWifeTr || isCcPay;
+      const isExemptFromBudget = Boolean(catDef?.excludeFromBudget) || isRim || isWifeTr || isCcPay || isUdhaarLent;
 
       if (isRim) {
         const settledAmt = t.reimbursementStatus === 'settled'
@@ -1326,6 +1366,8 @@ function calculateUserSummary(userId: string): FinancialSummary {
         if (t.reimbursementStatus !== 'settled' && remaining > 0) {
           pendingReimbursements += remaining;
         }
+      } else if (isUdhaarLent) {
+        // Udhaar Lent: Bank/Card/Cash deducted, but EXEMPT from personal consumption and monthly budget limit!
       } else {
         personalExpense += amt;
         if (t.isInvestment) {
@@ -1335,7 +1377,7 @@ function calculateUserSummary(userId: string): FinancialSummary {
           savingsTransfers += amt;
         }
 
-        // Allocated monthly budget spent (excludes Wife Transfer, CC Payment, Reimbursements)
+        // Allocated monthly budget spent (excludes Wife Transfer, CC Payment, Reimbursements, Udhaar)
         if (isCurrentMonth) {
           currentMonthPersonalExpense += amt;
           if (!isExemptFromBudget) {
@@ -1753,6 +1795,7 @@ export function parseUdhaarIntentAndData(rawText: string): {
   remnant = remnant
     .replace(/\b(diya|diye|de\s+diya|lent|give|gave|bheja|send\s+kiya|transfer\s+kiya|liya|liye|le\s+liya|mila|mile|wapas\s+mila|borrowed|borrow|received|take|took)\b/gi, ' ')
     .replace(/\b(udhaar|udhar|khata|advance|ko|se|from|to|ne|ka|ki|ke|pe|par|paid|got)\b/gi, ' ')
+    .replace(/\b(cash|upi|card|cc|bank|hdfc|axis|sbi|icici|kotak|pnb|rokda|nagad|gpay|phonepe|paytm|rupay)\b/gi, ' ')
     .replace(/[^a-zA-Z0-9\s]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
@@ -2069,6 +2112,9 @@ function parseFallback(rawText: string, userCategories: CategoryDef[]): Array<{
     isWifeTransfer?: boolean;
     isCcPayment?: boolean;
     isInvestment?: boolean;
+    isUdhaarLent?: boolean;
+    isUdhaarRecovery?: boolean;
+    udhaarPersonName?: string;
   }> = [];
 
   const text = rawText.trim();
@@ -2114,6 +2160,12 @@ function parseFallback(rawText: string, userCategories: CategoryDef[]): Array<{
 
     // Detect Investment (RD, FD, Mutual Fund)
     const isInvestment = /\b(rd|fd|recurring deposit|fixed deposit|mutual fund|sip|gold|ppf|investment|invest)\b/i.test(seg);
+
+    // Detect Udhaar Given / Lent & Udhaar Received / Recovery
+    const isUdhaarRecovery = !isReimbursement && !isRimInflow &&
+      (/\b(udhaar wapas|udhar wapas|udhar mila|udhaar mila|udhar aaya|udhaar aaya|loan repaid)\b/i.test(seg) || (!isWifeTransfer && segLower.includes('udhar') && (segLower.includes('mila') || segLower.includes('wapas') || segLower.includes('aaya'))));
+    const isUdhaarLent = !isReimbursement && !isRimInflow && !isWifeTransfer && !isCcPayment && !isUdhaarRecovery &&
+      (/\b(udhaar diya|udhar diya|udhar de diya|loan diya|lent)\b/i.test(seg) || (/\b(udhaar|udhar)\b/i.test(seg) && !segLower.includes('wapas') && !segLower.includes('mila')));
 
     // Detect Family Trip & Pooja (Point 4: ends with or contains pooja/trip)
     const isFamilyTripPooja = !isReimbursement && (
@@ -2168,6 +2220,10 @@ function parseFallback(rawText: string, userCategories: CategoryDef[]): Array<{
     let matchedCategory = 'Uncategorized';
     if (isReimbursement || isRimInflow) {
       matchedCategory = 'Reimbursement';
+    } else if (isUdhaarLent) {
+      matchedCategory = 'Udhaar Given';
+    } else if (isUdhaarRecovery) {
+      matchedCategory = 'Udhaar Received';
     } else if (isWifeTransfer) {
       matchedCategory = 'Wife Transfer';
     } else if (isCcPayment) {
@@ -2211,6 +2267,8 @@ function parseFallback(rawText: string, userCategories: CategoryDef[]): Array<{
       isWifeTransfer,
       isCcPayment,
       isInvestment,
+      isUdhaarLent,
+      isUdhaarRecovery,
     });
   }
 
@@ -2236,6 +2294,9 @@ export async function parseMessageWithGemini(
   reimbursementStatus?: 'pending' | 'settled';
   isSavingsTransfer?: boolean;
   isInvestment?: boolean;
+  isUdhaarLent?: boolean;
+  isUdhaarRecovery?: boolean;
+  udhaarPersonName?: string;
   tags?: string[];
 }>> {
   const fallback = parseFallback(rawText, userCategories);
@@ -2346,6 +2407,8 @@ ${rawText}
             isReimbursementInflow: { type: Type.BOOLEAN },
             isSavingsTransfer: { type: Type.BOOLEAN },
             isInvestment: { type: Type.BOOLEAN },
+            isUdhaarLent: { type: Type.BOOLEAN },
+            isUdhaarRecovery: { type: Type.BOOLEAN },
             tags: { type: Type.ARRAY, items: { type: Type.STRING } },
           },
           required: ['type', 'amount', 'category', 'description', 'date', 'paymentMethod'],
@@ -2380,6 +2443,8 @@ ${rawText}
           reimbursementStatus: rimStatus,
           isSavingsTransfer: Boolean(item.isSavingsTransfer || detectSavingsTransfer(rawText)),
           isInvestment: Boolean(item.isInvestment || detectInvestment(rawText)),
+          isUdhaarLent: Boolean(item.isUdhaarLent || item.category === 'Udhaar Given'),
+          isUdhaarRecovery: Boolean(item.isUdhaarRecovery || item.category === 'Udhaar Received'),
         };
       });
     }
@@ -7044,12 +7109,40 @@ ${personNet > 0
       const item = userStore.udhaars[foundIdx];
       item.status = 'settled';
       item.settledAt = new Date().toISOString();
+
+      // If lent money was settled, credit account without counting as salary income!
+      if (item.type === 'lent') {
+        const settleAcc = item.account || 'AX Bank';
+        const recoveryTx: Transaction = {
+          id: `tx_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
+          userId,
+          type: 'income',
+          amount: item.amount,
+          category: 'Udhaar Recovery',
+          description: `Udhaar wapas mila: ${item.personName}`,
+          date: getAppDateTime().date,
+          time: getAppDateTime().time,
+          paymentMethod: (settleAcc && settleAcc.includes('CC')) ? 'Bank Transfer' : (settleAcc === 'Cash' ? 'Cash' : 'Bank Transfer'),
+          account: settleAcc,
+          source: 'telegram',
+          telegramChatId: chatId,
+          telegramMessageId: messageObj.message_id,
+          telegramUser: senderDisplayName,
+          createdAt: item.settledAt,
+          tags: ['udhaar', 'settled', item.personName.toLowerCase()],
+          isUdhaarRecovery: true,
+          linkedUdhaarId: item.id,
+          udhaarPersonName: item.personName,
+        };
+        userTransactions.unshift(recoveryTx);
+      }
+
       saveUserData(userId, userStore);
 
       await sendTelegramReply(
         botToken,
         chatId,
-        `✅ <b>Udhaar Settle Ho Gaya!</b> 🎉\n\n👤 <b>Person:</b> <b>${item.personName}</b>\n💰 <b>Raqam:</b> ₹${item.amount.toLocaleString('en-IN')}\n🏷️ <b>Type:</b> ${item.type === 'lent' ? 'Maine Diya Tha (Wapas Mil Gaya)' : 'Maine Liya Tha (Chuka Diya)'}\n\n📊 <i>Khata updated!</i>`,
+        `✅ <b>Udhaar Settle Ho Gaya!</b> 🎉\n\n👤 <b>Person:</b> <b>${item.personName}</b>\n💰 <b>Raqam:</b> ₹${item.amount.toLocaleString('en-IN')}\n🏷️ <b>Type:</b> ${item.type === 'lent' ? 'Maine Diya Tha (Wapas Mil Gaya)' : 'Maine Liya Tha (Chuka Diya)'}\n${item.type === 'lent' ? `🏦 <b>Account Credited:</b> ${item.account || 'AX Bank'} me wapas add (+) ho gaya!\n🛡️ <b>Note:</b> Monthly Salary me count nahi hua hai.\n` : ''}\n📊 <i>Khata updated!</i>`,
         buildUdhaarReportTelegramMessage(userId).replyMarkup
       );
       return;
@@ -7062,6 +7155,12 @@ ${personNet > 0
     const { type, amount, personName, date, description } = parsedUdhaar;
     const isLent = type === 'lent';
 
+    const detectedAccount = detectAccountFromText(rawText) || (
+      lowerText.includes('cash') || lowerText.includes('rokda') || lowerText.includes('nagad')
+        ? 'Cash'
+        : 'AX Bank'
+    );
+
     const newUdhaar: UdhaarRecord = {
       id: `udh_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
       userId,
@@ -7069,11 +7168,42 @@ ${personNet > 0
       personName,
       amount,
       description: description || rawText,
+      account: detectedAccount,
       date,
       time: getAppDateTime().time,
       status: 'pending',
       createdAt: new Date().toISOString(),
     };
+
+    // If lending money (Maine Diya / Lent):
+    // Deduct from Bank/Card/Cash balance, but STRICTLY EXEMPT from monthly budget!
+    if (isLent) {
+      const isCc = detectedAccount.includes('CC');
+      const linkedTxId = `tx_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+      const linkedTx: Transaction = {
+        id: linkedTxId,
+        userId,
+        type: 'expense',
+        amount,
+        category: 'Udhaar Given',
+        description: `Udhaar diya: ${personName}${description ? ` (${description})` : ''}`,
+        date,
+        time: newUdhaar.time,
+        paymentMethod: isCc ? 'Card' : (detectedAccount === 'Cash' ? 'Cash' : 'UPI'),
+        account: detectedAccount,
+        source: 'telegram',
+        telegramChatId: chatId,
+        telegramMessageId: messageObj.message_id,
+        telegramUser: senderDisplayName,
+        createdAt: newUdhaar.createdAt,
+        tags: ['udhaar', personName.toLowerCase(), 'udhaar-lent'],
+        isUdhaarLent: true,
+        linkedUdhaarId: newUdhaar.id,
+        udhaarPersonName: personName,
+      };
+      userTransactions.unshift(linkedTx);
+      newUdhaar.linkedTransactionId = linkedTxId;
+    }
 
     if (!userStore.udhaars) userStore.udhaars = [];
     userStore.udhaars.unshift(newUdhaar);
@@ -7090,9 +7220,9 @@ ${personNet > 0
 🏷️ <b>Type:</b> ${isLent ? '💸 Maine Diya (Lena Hai)' : '📥 Maine Liya (Dena Hai)'}
 👤 <b>Person:</b> <b>${personName}</b>
 💰 <b>Raqam:</b> <b>₹${amount.toLocaleString('en-IN')}</b>
-📅 <b>Tareeq:</b> <b>${date}</b> • ${newUdhaar.time} (IST)
+${isLent ? `💳 <b>Account/Source:</b> <b>${detectedAccount}</b> <i>(Balance me se deduct ho gaya)</i>\n` : ''}📅 <b>Tareeq:</b> <b>${date}</b> • ${newUdhaar.time} (IST)
 ━━━━━━━━━━━━━━━━━━━━
-👥 <b>${personName} Ka Combined Hisab:</b>
+${isLent ? `🛡️ <b>Accounting Rule:</b>\n• Yeh amount aapke <b>${detectedAccount} Balance me se kat (-) gaya hai</b>.\n• Lekin Monthly Budget se <b>minus NAHI hua hai</b> (Kyunki yeh Udhaar hai jo wapas aayega).\n\n` : ''}👥 <b>${personName} Ka Combined Hisab:</b>
 ${personNet > 0 
   ? `🟢 Ab ${personName} se kul <b>₹${personNet.toLocaleString('en-IN')} LENA HAI</b> (${pendingForPerson.length} ${pendingForPerson.length === 1 ? 'entry' : 'entries'})`
   : personNet < 0
@@ -7491,6 +7621,9 @@ ${settledCount > 0 ? `🎉 <i>${settledCount} purane pending office claim(s) aut
         reimbursementStatus: isRimInflow ? 'settled' : (isRim ? 'pending' : undefined),
         isSavingsTransfer: Boolean(parsed.isSavingsTransfer),
         isInvestment: Boolean(parsed.isInvestment),
+        isUdhaarLent: Boolean(parsed.isUdhaarLent || parsed.category === 'Udhaar Given'),
+        isUdhaarRecovery: Boolean(parsed.isUdhaarRecovery || parsed.category === 'Udhaar Received'),
+        udhaarPersonName: parsed.udhaarPersonName,
         source: 'telegram',
         telegramChatId: chatId,
         telegramMessageId: messageObj.message_id,
@@ -7499,6 +7632,37 @@ ${settledCount > 0 ? `🎉 <i>${settledCount} purane pending office claim(s) aut
         createdAt: msgTimeInfo.iso,
         tags: parsed.tags || [],
       };
+
+      // Sync with Udhaar Khata if Udhaar Lent
+      if (newTx.isUdhaarLent) {
+        if (!userStore.udhaars) userStore.udhaars = [];
+        const pName = newTx.udhaarPersonName || (newTx.description ? newTx.description.replace(/^(?:udhaar\s*(?:diya|diye)?|lent|loan)\s*(?:to|ko)?\s*/i, '').trim() : 'Friend');
+        const newUdh: UdhaarRecord = {
+          id: `udh_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+          userId,
+          type: 'lent',
+          personName: pName || 'Friend',
+          amount: newTx.amount,
+          description: newTx.description,
+          account: newTx.account,
+          date: newTx.date,
+          time: newTx.time,
+          status: 'pending',
+          createdAt: newTx.createdAt,
+          linkedTransactionId: newTx.id,
+        };
+        newTx.linkedUdhaarId = newUdh.id;
+        newTx.udhaarPersonName = pName;
+        userStore.udhaars.unshift(newUdh);
+      } else if (newTx.isUdhaarRecovery && userStore.udhaars) {
+        const pName = (newTx.udhaarPersonName || newTx.description || '').toLowerCase();
+        const match = userStore.udhaars.find(u => u.status === 'pending' && u.type === 'lent' && (pName.includes(u.personName.toLowerCase()) || Number(u.amount) === newTx.amount));
+        if (match) {
+          match.status = 'settled';
+          match.settledAt = new Date().toISOString();
+        }
+      }
+
       userTransactions.unshift(newTx);
 
       // Auto-settle pending reimbursement expense claims if this is a reimbursement inflow
@@ -7560,6 +7724,37 @@ ${settledCount > 0 ? `🎉 <i>${settledCount} purane pending office claim(s) aut
 • Yeh amount aapke <b>Bank Balance me add (+) ho gaya hai</b>.
 • Lekin aapki <b>Monthly Salary / Income me count NAHI hua hai</b> (Kyunki yeh aapke kharche ki recovery hai).
 ${totalSettledClaimsCount > 0 ? `🎉 <i>${totalSettledClaimsCount} purane pending office claim(s) automatically settled mark ho gaye!</i>\n` : ''}
+💵 <b>Live Net Balance:</b> ₹${(summary.totalNetSavings || summary.netSavings).toLocaleString('en-IN')}`;
+      } else if (item.isUdhaarLent || item.category === 'Udhaar Given') {
+        replyText = `🤝 <b>UDHAAR RECORD HO GAYA!</b>
+💰 <b>₹${item.amount.toLocaleString('en-IN')}</b>
+📁 <b>Category:</b> Udhaar Given (Khata Entry)
+📝 <b>Vivaran:</b> ${item.description}${memberTag}
+💳 <b>Account/Source:</b> <b>${item.account || 'Account'}</b> <i>(Balance me se cut ho gaya)</i>
+📅 <b>Tareeq va Samay:</b> ${itemDate} • ${itemTime} (IST)
+
+━━━━━━━━━━━━━━━━━━━━
+🛡️ <b>Accounting Protection Rule:</b>
+• Yeh amount aapke <b>${item.account || 'Account'} Balance me se kat (-) gaya hai</b>.
+• Lekin Monthly Expense Budget se <b>minus NAHI hua hai</b> (Kyunki yeh Udhaar hai jo wapas aayega).
+🤝 <i>Udhaar Khata ledger me entry jud gayi hai!</i>
+
+💵 <b>Net Wallet/Bank Balance:</b> ₹${(summary.totalNetSavings || summary.netSavings).toLocaleString('en-IN')}
+🎯 <b>Monthly Budget Bacha:</b> ₹${Math.max(0, summary.monthlyBudget - summary.monthlySpent).toLocaleString('en-IN')}`;
+      } else if (item.isUdhaarRecovery || item.category === 'Udhaar Received') {
+        replyText = `🤝 🟢 <b>UDHAAR WAPAS MILA (RECOVERY)</b>
+💰 <b>+₹${item.amount.toLocaleString('en-IN')}</b>
+📁 <b>Category:</b> Udhaar Received
+📝 <b>Vivaran:</b> ${item.description}${memberTag}
+🏦 <b>Account Credited:</b> <b>${item.account || 'Account'}</b> (Live Balance me jud gaya)
+📅 <b>Tareeq va Samay:</b> ${itemDate} • ${itemTime} (IST)
+
+━━━━━━━━━━━━━━━━━━━━
+🛡️ <b>Accounting Protection:</b>
+• Yeh amount aapke <b>${item.account || 'Account'} Balance me add (+)</b> ho gaya hai.
+• Lekin aapki regular Monthly Salary/Income me count NAHI hua hai.
+🤝 <i>Udhaar Khata barabar (settle) ho gaya!</i>
+
 💵 <b>Live Net Balance:</b> ₹${(summary.totalNetSavings || summary.netSavings).toLocaleString('en-IN')}`;
       } else if (isSenderOwner) {
         replyText = `${isInc ? '🟢 <b>INCOME ADD HO GAYI</b>' : '🔴 <b>KHARCHA RECORD HO GAYA</b>'}
@@ -8526,6 +8721,17 @@ app.post('/api/transactions', (req, res) => {
     (type === 'income' && (isReimbursement || category === 'Reimbursement' || category === 'Reimbursement Received'))
   );
   const isRim = Boolean(isReimbursement || category === 'Reimbursement' || isRimInflow);
+  const isUdhaarL = Boolean(
+    req.body.isUdhaarLent ||
+    category === 'Udhaar Given' ||
+    category === 'Udhaar' ||
+    (type === 'expense' && (category && category.toLowerCase().includes('udhaar')))
+  );
+  const isUdhaarR = Boolean(
+    req.body.isUdhaarRecovery ||
+    category === 'Udhaar Recovery' ||
+    (type === 'income' && (category && category.toLowerCase().includes('udhaar')))
+  );
   const isWifeTr = Boolean(req.body.isWifeTransfer || category === 'Wife Transfer' || (category && category.toLowerCase().includes('wife')) || detectSavingsTransfer(description || ''));
   const isCcPay = Boolean(req.body.isCcPayment || category === 'CC Payment' || (category && category.toLowerCase().includes('cc payment')) || (category && category.toLowerCase().includes('credit card payment')) || (category && category.toLowerCase().includes('cc bill')));
   const nowInfo = getAppDateTime();
@@ -8540,13 +8746,13 @@ app.post('/api/transactions', (req, res) => {
   const newTx: Transaction = {
     id: `tx_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
     userId: user.id,
-    type: isRimInflow ? 'income' : (type === 'income' ? 'income' : 'expense'),
+    type: isRimInflow || isUdhaarR ? 'income' : (type === 'income' ? 'income' : 'expense'),
     amount: txAmount,
-    category: isRim ? 'Reimbursement' : isWifeTr ? 'Wife Transfer' : isCcPay ? 'CC Payment' : (category || (type === 'income' ? 'Salary & Employment' : 'Uncategorized')),
-    description: (description || (isRimInflow ? 'Office Reimbursement Received' : 'Manual Entry')).trim(),
+    category: isRim ? 'Reimbursement' : isUdhaarL ? 'Udhaar Given' : isUdhaarR ? 'Udhaar Recovery' : isWifeTr ? 'Wife Transfer' : isCcPay ? 'CC Payment' : (category || (type === 'income' ? 'Salary & Employment' : 'Uncategorized')),
+    description: (description || (isRimInflow ? 'Office Reimbursement Received' : (isUdhaarL ? 'Udhaar Diya' : (isUdhaarR ? 'Udhaar Wapas Mila' : 'Manual Entry')))).trim(),
     date: date || nowInfo.date,
     time: req.body.time || nowInfo.time,
-    paymentMethod: isRimInflow ? 'Bank Transfer' : (paymentMethod || 'UPI'),
+    paymentMethod: isRimInflow || isUdhaarR ? 'Bank Transfer' : (paymentMethod || 'UPI'),
     account: finalAccount,
     source: 'manual',
     createdAt: nowInfo.iso,
@@ -8559,9 +8765,44 @@ app.post('/api/transactions', (req, res) => {
     isWifeTransfer: isWifeTr,
     isCcPayment: isCcPay,
     isInvestment: Boolean(isInvestment),
+    isUdhaarLent: isUdhaarL,
+    isUdhaarRecovery: isUdhaarR,
+    udhaarPersonName: req.body.udhaarPersonName,
   };
 
   store.transactions.unshift(newTx);
+
+  // If udhaar lent, sync with store.udhaars
+  if (isUdhaarL) {
+    if (!store.udhaars) store.udhaars = [];
+    const pName = req.body.udhaarPersonName || (newTx.description ? newTx.description.replace(/^(?:udhaar\s*(?:diya|diye)?|lent|loan)\s*(?:to|ko)?\s*/i, '').trim() : 'Udhaar');
+    const newUdh: UdhaarRecord = {
+      id: `udh_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+      userId: user.id,
+      type: 'lent',
+      personName: pName || 'Friend',
+      amount: txAmount,
+      description: newTx.description,
+      account: newTx.account,
+      date: newTx.date,
+      time: newTx.time,
+      status: 'pending',
+      createdAt: newTx.createdAt,
+      linkedTransactionId: newTx.id,
+    };
+    newTx.linkedUdhaarId = newUdh.id;
+    store.udhaars.unshift(newUdh);
+  }
+
+  // If udhaar recovery, mark pending udhaar as settled
+  if (isUdhaarR && store.udhaars) {
+    const pName = (req.body.udhaarPersonName || newTx.description || '').toLowerCase();
+    const match = store.udhaars.find(u => u.status === 'pending' && u.type === 'lent' && (pName.includes(u.personName.toLowerCase()) || Number(u.amount) === txAmount));
+    if (match) {
+      match.status = 'settled';
+      match.settledAt = new Date().toISOString();
+    }
+  }
 
   // If this is a reimbursement inflow, auto-settle matching pending claims
   if (isRimInflow) {
@@ -8702,6 +8943,28 @@ app.put('/api/transactions/:id', (req, res) => {
   if (isWifeTransfer !== undefined) tx.isWifeTransfer = Boolean(isWifeTransfer);
   if (isCcPayment !== undefined) tx.isCcPayment = Boolean(isCcPayment);
   if (isInvestment !== undefined) tx.isInvestment = Boolean(isInvestment);
+  if (req.body.isUdhaarLent !== undefined) tx.isUdhaarLent = Boolean(req.body.isUdhaarLent);
+  if (req.body.isUdhaarRecovery !== undefined) tx.isUdhaarRecovery = Boolean(req.body.isUdhaarRecovery);
+  if (req.body.udhaarPersonName !== undefined) tx.udhaarPersonName = req.body.udhaarPersonName;
+  if (req.body.linkedUdhaarId !== undefined) tx.linkedUdhaarId = req.body.linkedUdhaarId;
+
+  // Auto-set Udhaar Given flag if category is Udhaar Given
+  if (tx.category === 'Udhaar Given') {
+    tx.isUdhaarLent = true;
+  } else if (tx.category === 'Udhaar Received') {
+    tx.isUdhaarRecovery = true;
+  }
+
+  // Sync with store.udhaars if linked
+  if (tx.linkedUdhaarId && store.udhaars) {
+    const udh = store.udhaars.find(u => u.id === tx.linkedUdhaarId);
+    if (udh) {
+      if (tx.amount) udh.amount = tx.amount;
+      if (tx.udhaarPersonName) udh.personName = tx.udhaarPersonName;
+      if (tx.date) udh.date = tx.date;
+      if (tx.account) udh.account = tx.account;
+    }
+  }
 
   // Auto-sync status if settled amount matches or exceeds
   if (tx.isReimbursement || tx.category === 'Reimbursement') {
@@ -12166,25 +12429,57 @@ app.post('/api/udhaar', (req, res) => {
     return res.status(400).json({ error: 'Person name and amount are required' });
   }
 
+  const chosenAccount = account || 'AX Bank';
+  const newRecordId = `udh_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
+  const nowInfo = getAppDateTime();
+
   const newRecord: UdhaarRecord = {
-    id: `udh_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+    id: newRecordId,
     userId: user.id,
     type: type === 'borrowed' ? 'borrowed' : 'lent',
     personName: String(personName).trim(),
     amount: Math.abs(Number(amount)),
     description: description ? String(description).trim() : undefined,
-    account: account || 'IC Bank',
-    date: date || getAppDateTime().date,
-    time: getAppDateTime().time,
+    account: chosenAccount,
+    date: date || nowInfo.date,
+    time: nowInfo.time,
     status: 'pending',
     createdAt: new Date().toISOString(),
   };
+
+  // If lending money (Maine diya / lent):
+  // Deduct from Bank/Card/Cash balance, but STRICTLY EXEMPT from monthly budget!
+  if (newRecord.type === 'lent') {
+    const isCc = chosenAccount.includes('CC');
+    const linkedTxId = `tx_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+    const linkedTx: Transaction = {
+      id: linkedTxId,
+      userId: user.id,
+      type: 'expense',
+      amount: newRecord.amount,
+      category: 'Udhaar Given',
+      description: `Udhaar diya: ${newRecord.personName}${newRecord.description ? ` (${newRecord.description})` : ''}`,
+      date: newRecord.date,
+      time: newRecord.time,
+      paymentMethod: isCc ? 'Card' : (chosenAccount === 'Cash' ? 'Cash' : 'UPI'),
+      account: chosenAccount,
+      source: 'manual',
+      createdAt: newRecord.createdAt,
+      tags: ['udhaar', newRecord.personName.toLowerCase(), 'udhaar-lent'],
+      isUdhaarLent: true,
+      linkedUdhaarId: newRecord.id,
+      udhaarPersonName: newRecord.personName,
+    };
+    if (!store.transactions) store.transactions = [];
+    store.transactions.unshift(linkedTx);
+    newRecord.linkedTransactionId = linkedTxId;
+  }
 
   if (!store.udhaars) store.udhaars = [];
   store.udhaars.unshift(newRecord);
   saveUserData(user.id, store);
 
-  res.json({ success: true, udhaar: newRecord, udhaars: store.udhaars });
+  res.json({ success: true, udhaar: newRecord, udhaars: store.udhaars, transactions: store.transactions, summary: calculateUserSummary(user.id) });
 });
 
 app.put('/api/udhaar/:id', (req, res) => {
@@ -12204,9 +12499,39 @@ app.put('/api/udhaar/:id', (req, res) => {
   if (updates.status === 'settled' && existing.status !== 'settled') {
     existing.status = 'settled';
     existing.settledAt = new Date().toISOString();
+
+    // If lent money was settled (Wapas mil gaya):
+    // Credit Bank/Cash account without inflating personal salary income!
+    if (existing.type === 'lent') {
+      const settleAcc = updates.account || existing.account || 'AX Bank';
+      const recoveryTx: Transaction = {
+        id: `tx_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
+        userId: user.id,
+        type: 'income',
+        amount: existing.amount,
+        category: 'Udhaar Recovery',
+        description: `Udhaar wapas mila: ${existing.personName}`,
+        date: getAppDateTime().date,
+        time: getAppDateTime().time,
+        paymentMethod: (settleAcc && settleAcc.includes('CC')) ? 'Bank Transfer' : (settleAcc === 'Cash' ? 'Cash' : 'Bank Transfer'),
+        account: settleAcc,
+        source: 'manual',
+        createdAt: existing.settledAt,
+        tags: ['udhaar', 'settled', existing.personName.toLowerCase()],
+        isUdhaarRecovery: true,
+        linkedUdhaarId: existing.id,
+        udhaarPersonName: existing.personName,
+      };
+      if (!store.transactions) store.transactions = [];
+      store.transactions.unshift(recoveryTx);
+    }
   } else if (updates.status === 'pending') {
     existing.status = 'pending';
     existing.settledAt = undefined;
+    // Remove any recovery transaction if reopened
+    if (store.transactions) {
+      store.transactions = store.transactions.filter(t => !(t.linkedUdhaarId === existing.id && t.isUdhaarRecovery));
+    }
   }
 
   if (updates.personName) existing.personName = String(updates.personName).trim();
@@ -12216,7 +12541,7 @@ app.put('/api/udhaar/:id', (req, res) => {
   if (updates.account !== undefined) existing.account = updates.account;
 
   saveUserData(user.id, store);
-  res.json({ success: true, udhaar: existing, udhaars: store.udhaars });
+  res.json({ success: true, udhaar: existing, udhaars: store.udhaars, transactions: store.transactions, summary: calculateUserSummary(user.id) });
 });
 
 app.delete('/api/udhaar/:id', (req, res) => {
@@ -12227,9 +12552,12 @@ app.delete('/api/udhaar/:id', (req, res) => {
 
   if (!store.udhaars) store.udhaars = [];
   store.udhaars = store.udhaars.filter(u => u.id !== id);
+  if (store.transactions) {
+    store.transactions = store.transactions.filter(t => t.linkedUdhaarId !== id);
+  }
   saveUserData(user.id, store);
 
-  res.json({ success: true, udhaars: store.udhaars });
+  res.json({ success: true, udhaars: store.udhaars, transactions: store.transactions, summary: calculateUserSummary(user.id) });
 });
 
 // 7.2 Vehicle Fuel & Mileage Tracker APIs

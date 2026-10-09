@@ -94,6 +94,13 @@ export const OverviewCards: React.FC<OverviewCardsProps> = ({
     } else {
       prevTotalExpense += amt;
       const isRim = Boolean(t.isReimbursement || t.category === 'Reimbursement');
+      const isUdhaarLent = Boolean(
+        t.isUdhaarLent ||
+        t.category === 'Udhaar Given' ||
+        t.category === 'Loan Given' ||
+        (t.category && t.category.toLowerCase().includes('udhaar') && t.type === 'expense') ||
+        (t.tags && t.tags.includes('udhaar-lent'))
+      );
       if (isRim) {
         const settledAmt = t.reimbursementStatus === 'settled'
           ? amt
@@ -102,7 +109,7 @@ export const OverviewCards: React.FC<OverviewCardsProps> = ({
         if (t.reimbursementStatus !== 'settled' && rem > 0) {
           prevPendingRim += rem;
         }
-      } else if (!t.isSavingsTransfer && !t.isWifeTransfer && t.category !== 'Wife Transfer' && !t.isCcPayment && t.category !== 'CC Payment') {
+      } else if (!t.isSavingsTransfer && !t.isWifeTransfer && t.category !== 'Wife Transfer' && !t.isCcPayment && t.category !== 'CC Payment' && !isUdhaarLent) {
         prevPersonalExpense += amt;
       }
     }
@@ -116,6 +123,7 @@ export const OverviewCards: React.FC<OverviewCardsProps> = ({
   let monthRimRecovery = 0;
   let monthTotalExpense = 0;
   let monthPersonalExpense = 0;
+  let monthUdhaarLent = 0;
   let monthPendingRim = 0;
   let monthIncomeCount = 0;
   let monthExpenseCount = 0;
@@ -137,6 +145,13 @@ export const OverviewCards: React.FC<OverviewCardsProps> = ({
       monthTotalExpense += amt;
       monthExpenseCount++;
       const isRim = Boolean(t.isReimbursement || t.category === 'Reimbursement');
+      const isUdhaarLent = Boolean(
+        t.isUdhaarLent ||
+        t.category === 'Udhaar Given' ||
+        t.category === 'Loan Given' ||
+        (t.category && t.category.toLowerCase().includes('udhaar') && t.type === 'expense') ||
+        (t.tags && t.tags.includes('udhaar-lent'))
+      );
       if (isRim) {
         const settledAmt = t.reimbursementStatus === 'settled'
           ? amt
@@ -145,6 +160,8 @@ export const OverviewCards: React.FC<OverviewCardsProps> = ({
         if (t.reimbursementStatus !== 'settled' && rem > 0) {
           monthPendingRim += rem;
         }
+      } else if (isUdhaarLent) {
+        monthUdhaarLent += amt;
       } else if (!t.isSavingsTransfer && !t.isWifeTransfer && t.category !== 'Wife Transfer' && !t.isCcPayment && t.category !== 'CC Payment') {
         monthPersonalExpense += amt;
       }
@@ -159,7 +176,7 @@ export const OverviewCards: React.FC<OverviewCardsProps> = ({
     return u === mem || u.includes(mem) || mem.includes(u);
   });
   const memberPersonalExpense = memberTxs
-    .filter(t => t.type === 'expense' && !t.isSavingsTransfer)
+    .filter(t => t.type === 'expense' && !t.isSavingsTransfer && !t.isUdhaarLent && t.category !== 'Udhaar Given')
     .reduce((sum, t) => sum + (t.amount || 0), 0);
 
   const displayPersonalExpense = isFamily ? memberPersonalExpense : monthPersonalExpense;
@@ -376,6 +393,11 @@ export const OverviewCards: React.FC<OverviewCardsProps> = ({
               <span className="text-rose-400 mr-1 text-xl font-medium">₹</span>
               <span>{displayAmount(displayPersonalExpense, true)}</span>
             </div>
+            {monthUdhaarLent > 0 && !isFamily && (
+              <div className="text-[10px] text-amber-300 font-medium mt-1 flex items-center gap-1">
+                <span>🤝 ₹{displayAmount(monthUdhaarLent)} Udhaar Diya (Budget Free)</span>
+              </div>
+            )}
           </div>
 
           <div className="mt-3 flex items-center justify-between text-xs pt-2.5 border-t border-white/[0.08] relative z-10">
@@ -384,7 +406,7 @@ export const OverviewCards: React.FC<OverviewCardsProps> = ({
               {isFamily ? `${memberTxs.length} Transactions` : `${monthExpenseCount} Transactions`}
             </span>
             <span className="text-slate-400 text-[11px] font-medium">
-              {isFamily ? (activeFamilyMemberName || 'Aapka hisaab') : 'Excludes Rim'}
+              {isFamily ? (activeFamilyMemberName || 'Aapka hisaab') : 'Excludes Rim & Udhaar'}
             </span>
           </div>
         </div>

@@ -8,7 +8,8 @@ import {
   HeartHandshake,
   Check, 
   ArrowUpRight, 
-  ArrowDownRight 
+  ArrowDownRight,
+  ArrowDownLeft 
 } from 'lucide-react';
 import { Transaction, CategoryDef, PaymentMethod, TransactionType, AccountId } from '../types';
 import { ALL_ACCOUNTS } from '../utils/accounts';
@@ -41,6 +42,9 @@ export const EditTransactionModal: React.FC<EditTransactionModalProps> = ({
   const [reimbursementSettledAmount, setReimbursementSettledAmount] = useState<string>('');
   const [isSavingsTransfer, setIsSavingsTransfer] = useState(false);
   const [isInvestment, setIsInvestment] = useState(false);
+  const [isUdhaarLent, setIsUdhaarLent] = useState(false);
+  const [udhaarPersonName, setUdhaarPersonName] = useState('');
+  const [isUdhaarRecovery, setIsUdhaarRecovery] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -63,6 +67,9 @@ export const EditTransactionModal: React.FC<EditTransactionModalProps> = ({
       );
       setIsSavingsTransfer(Boolean(transaction.isSavingsTransfer));
       setIsInvestment(Boolean(transaction.isInvestment));
+      setIsUdhaarLent(Boolean(transaction.isUdhaarLent || transaction.category === 'Udhaar Given'));
+      setUdhaarPersonName(transaction.udhaarPersonName || '');
+      setIsUdhaarRecovery(Boolean(transaction.isUdhaarRecovery || transaction.category === 'Udhaar Received'));
       setError(null);
     }
   }, [transaction]);
@@ -100,6 +107,9 @@ export const EditTransactionModal: React.FC<EditTransactionModalProps> = ({
     setError(null);
 
     try {
+      const isUdhaarL = type === 'expense' ? (isUdhaarLent || category === 'Udhaar Given') : false;
+      const isUdhaarR = type === 'income' ? (isUdhaarRecovery || category === 'Udhaar Received') : false;
+
       const updated: Transaction = {
         ...transaction,
         description: description.trim(),
@@ -115,6 +125,9 @@ export const EditTransactionModal: React.FC<EditTransactionModalProps> = ({
         reimbursementSettledAmount: isReimbursement ? (Number(reimbursementSettledAmount) || 0) : undefined,
         isSavingsTransfer,
         isInvestment,
+        isUdhaarLent: isUdhaarL,
+        isUdhaarRecovery: isUdhaarR,
+        udhaarPersonName: udhaarPersonName.trim() || undefined,
       };
 
       await onSave(updated);
@@ -366,6 +379,43 @@ export const EditTransactionModal: React.FC<EditTransactionModalProps> = ({
                 )}
 
                 <label className="flex items-center justify-between cursor-pointer pt-2 border-t border-slate-800">
+                  <span className="font-bold text-amber-300 flex items-center gap-1.5">
+                    <ArrowUpRight className="w-3.5 h-3.5 text-amber-400" />
+                    Udhar Diya (Lent - Budget se minus nahi hoga)
+                  </span>
+                  <input
+                    type="checkbox"
+                    checked={isUdhaarLent}
+                    onChange={(e) => {
+                      const checked = e.target.checked;
+                      setIsUdhaarLent(checked);
+                      if (checked) {
+                        setCategory('Udhaar Given');
+                      }
+                    }}
+                    className="w-4 h-4 rounded text-amber-500 bg-slate-900 border-slate-700 cursor-pointer"
+                  />
+                </label>
+
+                {isUdhaarLent && (
+                  <div className="pt-2 border-t border-slate-800 space-y-1.5">
+                    <label className="text-[11px] text-amber-300 font-bold block">
+                      👤 Kisko Udhar Diya? (Person Name)
+                    </label>
+                    <input
+                      type="text"
+                      value={udhaarPersonName}
+                      onChange={(e) => setUdhaarPersonName(e.target.value)}
+                      placeholder="Jaise: Rahul, Sharma Ji"
+                      className="w-full px-2.5 py-1.5 bg-slate-950 border border-amber-500/40 rounded-lg text-xs text-white placeholder-slate-500 focus:outline-hidden focus:border-amber-400"
+                    />
+                    <p className="text-[10px] text-amber-200/80">
+                      🛡️ Chune hue Account ({account}) se amount katega, par Monthly Budget se minus <b>NAHI</b> hoga.
+                    </p>
+                  </div>
+                )}
+
+                <label className="flex items-center justify-between cursor-pointer pt-2 border-t border-slate-800">
                   <span className="font-bold text-rose-300 flex items-center gap-1.5">
                     <HeartHandshake className="w-3.5 h-3.5" />
                     Savings Transfer to Wife
@@ -392,10 +442,49 @@ export const EditTransactionModal: React.FC<EditTransactionModalProps> = ({
               </div>
             )}
 
-            {/* Income Reimbursement Recovery Toggle */}
+            {/* Income Mode Toggles */}
             {type === 'income' && (
               <div className="p-3 bg-slate-950/80 border border-slate-800 rounded-xl space-y-2.5">
                 <label className="flex items-center justify-between cursor-pointer">
+                  <div>
+                    <span className="font-bold text-emerald-300 flex items-center gap-1.5">
+                      <ArrowDownLeft className="w-3.5 h-3.5" />
+                      Udhar Wapas Mila (Recovery)
+                    </span>
+                    <span className="text-[10px] text-slate-400 block mt-0.5">
+                      Bank/Cash account me credit hoga, par Monthly Salary me count nahi hoga.
+                    </span>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={isUdhaarRecovery}
+                    onChange={(e) => {
+                      const checked = e.target.checked;
+                      setIsUdhaarRecovery(checked);
+                      if (checked) {
+                        setCategory('Udhaar Received');
+                      }
+                    }}
+                    className="w-4 h-4 rounded text-emerald-500 bg-slate-900 border-slate-700 cursor-pointer"
+                  />
+                </label>
+
+                {isUdhaarRecovery && (
+                  <div className="pt-2 border-t border-slate-800 space-y-1.5">
+                    <label className="text-[11px] text-emerald-300 font-bold block">
+                      👤 Kisse Udhar Wapas Aaya? (Person Name)
+                    </label>
+                    <input
+                      type="text"
+                      value={udhaarPersonName}
+                      onChange={(e) => setUdhaarPersonName(e.target.value)}
+                      placeholder="Jaise: Rahul, Sharma Ji"
+                      className="w-full px-2.5 py-1.5 bg-slate-950 border border-emerald-500/40 rounded-lg text-xs text-white placeholder-slate-500 focus:outline-hidden focus:border-emerald-400"
+                    />
+                  </div>
+                )}
+
+                <label className="flex items-center justify-between cursor-pointer pt-2 border-t border-slate-800">
                   <div>
                     <span className="font-bold text-cyan-300 flex items-center gap-1.5">
                       <Briefcase className="w-3.5 h-3.5" />

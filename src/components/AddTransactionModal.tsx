@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { X, Plus, Calendar, Tag, CreditCard, Check, Zap, Building2, Briefcase, Sparkles, HeartHandshake, ShieldCheck } from 'lucide-react';
+import { X, Plus, Calendar, Tag, CreditCard, Check, Zap, Building2, Briefcase, Sparkles, HeartHandshake, ShieldCheck, ArrowUpRight, ArrowDownLeft } from 'lucide-react';
 import { Transaction, TransactionType, PaymentMethod, CategoryDef, AccountId } from '../types';
 import { getCurrentDateStr } from '../utils/formatters';
 import { ALL_ACCOUNTS, detectAccount, detectReimbursement, detectSavingsTransfer, detectInvestment, detectFamilyTripPooja } from '../utils/accounts';
@@ -30,6 +30,9 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
   const [isReimbursement, setIsReimbursement] = useState(false);
   const [isSavingsTransfer, setIsSavingsTransfer] = useState(false);
   const [isInvestment, setIsInvestment] = useState(false);
+  const [isUdhaarLent, setIsUdhaarLent] = useState(false);
+  const [udhaarPersonName, setUdhaarPersonName] = useState('');
+  const [isUdhaarRecovery, setIsUdhaarRecovery] = useState(false);
   const [tagInput, setTagInput] = useState('');
   const [tags, setTags] = useState<string[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -82,6 +85,21 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
         setCategory('Investments & Savings');
       }
     }
+
+    // Auto-detect Udhaar Given / Received
+    if (/\b(udhaar|udhar|khata|advance)\b/i.test(val)) {
+      if (/\b(diya|diye|de\s+diya|lent|give|gave)\b/i.test(val) || type === 'expense') {
+        setIsUdhaarLent(true);
+        if (categories.some((c) => c.name === 'Udhaar Given')) {
+          setCategory('Udhaar Given');
+        }
+      } else if (/\b(mila|mile|wapas|aaya|liya|repaid|settle)\b/i.test(val) || type === 'income') {
+        setIsUdhaarRecovery(true);
+        if (categories.some((c) => c.name === 'Udhaar Received')) {
+          setCategory('Udhaar Received');
+        }
+      }
+    }
   };
 
   const handleAddTag = () => {
@@ -105,12 +123,14 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
 
     const isWifeTr = category.toLowerCase() === 'wife transfer' || isSavingsTransfer;
     const isCcPay = category.toLowerCase() === 'cc payment';
+    const isUdhaarL = isUdhaarLent || category === 'Udhaar Given';
+    const isUdhaarR = isUdhaarRecovery || category === 'Udhaar Received';
     const finalAccount = (isWifeTr || isCcPay) && (!account || account.includes('CC')) ? 'AX Bank' : account;
 
     setIsSubmitting(true);
     try {
       await onAddTransaction({
-        type,
+        type: isUdhaarR ? 'income' : type,
         amount: numAmount,
         category,
         description: description.trim(),
@@ -124,6 +144,9 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
         isWifeTransfer: isWifeTr,
         isCcPayment: isCcPay,
         isInvestment,
+        isUdhaarLent: isUdhaarL,
+        isUdhaarRecovery: isUdhaarR,
+        udhaarPersonName: udhaarPersonName.trim() || undefined,
         source: 'manual',
         tags,
       });
@@ -134,6 +157,9 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
       setIsReimbursement(false);
       setIsSavingsTransfer(false);
       setIsInvestment(false);
+      setIsUdhaarLent(false);
+      setUdhaarPersonName('');
+      setIsUdhaarRecovery(false);
       setTags([]);
       onClose();
     } catch (err) {
@@ -258,11 +284,37 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
 
                 {/* Special Toggles / Pills */}
                 {type === 'expense' && (
-                  <div>
+                  <div className="space-y-2">
                     <label className="block text-[10px] text-slate-400 uppercase tracking-wider font-bold mb-1">
                       SPECIAL TAG (OPTIONAL)
                     </label>
                     <div className="flex flex-wrap items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const next = !isUdhaarLent;
+                          setIsUdhaarLent(next);
+                          if (next) {
+                            if (categories.some((c) => c.name === 'Udhaar Given')) {
+                              setCategory('Udhaar Given');
+                            }
+                            if (!description || description.trim() === 'Expense') {
+                              setDescription('Udhaar Diya');
+                            }
+                          }
+                        }}
+                        className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-semibold border transition-all cursor-pointer ${
+                          isUdhaarLent || category === 'Udhaar Given'
+                            ? 'bg-amber-500/25 text-amber-300 border-amber-500/60 shadow-xs ring-1 ring-amber-500/30'
+                            : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-slate-300'
+                        }`}
+                        title="Account se katega, par budget se minus NAHI hoga"
+                      >
+                        <ArrowUpRight className="w-3 h-3 text-amber-400" />
+                        <span>Udhar Diya (Lent)</span>
+                        {(isUdhaarLent || category === 'Udhaar Given') && <Check className="w-3 h-3 text-amber-400" />}
+                      </button>
+
                       <button
                         type="button"
                         onClick={() => {
@@ -280,7 +332,7 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
                         title="Monthly budget limit se deduct nahi hoga"
                       >
                         <Briefcase className="w-3 h-3 text-cyan-400" />
-                        <span>Office Reimbursement</span>
+                        <span>Office Claim</span>
                         {isReimbursement && <Check className="w-3 h-3 text-cyan-400" />}
                       </button>
 
@@ -308,41 +360,110 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
                         {isSavingsTransfer && <Check className="w-3 h-3 text-rose-400" />}
                       </button>
                     </div>
+
+                    {/* Udhar Diya Context Card */}
+                    {(isUdhaarLent || category === 'Udhaar Given') && (
+                      <div className="p-2.5 bg-amber-950/40 border border-amber-500/40 rounded-xl space-y-1.5 animate-in fade-in duration-150">
+                        <div className="flex items-center justify-between text-[10px] text-amber-300 font-bold uppercase">
+                          <span>👤 Kisko Udhar Diya? (Name)</span>
+                          <span className="text-amber-400 font-mono text-[9px] bg-amber-900/50 px-1.5 py-0.5 rounded border border-amber-500/30">BUDGET EXEMPT</span>
+                        </div>
+                        <input
+                          type="text"
+                          value={udhaarPersonName}
+                          onChange={(e) => setUdhaarPersonName(e.target.value)}
+                          placeholder="Jaise: Rahul, Sharma Ji, Friend"
+                          className="w-full px-2.5 py-1.5 bg-slate-950 border border-amber-500/40 rounded-lg text-xs text-white placeholder-slate-500 focus:outline-hidden focus:border-amber-400 font-sans"
+                        />
+                        <p className="text-[10px] text-amber-200/90 leading-tight">
+                          🛡️ Chune hue Account (<b>{account || 'Account'}</b>) se ₹{amount || 0} katega, lekin Monthly Expense Budget se <b>minus NAHI hoga</b>!
+                        </p>
+                      </div>
+                    )}
                   </div>
                 )}
 
-                {/* Special Toggle for Reimbursement Inflow (Income Mode) */}
+                {/* Special Toggles for Income Mode */}
                 {type === 'income' && (
-                  <div>
+                  <div className="space-y-2">
                     <label className="block text-[10px] text-slate-400 uppercase tracking-wider font-bold mb-1">
-                      RECOVERY TAG (OPTIONAL)
+                      SPECIAL TAG (OPTIONAL)
                     </label>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const next = !isReimbursement;
-                        setIsReimbursement(next);
-                        if (next) {
-                          setCategory('Reimbursement');
-                          if (!description || description.trim() === 'Income') {
-                            setDescription('Office Reimbursement Received');
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const next = !isUdhaarRecovery;
+                          setIsUdhaarRecovery(next);
+                          if (next) {
+                            if (categories.some((c) => c.name === 'Udhaar Received')) {
+                              setCategory('Udhaar Received');
+                            }
+                            if (!description || description.trim() === 'Income') {
+                              setDescription('Udhaar Wapas Mila');
+                            }
+                            if (account && account.includes('CC')) setAccount('AX Bank');
                           }
-                          if (account && account.includes('CC')) setAccount('AX Bank');
-                        } else {
-                          if (category === 'Reimbursement') setCategory('Salary & Employment');
-                        }
-                      }}
-                      className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-semibold border transition-all cursor-pointer ${
-                        isReimbursement || category === 'Reimbursement'
-                          ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/50 shadow-xs'
-                          : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-slate-300'
-                      }`}
-                      title="Bank Account me credit (+) hoga, par Monthly Salary/Income me count nahi hoga"
-                    >
-                      <Briefcase className="w-3 h-3 text-cyan-400" />
-                      <span>Office Reimbursement Recovery (Bank Credit)</span>
-                      {(isReimbursement || category === 'Reimbursement') && <Check className="w-3 h-3 text-cyan-400" />}
-                    </button>
+                        }}
+                        className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-semibold border transition-all cursor-pointer ${
+                          isUdhaarRecovery || category === 'Udhaar Received'
+                            ? 'bg-emerald-500/25 text-emerald-300 border-emerald-500/60 shadow-xs ring-1 ring-emerald-500/30'
+                            : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-slate-300'
+                        }`}
+                        title="Udhar wapas mila (Non-salary inflow)"
+                      >
+                        <ArrowDownLeft className="w-3 h-3 text-emerald-400" />
+                        <span>Udhar Wapas (Recovery)</span>
+                        {(isUdhaarRecovery || category === 'Udhaar Received') && <Check className="w-3 h-3 text-emerald-400" />}
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const next = !isReimbursement;
+                          setIsReimbursement(next);
+                          if (next) {
+                            setCategory('Reimbursement');
+                            if (!description || description.trim() === 'Income') {
+                              setDescription('Office Reimbursement Received');
+                            }
+                            if (account && account.includes('CC')) setAccount('AX Bank');
+                          } else {
+                            if (category === 'Reimbursement') setCategory('Salary & Employment');
+                          }
+                        }}
+                        className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-semibold border transition-all cursor-pointer ${
+                          isReimbursement || category === 'Reimbursement'
+                            ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/50 shadow-xs'
+                            : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-slate-300'
+                        }`}
+                        title="Office claim recovery"
+                      >
+                        <Briefcase className="w-3 h-3 text-cyan-400" />
+                        <span>Office Rim Inflow</span>
+                        {(isReimbursement || category === 'Reimbursement') && <Check className="w-3 h-3 text-cyan-400" />}
+                      </button>
+                    </div>
+
+                    {/* Udhar Wapas Context Card */}
+                    {(isUdhaarRecovery || category === 'Udhaar Received') && (
+                      <div className="p-2.5 bg-emerald-950/40 border border-emerald-500/40 rounded-xl space-y-1.5 animate-in fade-in duration-150">
+                        <div className="flex items-center justify-between text-[10px] text-emerald-300 font-bold uppercase">
+                          <span>👤 Kisse Udhar Wapas Aaya?</span>
+                          <span className="text-emerald-400 font-mono text-[9px] bg-emerald-900/50 px-1.5 py-0.5 rounded border border-emerald-500/30">KHATA SETTLE</span>
+                        </div>
+                        <input
+                          type="text"
+                          value={udhaarPersonName}
+                          onChange={(e) => setUdhaarPersonName(e.target.value)}
+                          placeholder="Jaise: Rahul, Sharma Ji"
+                          className="w-full px-2.5 py-1.5 bg-slate-950 border border-emerald-500/40 rounded-lg text-xs text-white placeholder-slate-500 focus:outline-hidden focus:border-emerald-400 font-sans"
+                        />
+                        <p className="text-[10px] text-emerald-200/90 leading-tight">
+                          💰 Bank/Cash account me ₹{amount || 0} judega (+), aur Udhaar Khata ledger me entry settle hogi.
+                        </p>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>

@@ -96,6 +96,10 @@ export interface Transaction {
   isWifeTransfer?: boolean;
   isCcPayment?: boolean;
   isInvestment?: boolean;
+  isUdhaarLent?: boolean;
+  isUdhaarRecovery?: boolean;
+  linkedUdhaarId?: string;
+  udhaarPersonName?: string;
 }
 
 export interface CategoryDef {
@@ -333,6 +337,7 @@ export interface UdhaarRecord {
   time?: string;
   status: 'pending' | 'settled';
   account?: AccountId;
+  linkedTransactionId?: string;
   settledAt?: string;
   createdAt: string;
 }

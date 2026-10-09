@@ -135,6 +135,17 @@ export const DEFAULT_CATEGORIES: CategoryDef[] = [
     excludeFromBudget: true,
   },
   {
+    id: 'udhaar_given',
+    name: 'Udhaar Given',
+    type: 'expense',
+    icon: 'ArrowUpRight',
+    color: '#F59E0B', // Amber
+    bgLight: 'bg-amber-50 text-amber-700 border-amber-200',
+    keywords: ['udhaar diya', 'udhar diya', 'udhar', 'udhaar', 'loan diya', 'lent', 'advance diya', 'dost ko diya'],
+    description: 'Money lent to someone (deducted from Bank/Card/Cash account balance, but EXCLUDED from monthly expense budget)',
+    excludeFromBudget: true,
+  },
+  {
     id: 'other_expense',
     name: 'Other Expense',
     type: 'expense',
@@ -189,6 +200,16 @@ export const DEFAULT_CATEGORIES: CategoryDef[] = [
     color: '#EC4899', // Pink
     bgLight: 'bg-pink-50 text-pink-700 border-pink-200',
     keywords: ['gift', 'pocket money', 'allowance', 'papa sent', 'mom sent', 'shagun', 'prize', 'won'],
+  },
+  {
+    id: 'udhaar_recovery',
+    name: 'Udhaar Received',
+    type: 'income',
+    icon: 'ArrowDownLeft',
+    color: '#10B981', // Emerald
+    bgLight: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+    keywords: ['udhaar wapas', 'udhar wapas', 'udhar mila', 'udhaar mila', 'udhar aaya', 'loan repayment', 'khata settled'],
+    description: 'Udhaar money returned by friend/family (adds to bank/cash, does not count as salary income)',
   },
   {
     id: 'other_income',
