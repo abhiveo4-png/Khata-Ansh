@@ -144,355 +144,385 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 overflow-y-auto bg-black/80 backdrop-blur-md flex items-center justify-center p-4">
-      <div className="bg-[#090d18] border border-cyan-500/30 rounded-2xl max-w-lg w-full shadow-2xl shadow-cyan-950/50 overflow-hidden animate-in fade-in zoom-in duration-200">
+    <div className="fixed inset-0 z-50 overflow-y-auto bg-black/80 backdrop-blur-md flex items-center justify-center p-2.5 sm:p-4">
+      <div className="bg-[#090d18] border border-cyan-500/30 rounded-2xl max-w-2xl w-full shadow-2xl shadow-cyan-950/50 flex flex-col max-h-[92vh] sm:max-h-[88vh] overflow-hidden animate-in fade-in zoom-in duration-150">
         
-        {/* Cyber Header */}
-        <div className="px-6 py-4 border-b border-slate-800 flex items-center justify-between bg-slate-950/80">
+        {/* Compact Header */}
+        <div className="px-4 py-3 sm:px-5 border-b border-slate-800/80 flex items-center justify-between bg-slate-950/90 shrink-0">
           <div className="flex items-center space-x-2">
-            <Zap className="w-4 h-4 text-cyan-400" />
-            <h3 className="font-bold text-base text-white font-display">NAYA KHARCHA / INCOME JODEIN</h3>
+            <div className="w-7 h-7 rounded-lg bg-cyan-500/20 text-cyan-400 flex items-center justify-center border border-cyan-500/30">
+              <Zap className="w-3.5 h-3.5" />
+            </div>
+            <div>
+              <h3 className="font-bold text-sm text-white font-sans tracking-wide">NAYA TRANSACTION JODEIN</h3>
+              <p className="text-[10px] text-slate-400 font-sans">Kharcha ya Income ledger me record karein</p>
+            </div>
           </div>
           <button
+            type="button"
             onClick={onClose}
             className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer"
           >
-            <X className="w-5 h-5" />
+            <X className="w-4 h-4" />
           </button>
         </div>
 
-        <form onSubmit={handleSubmit} className="p-6 space-y-4 text-xs font-mono">
-          
-          {/* Type Toggle */}
-          <div className="grid grid-cols-2 p-1 bg-slate-950 border border-slate-800 rounded-xl">
-            <button
-              type="button"
-              onClick={() => {
-                setType('expense');
-                setCategory('Food & Dining');
-              }}
-              className={`py-2 rounded-lg font-bold uppercase transition-all cursor-pointer ${
-                type === 'expense'
-                  ? 'bg-rose-950 text-rose-300 border border-rose-500/40 shadow-xs'
-                  : 'text-slate-400 hover:text-white'
-              }`}
-            >
-              🔴 KHARCHA (EXPENSE)
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setType('income');
-                setCategory('Salary & Employment');
-              }}
-              className={`py-2 rounded-lg font-bold uppercase transition-all cursor-pointer ${
-                type === 'income'
-                  ? 'bg-emerald-950 text-emerald-300 border border-emerald-500/40 shadow-xs'
-                  : 'text-slate-400 hover:text-white'
-              }`}
-            >
-              🟢 KAMAI (INCOME)
-            </button>
-          </div>
-
-          {/* Amount Field */}
-          <div>
-            <label className="block text-slate-400 uppercase tracking-wider mb-1">RASHMI / AMOUNT (₹)</label>
-            <div className="relative">
-              <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-cyan-400 font-bold text-base">₹</span>
-              <input
-                type="number"
-                step="any"
-                required
-                min="1"
-                value={amount}
-                onChange={(e) => setAmount(e.target.value)}
-                placeholder="0"
-                className="w-full pl-8 pr-4 py-2.5 bg-slate-950 border border-slate-700 rounded-xl text-base font-bold text-cyan-300 focus:outline-hidden focus:border-cyan-400"
-              />
-            </div>
+        {/* Scrollable Form Body */}
+        <form onSubmit={handleSubmit} className="flex flex-col flex-1 overflow-hidden min-h-0">
+          <div className="overflow-y-auto flex-1 p-3.5 sm:p-5 space-y-3 sm:space-y-3.5 text-xs font-mono">
             
-            {/* Quick Amount Chips */}
-            <div className="flex items-center space-x-1.5 mt-2 overflow-x-auto no-scrollbar">
-              <span className="text-[10px] text-slate-500 mr-1">QUICK AMOUNT:</span>
-              {AMOUNT_PRESETS.map((amt) => (
-                <button
-                  type="button"
-                  key={amt}
-                  onClick={() => setAmount(amt.toString())}
-                  className="px-2 py-0.5 rounded-lg bg-slate-900 hover:bg-cyan-950 border border-slate-800 text-cyan-300 text-[11px] font-mono cursor-pointer"
-                >
-                  +{amt}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Description */}
-          <div>
-            <label className="block text-slate-400 uppercase tracking-wider mb-1">
-              VIVARAN / DESCRIPTION (NOTE)
-            </label>
-            <input
-              type="text"
-              required
-              value={description}
-              onChange={handleDescriptionChange}
-              placeholder="Jaise: Rim 100 Cab (ggn trip), 500 Fal phool pooja, 1200 room trip, Doodh, Petrol"
-              className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-700 rounded-xl text-xs text-white focus:outline-hidden focus:border-cyan-400"
-            />
-            <p className="text-[10px] text-slate-400 mt-1">
-              💡 Tip: Description ke end me <code className="text-cyan-300">rim</code>, <code className="text-amber-300">pooja</code>, ya <code className="text-amber-300">trip</code> likhne par system automatically category detect kar lega!
-            </p>
-          </div>
-
-          {/* Account / Card / Cash Selector (Point 2) */}
-          <div>
-            <label className="block text-slate-400 uppercase tracking-wider mb-1 flex items-center justify-between">
-              <span className="flex items-center gap-1.5">
-                <CreditCard className="w-3.5 h-3.5 text-indigo-400" />
-                KIS CARD YA ACCOUNT SE PAY KIYA? (ACCOUNT / CARD)
-              </span>
-            </label>
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-              {ALL_ACCOUNTS.map((acc) => {
-                const isSelected = account === acc.id;
-                return (
-                  <button
-                    key={acc.id}
-                    type="button"
-                    onClick={() => setAccount(acc.id)}
-                    className={`p-2 rounded-xl text-left border transition-all cursor-pointer flex flex-col justify-between ${
-                      isSelected
-                        ? 'bg-slate-800 border-indigo-400 text-white ring-1 ring-indigo-400/50 shadow-sm'
-                        : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200 hover:bg-slate-900'
-                    }`}
-                  >
-                    <div className="flex items-center justify-between w-full">
-                      <span className="font-bold text-[11px] truncate">{acc.shortName}</span>
-                      {isSelected && <Check className="w-3 h-3 text-indigo-400 shrink-0" />}
-                    </div>
-                    <span className="text-[9px] text-slate-500 mt-0.5">{acc.badge}</span>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* Special Toggles: Reimbursement (Point 1) & Savings Transfer (Point 5) */}
-          {type === 'expense' && (
-            <div className="p-3 bg-slate-950/80 border border-slate-800 rounded-xl space-y-2">
-              <label className="flex items-start gap-2.5 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={isReimbursement}
-                  onChange={(e) => {
-                    const checked = e.target.checked;
-                    setIsReimbursement(checked);
-                    if (checked && categories.some((c) => c.name === 'Reimbursement')) {
-                      setCategory('Reimbursement');
-                    }
-                  }}
-                  className="mt-0.5 w-4 h-4 rounded text-cyan-500 bg-slate-900 border-slate-700 cursor-pointer"
-                />
-                <div>
-                  <div className="font-bold text-cyan-300 flex items-center gap-1.5">
-                    <Briefcase className="w-3.5 h-3.5" />
-                    Office / Trip Reimbursement (Claimable)
-                  </div>
-                  <div className="text-[10px] text-slate-400">
-                    Yeh aapka personal kharcha nahi hai — monthly budget se minus NAHI hoga balki receivable saving me add hoga.
-                  </div>
-                </div>
-              </label>
-
-              <label className="flex items-start gap-2.5 cursor-pointer pt-2 border-t border-slate-800/80">
-                <input
-                  type="checkbox"
-                  checked={isSavingsTransfer}
-                  onChange={(e) => setIsSavingsTransfer(e.target.checked)}
-                  className="mt-0.5 w-4 h-4 rounded text-rose-500 bg-slate-900 border-slate-700 cursor-pointer"
-                />
-                <div>
-                  <div className="font-bold text-rose-300 flex items-center gap-1.5">
-                    <HeartHandshake className="w-3.5 h-3.5" />
-                    Savings Transfer to Wife's A/c
-                  </div>
-                  <div className="text-[10px] text-slate-400">
-                    Wife ke account me bheja bachat fund — monthly budget limit se deduct nahi hoga.
-                  </div>
-                </div>
-              </label>
-            </div>
-          )}
-
-          {/* Special Toggle for Reimbursement Inflow (Income Mode) */}
-          {type === 'income' && (
-            <div className="p-3 bg-slate-950/80 border border-slate-800 rounded-xl space-y-2">
-              <label className="flex items-start gap-2.5 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={isReimbursement || category === 'Reimbursement'}
-                  onChange={(e) => {
-                    const checked = e.target.checked;
-                    setIsReimbursement(checked);
-                    if (checked) {
-                      setCategory('Reimbursement');
-                      if (!description || description.trim() === 'Income') {
-                        setDescription('Office Reimbursement Received');
-                      }
-                      if (account && account.includes('CC')) {
-                        setAccount('AX Bank');
-                      }
-                    } else {
-                      if (category === 'Reimbursement') {
-                        setCategory('Salary & Employment');
-                      }
-                    }
-                  }}
-                  className="mt-0.5 w-4 h-4 rounded text-cyan-500 bg-slate-900 border-slate-700 cursor-pointer"
-                />
-                <div>
-                  <div className="font-bold text-cyan-300 flex items-center gap-1.5">
-                    <Briefcase className="w-3.5 h-3.5" />
-                    Office Reimbursement / Claim Settlement (Recovery)
-                  </div>
-                  <div className="text-[10px] text-slate-400">
-                    Yeh Salary / Kamai nahi hai — Bank Account me paisa credit (+) hoga, lekin Monthly Salary / Income me count NAHI hoga.
-                  </div>
-                </div>
-              </label>
-            </div>
-          )}
-
-          {/* Category Selector */}
-          <div>
-            <label className="block text-slate-400 uppercase tracking-wider mb-1">CATEGORY CHUNIYE</label>
-            <select
-              value={category}
-              onChange={(e) => {
-                const val = e.target.value;
-                setCategory(val);
-                if (val.toLowerCase() === 'reimbursement') {
-                  setIsReimbursement(true);
-                } else if (val.toLowerCase() === 'wife transfer') {
-                  setIsSavingsTransfer(true);
-                  setAccount('AX Bank');
-                } else if (val.toLowerCase() === 'cc payment') {
-                  setAccount('AX Bank');
-                }
-              }}
-              className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-700 rounded-xl text-xs text-cyan-300 focus:outline-hidden focus:border-cyan-400 cursor-pointer"
-            >
-              {filteredCategories.map((c) => (
-                <option key={c.id} value={c.name}>
-                  {c.name}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          {/* Date & Payment Method */}
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-slate-400 uppercase tracking-wider mb-1 flex items-center space-x-1">
-                <Calendar className="w-3.5 h-3.5 text-slate-500" />
-                <span>TAREEQ (DATE)</span>
-              </label>
-              <input
-                type="date"
-                required
-                value={date}
-                onChange={(e) => setDate(e.target.value)}
-                className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-xs text-white focus:outline-hidden focus:border-cyan-400"
-              />
-            </div>
-
-            <div>
-              <label className="block text-slate-400 uppercase tracking-wider mb-1 flex items-center space-x-1">
-                <CreditCard className="w-3.5 h-3.5 text-slate-500" />
-                <span>PAYMENT MODE</span>
-              </label>
-              <select
-                value={paymentMethod}
-                onChange={(e) => setPaymentMethod(e.target.value as PaymentMethod)}
-                className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-xs text-white focus:outline-hidden focus:border-cyan-400 cursor-pointer"
-              >
-                {PAYMENT_METHODS.map((pm) => (
-                  <option key={pm} value={pm}>
-                    {pm}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
-
-          {/* Tags */}
-          <div>
-            <label className="block text-slate-400 uppercase tracking-wider mb-1">TAGS (OPTIONAL)</label>
-            <div className="flex items-center space-x-2">
-              <input
-                type="text"
-                value={tagInput}
-                onChange={(e) => setTagInput(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    e.preventDefault();
-                    handleAddTag();
-                  }
-                }}
-                placeholder="Tag likh kar enter karein"
-                className="flex-1 px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-xs text-white focus:outline-hidden focus:border-cyan-400"
-              />
+            {/* Top Bar: Type Toggle */}
+            <div className="grid grid-cols-2 p-0.5 bg-slate-950 border border-slate-800 rounded-xl">
               <button
                 type="button"
-                onClick={handleAddTag}
-                className="px-3 py-2 bg-slate-900 border border-slate-700 hover:border-cyan-400 text-cyan-300 rounded-xl font-bold cursor-pointer"
+                onClick={() => {
+                  setType('expense');
+                  setCategory('Food & Dining');
+                }}
+                className={`py-1.5 rounded-lg text-[11px] font-bold uppercase transition-all cursor-pointer ${
+                  type === 'expense'
+                    ? 'bg-rose-950 text-rose-300 border border-rose-500/40 shadow-xs'
+                    : 'text-slate-400 hover:text-white'
+                }`}
               >
-                ADD
+                🔴 KHARCHA (EXPENSE)
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setType('income');
+                  setCategory('Salary & Employment');
+                }}
+                className={`py-1.5 rounded-lg text-[11px] font-bold uppercase transition-all cursor-pointer ${
+                  type === 'income'
+                    ? 'bg-emerald-950 text-emerald-300 border border-emerald-500/40 shadow-xs'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                🟢 KAMAI (INCOME)
               </button>
             </div>
 
-            {tags.length > 0 && (
-              <div className="flex flex-wrap gap-1.5 mt-2">
-                {tags.map((t) => (
-                  <span
-                    key={t}
-                    className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-md bg-cyan-950 border border-cyan-500/40 text-cyan-300 text-[10px]"
-                  >
-                    <span>#{t}</span>
+            {/* 2-Column Responsive Grid on Desktop */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
+              
+              {/* Left Column: Amount, Description, Special Toggles */}
+              <div className="space-y-3">
+                {/* Amount Field */}
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-[10px] text-slate-400 uppercase tracking-wider font-bold">RASHI / AMOUNT (₹)</label>
+                    {/* Quick Amount Chips */}
+                    <div className="flex items-center space-x-1">
+                      {[100, 500, 1000, 2000].map((amt) => (
+                        <button
+                          type="button"
+                          key={amt}
+                          onClick={() => setAmount(amt.toString())}
+                          className="px-1.5 py-0.5 rounded bg-slate-900 hover:bg-cyan-950 border border-slate-800 text-cyan-300 text-[10px] cursor-pointer"
+                        >
+                          +{amt}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="relative">
+                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-cyan-400 font-bold text-sm">₹</span>
+                    <input
+                      type="number"
+                      step="any"
+                      required
+                      min="1"
+                      value={amount}
+                      onChange={(e) => setAmount(e.target.value)}
+                      placeholder="0"
+                      className="w-full pl-7 pr-3 py-2 bg-slate-950 border border-slate-700/80 rounded-xl text-sm font-bold text-cyan-300 focus:outline-hidden focus:border-cyan-400"
+                    />
+                  </div>
+                </div>
+
+                {/* Description */}
+                <div>
+                  <label className="block text-[10px] text-slate-400 uppercase tracking-wider font-bold mb-1">
+                    VIVARAN / DESCRIPTION
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={description}
+                    onChange={handleDescriptionChange}
+                    placeholder="Jaise: Rim 100 Cab, Petrol, Doodh"
+                    className="w-full px-3 py-2 bg-slate-950 border border-slate-700/80 rounded-xl text-xs text-white focus:outline-hidden focus:border-cyan-400"
+                  />
+                </div>
+
+                {/* Special Toggles / Pills */}
+                {type === 'expense' && (
+                  <div>
+                    <label className="block text-[10px] text-slate-400 uppercase tracking-wider font-bold mb-1">
+                      SPECIAL TAG (OPTIONAL)
+                    </label>
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const next = !isReimbursement;
+                          setIsReimbursement(next);
+                          if (next && categories.some((c) => c.name === 'Reimbursement')) {
+                            setCategory('Reimbursement');
+                          }
+                        }}
+                        className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-semibold border transition-all cursor-pointer ${
+                          isReimbursement
+                            ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/50 shadow-xs'
+                            : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-slate-300'
+                        }`}
+                        title="Monthly budget limit se deduct nahi hoga"
+                      >
+                        <Briefcase className="w-3 h-3 text-cyan-400" />
+                        <span>Office Reimbursement</span>
+                        {isReimbursement && <Check className="w-3 h-3 text-cyan-400" />}
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const next = !isSavingsTransfer;
+                          setIsSavingsTransfer(next);
+                          if (next) {
+                            if (categories.some(c => c.name.toLowerCase() === 'wife transfer')) {
+                              setCategory('Wife Transfer');
+                            }
+                            setAccount('AX Bank');
+                          }
+                        }}
+                        className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-semibold border transition-all cursor-pointer ${
+                          isSavingsTransfer
+                            ? 'bg-rose-500/20 text-rose-300 border-rose-500/50 shadow-xs'
+                            : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-slate-300'
+                        }`}
+                        title="Wife ke account me bheja bachat fund"
+                      >
+                        <HeartHandshake className="w-3 h-3 text-rose-400" />
+                        <span>Wife Transfer</span>
+                        {isSavingsTransfer && <Check className="w-3 h-3 text-rose-400" />}
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Special Toggle for Reimbursement Inflow (Income Mode) */}
+                {type === 'income' && (
+                  <div>
+                    <label className="block text-[10px] text-slate-400 uppercase tracking-wider font-bold mb-1">
+                      RECOVERY TAG (OPTIONAL)
+                    </label>
                     <button
                       type="button"
-                      onClick={() => handleRemoveTag(t)}
-                      className="hover:text-rose-400 ml-1 cursor-pointer"
+                      onClick={() => {
+                        const next = !isReimbursement;
+                        setIsReimbursement(next);
+                        if (next) {
+                          setCategory('Reimbursement');
+                          if (!description || description.trim() === 'Income') {
+                            setDescription('Office Reimbursement Received');
+                          }
+                          if (account && account.includes('CC')) setAccount('AX Bank');
+                        } else {
+                          if (category === 'Reimbursement') setCategory('Salary & Employment');
+                        }
+                      }}
+                      className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-semibold border transition-all cursor-pointer ${
+                        isReimbursement || category === 'Reimbursement'
+                          ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/50 shadow-xs'
+                          : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-slate-300'
+                      }`}
+                      title="Bank Account me credit (+) hoga, par Monthly Salary/Income me count nahi hoga"
                     >
-                      ×
+                      <Briefcase className="w-3 h-3 text-cyan-400" />
+                      <span>Office Reimbursement Recovery (Bank Credit)</span>
+                      {(isReimbursement || category === 'Reimbursement') && <Check className="w-3 h-3 text-cyan-400" />}
                     </button>
-                  </span>
-                ))}
+                  </div>
+                )}
               </div>
-            )}
+
+              {/* Right Column: Category, Account, Date & Payment Mode, Tags */}
+              <div className="space-y-3">
+                {/* Category Selector */}
+                <div>
+                  <label className="block text-[10px] text-slate-400 uppercase tracking-wider font-bold mb-1">
+                    CATEGORY
+                  </label>
+                  <select
+                    value={category}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setCategory(val);
+                      if (val.toLowerCase() === 'reimbursement') {
+                        setIsReimbursement(true);
+                      } else if (val.toLowerCase() === 'wife transfer') {
+                        setIsSavingsTransfer(true);
+                        setAccount('AX Bank');
+                      } else if (val.toLowerCase() === 'cc payment') {
+                        setAccount('AX Bank');
+                      }
+                    }}
+                    className="w-full px-3 py-2 bg-slate-950 border border-slate-700/80 rounded-xl text-xs text-cyan-300 focus:outline-hidden focus:border-cyan-400 cursor-pointer"
+                  >
+                    {filteredCategories.map((c) => (
+                      <option key={c.id} value={c.name} className="bg-slate-900 text-white">
+                        {c.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Account / Card Selector */}
+                <div>
+                  <label className="block text-[10px] text-slate-400 uppercase tracking-wider font-bold mb-1 flex items-center justify-between">
+                    <span className="flex items-center gap-1">
+                      <CreditCard className="w-3 h-3 text-indigo-400" />
+                      ACCOUNT / CARD
+                    </span>
+                  </label>
+                  <select
+                    value={account}
+                    onChange={(e) => setAccount(e.target.value as AccountId)}
+                    className="w-full px-3 py-2 bg-slate-950 border border-slate-700/80 rounded-xl text-xs text-white focus:outline-hidden focus:border-cyan-400 cursor-pointer"
+                  >
+                    <optgroup label="💳 Credit & RuPay Cards" className="bg-slate-900 text-slate-300 font-bold">
+                      {ALL_ACCOUNTS.filter(a => a.type === 'credit_card' || a.type === 'rupay_card').map(a => (
+                        <option key={a.id} value={a.id} className="bg-slate-900 text-white font-normal">
+                          {a.shortName} • ({a.badge})
+                        </option>
+                      ))}
+                    </optgroup>
+                    <optgroup label="🏦 Bank Accounts" className="bg-slate-900 text-slate-300 font-bold">
+                      {ALL_ACCOUNTS.filter(a => a.type === 'bank_account').map(a => (
+                        <option key={a.id} value={a.id} className="bg-slate-900 text-white font-normal">
+                          {a.shortName} • ({a.badge})
+                        </option>
+                      ))}
+                    </optgroup>
+                    <optgroup label="💵 Cash" className="bg-slate-900 text-slate-300 font-bold">
+                      {ALL_ACCOUNTS.filter(a => a.type === 'cash').map(a => (
+                        <option key={a.id} value={a.id} className="bg-slate-900 text-white font-normal">
+                          {a.shortName} • ({a.badge})
+                        </option>
+                      ))}
+                    </optgroup>
+                  </select>
+                </div>
+
+                {/* Date & Payment Method */}
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-[10px] text-slate-400 uppercase tracking-wider font-bold mb-1 flex items-center space-x-1">
+                      <Calendar className="w-3 h-3 text-slate-500" />
+                      <span>TAREEQ</span>
+                    </label>
+                    <input
+                      type="date"
+                      required
+                      value={date}
+                      onChange={(e) => setDate(e.target.value)}
+                      className="w-full px-2.5 py-1.5 bg-slate-950 border border-slate-700/80 rounded-xl text-xs text-white focus:outline-hidden focus:border-cyan-400"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-[10px] text-slate-400 uppercase tracking-wider font-bold mb-1 flex items-center space-x-1">
+                      <CreditCard className="w-3 h-3 text-slate-500" />
+                      <span>MODE</span>
+                    </label>
+                    <select
+                      value={paymentMethod}
+                      onChange={(e) => setPaymentMethod(e.target.value as PaymentMethod)}
+                      className="w-full px-2.5 py-1.5 bg-slate-950 border border-slate-700/80 rounded-xl text-xs text-white focus:outline-hidden focus:border-cyan-400 cursor-pointer"
+                    >
+                      {PAYMENT_METHODS.map((pm) => (
+                        <option key={pm} value={pm} className="bg-slate-900 text-white">
+                          {pm}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                {/* Tags (Optional) */}
+                <div>
+                  <label className="block text-[10px] text-slate-400 uppercase tracking-wider font-bold mb-1">
+                    TAGS (OPTIONAL)
+                  </label>
+                  <div className="flex items-center space-x-1.5">
+                    <input
+                      type="text"
+                      value={tagInput}
+                      onChange={(e) => setTagInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          handleAddTag();
+                        }
+                      }}
+                      placeholder="Tag + Enter"
+                      className="flex-1 px-2.5 py-1.5 bg-slate-950 border border-slate-700/80 rounded-xl text-xs text-white focus:outline-hidden focus:border-cyan-400"
+                    />
+                    <button
+                      type="button"
+                      onClick={handleAddTag}
+                      className="px-2.5 py-1.5 bg-slate-900 border border-slate-700 hover:border-cyan-400 text-cyan-300 text-[11px] rounded-xl font-bold cursor-pointer"
+                    >
+                      ADD
+                    </button>
+                  </div>
+
+                  {tags.length > 0 && (
+                    <div className="flex flex-wrap gap-1 mt-1.5">
+                      {tags.map((t) => (
+                        <span
+                          key={t}
+                          className="inline-flex items-center space-x-1 px-1.5 py-0.5 rounded bg-cyan-950 border border-cyan-500/40 text-cyan-300 text-[10px]"
+                        >
+                          <span>#{t}</span>
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveTag(t)}
+                            className="hover:text-rose-400 ml-0.5 cursor-pointer"
+                          >
+                            ×
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+              </div>
+            </div>
+
           </div>
 
-          {/* Actions */}
-          <div className="pt-3 border-t border-slate-800 flex items-center justify-end space-x-2">
+          {/* Compact Footer Actions */}
+          <div className="px-4 py-2.5 sm:px-5 sm:py-3 border-t border-slate-800/80 bg-slate-950/90 flex items-center justify-end space-x-2 shrink-0">
             <button
               type="button"
               onClick={onClose}
-              className="px-4 py-2 rounded-xl border border-slate-700 text-slate-400 hover:text-white cursor-pointer"
+              className="px-3.5 py-1.5 rounded-xl border border-slate-700 text-xs font-semibold text-slate-400 hover:text-white cursor-pointer transition-colors"
             >
               CANCEL
             </button>
             <button
               type="submit"
               disabled={isSubmitting}
-              className="px-5 py-2 bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold rounded-xl shadow-md transition-colors flex items-center space-x-1.5 cursor-pointer"
+              className="px-4 py-1.5 bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-xs rounded-xl shadow-md transition-all flex items-center space-x-1.5 cursor-pointer active:scale-95 disabled:opacity-50"
             >
               {isSubmitting ? (
-                <span>SAVE HO RAHA HAI...</span>
+                <span>SAVING...</span>
               ) : (
                 <>
-                  <Plus className="w-4 h-4 stroke-[3]" />
+                  <Plus className="w-3.5 h-3.5 stroke-[3]" />
                   <span>ENTRY SAVE KAREIN</span>
                 </>
               )}
