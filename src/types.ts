@@ -214,6 +214,8 @@ export interface FinancialSummary {
   totalCashBalance?: number;
   udhaarLentTotal?: number;
   currentMonthUdhaarLent?: number;
+  pendingUdhaarBakaya?: number;
+  currentMonthUdhaarBakaya?: number;
 }
 
 export interface CardEmi {

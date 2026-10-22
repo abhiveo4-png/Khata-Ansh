@@ -786,6 +786,7 @@ export default function App() {
         <OverviewCards 
           summary={summary} 
           transactions={transactions}
+          udhaars={udhaars}
           budgets={budgets}
           categories={categories}
           userRole={userRole}
@@ -795,6 +796,7 @@ export default function App() {
           onSelectMonth={handleSelectMonth}
           availableMonths={availableMonths}
           onOpenReimbursementSummary={handleOpenReimbursementSummary}
+          onNavigateToUdhaar={() => setActiveTab('wealth')}
         />
 
         {/* Horizontal Navigation Tabs - Desktop only */}

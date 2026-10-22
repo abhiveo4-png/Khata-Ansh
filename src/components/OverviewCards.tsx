@@ -16,11 +16,12 @@ import {
   Sparkles,
   Layers
 } from 'lucide-react';
-import { FinancialSummary, Transaction, UserRole, CategoryBudget, CategoryDef } from '../types';
+import { FinancialSummary, Transaction, UserRole, CategoryBudget, CategoryDef, UdhaarRecord } from '../types';
 
 interface OverviewCardsProps {
   summary: FinancialSummary;
   transactions?: Transaction[];
+  udhaars?: UdhaarRecord[];
   budgets?: CategoryBudget[];
   categories?: CategoryDef[];
   userRole?: UserRole;
@@ -30,11 +31,13 @@ interface OverviewCardsProps {
   onSelectMonth?: (month: string) => void;
   availableMonths?: string[];
   onOpenReimbursementSummary?: () => void;
+  onNavigateToUdhaar?: () => void;
 }
 
 export const OverviewCards: React.FC<OverviewCardsProps> = ({ 
   summary, 
   transactions = [],
+  udhaars = [],
   budgets = [],
   categories = [],
   userRole = 'owner',
@@ -44,6 +47,7 @@ export const OverviewCards: React.FC<OverviewCardsProps> = ({
   onSelectMonth,
   availableMonths = [],
   onOpenReimbursementSummary,
+  onNavigateToUdhaar,
 }) => {
   const isFamily = userRole === 'family';
 
@@ -82,16 +86,24 @@ export const OverviewCards: React.FC<OverviewCardsProps> = ({
   let prevTotalExpense = 0;
   let prevPersonalExpense = 0;
   let prevUdhaarLent = 0;
+  let prevUdhaarRecovered = 0;
   let prevPendingRim = 0;
 
   for (const t of prevTransactions) {
     const amt = Number(t.amount) || 0;
     const isRimInflow = Boolean(
       t.isReimbursementInflow ||
-      (t.type === 'income' && (t.isReimbursement || t.category === 'Reimbursement' || t.category === 'Reimbursement Received'))
+      (t.type === 'income' && (t.category === 'Reimbursement' || t.category === 'Reimbursement Received'))
     );
+    const isUdhaarRecovery = Boolean(
+      t.isUdhaarRecovery ||
+      (t.type === 'income' && (t.category === 'Udhaar Recovery' || t.category === 'Udhaar Received' || t.category === 'Udhaar Settle' || (t.category && t.category.toLowerCase().includes('udhaar') && t.type === 'income')))
+    );
+
     if (t.type === 'income') {
-      if (!isRimInflow) {
+      if (isUdhaarRecovery) {
+        prevUdhaarRecovered += amt;
+      } else if (!isRimInflow) {
         prevIncome += amt;
       }
     } else {
@@ -122,9 +134,6 @@ export const OverviewCards: React.FC<OverviewCardsProps> = ({
     }
   }
 
-  const openingNetSavings = prevIncome - prevTotalExpense; // Carryforward true savings (Udhar exempt)
-  const openingCashBalance = prevIncome - prevTotalExpense - prevUdhaarLent;   // Carryforward cash balance
-
   // 3. Selected Month figures
   let monthIncome = 0;
   let monthRimRecovery = 0;
@@ -132,6 +141,7 @@ export const OverviewCards: React.FC<OverviewCardsProps> = ({
   let monthPersonalExpense = 0;
   let monthBudgetSpent = 0;
   let monthUdhaarLent = 0;
+  let monthUdhaarRecovered = 0;
   let monthPendingRim = 0;
   let monthIncomeCount = 0;
   let monthExpenseCount = 0;
@@ -140,10 +150,17 @@ export const OverviewCards: React.FC<OverviewCardsProps> = ({
     const amt = Number(t.amount) || 0;
     const isRimInflow = Boolean(
       t.isReimbursementInflow ||
-      (t.type === 'income' && (t.isReimbursement || t.category === 'Reimbursement' || t.category === 'Reimbursement Received'))
+      (t.type === 'income' && (t.category === 'Reimbursement' || t.category === 'Reimbursement Received'))
     );
+    const isUdhaarRecovery = Boolean(
+      t.isUdhaarRecovery ||
+      (t.type === 'income' && (t.category === 'Udhaar Recovery' || t.category === 'Udhaar Received' || t.category === 'Udhaar Settle' || (t.category && t.category.toLowerCase().includes('udhaar') && t.type === 'income')))
+    );
+
     if (t.type === 'income') {
-      if (!isRimInflow) {
+      if (isUdhaarRecovery) {
+        monthUdhaarRecovered += amt;
+      } else if (!isRimInflow) {
         monthIncome += amt;
         monthIncomeCount++;
       } else {
@@ -184,6 +201,46 @@ export const OverviewCards: React.FC<OverviewCardsProps> = ({
     }
   }
 
+  // 4. Udhaar Tab Analysis (Dedicated Khata Records)
+  const safeUdhaars = Array.isArray(udhaars) ? udhaars : [];
+  const tabPendingLentRecords = safeUdhaars.filter(u => u && u.type === 'lent' && u.status !== 'settled');
+  const tabSettledLentRecords = safeUdhaars.filter(u => u && u.type === 'lent' && u.status === 'settled');
+  const tabPendingBorrowedRecords = safeUdhaars.filter(u => u && u.type === 'borrowed' && u.status !== 'settled');
+
+  const tabPendingLent = tabPendingLentRecords.reduce((sum, u) => sum + (Number(u.amount) || 0), 0);
+  const tabPendingBorrowed = tabPendingBorrowedRecords.reduce((sum, u) => sum + (Number(u.amount) || 0), 0);
+  const tabTotalSettled = tabSettledLentRecords.reduce((sum, u) => sum + (Number(u.amount) || 0), 0);
+
+  const monthTabPendingLent = tabPendingLentRecords
+    .filter(u => !isAllTime ? (u.date && u.date.startsWith(activeMonth)) : true)
+    .reduce((sum, u) => sum + (Number(u.amount) || 0), 0);
+
+  const prevTabPendingLent = tabPendingLentRecords
+    .filter(u => !isAllTime ? (u.date && u.date < `${activeMonth}-01`) : false)
+    .reduce((sum, u) => sum + (Number(u.amount) || 0), 0);
+
+  // Synchronized Bakaya: If Udhaar tab has records, its unsettled status is authoritative!
+  const hasUdhaarTabEntries = safeUdhaars.length > 0;
+  const effectiveTotalBakaya = hasUdhaarTabEntries
+    ? Math.max(0, tabPendingLent - tabPendingBorrowed)
+    : Math.max(0, (prevUdhaarLent + monthUdhaarLent) - (prevUdhaarRecovered + monthUdhaarRecovered));
+
+  const effectiveMonthBakaya = hasUdhaarTabEntries
+    ? monthTabPendingLent
+    : Math.max(0, monthUdhaarLent - monthUdhaarRecovered);
+
+  const effectivePrevBakaya = hasUdhaarTabEntries
+    ? prevTabPendingLent
+    : Math.max(0, prevUdhaarLent - prevUdhaarRecovered);
+
+  const effectiveTotalSettled = hasUdhaarTabEntries
+    ? tabTotalSettled
+    : (prevUdhaarRecovered + monthUdhaarRecovered);
+
+  // Opening & Cash Balance (Recovered cash flows back to liquid balance)
+  const openingNetSavings = prevIncome - prevTotalExpense;
+  const openingCashBalance = prevIncome - prevTotalExpense - prevUdhaarLent + prevUdhaarRecovered;
+
   // Active family member calculation in selected month
   const memberTxs = monthTransactions.filter(t => {
     if (!activeFamilyMemberName) return false;
@@ -198,7 +255,7 @@ export const OverviewCards: React.FC<OverviewCardsProps> = ({
   const displayPersonalExpense = isFamily ? memberPersonalExpense : monthPersonalExpense;
   // Net Savings preserves Udhar as receivable asset (income - non-udhaar expense)
   const monthNetSavings = monthIncome - monthTotalExpense;
-  const monthCashBalance = monthIncome - monthTotalExpense - monthUdhaarLent;
+  const monthCashBalance = monthIncome - monthTotalExpense - monthUdhaarLent + monthUdhaarRecovered;
 
   // Cumulative / Total at the end of selected month
   const totalNetSavings = openingNetSavings + monthNetSavings;
@@ -411,8 +468,13 @@ export const OverviewCards: React.FC<OverviewCardsProps> = ({
               <span>{displayAmount(displayPersonalExpense, true)}</span>
             </div>
             {monthUdhaarLent > 0 && !isFamily && (
-              <div className="text-[10px] text-amber-300 font-medium mt-1 flex items-center gap-1">
-                <span>🤝 ₹{displayAmount(monthUdhaarLent)} Udhaar Diya (Budget Free)</span>
+              <div className="text-[10px] text-amber-300 font-medium mt-1 flex items-center gap-1 flex-wrap">
+                <span>🤝 ₹{displayAmount(monthUdhaarLent)} Is Mahine Udhaar Diya</span>
+                {effectiveMonthBakaya < monthUdhaarLent && (
+                  <span className="text-[9px] text-emerald-300 font-semibold bg-emerald-950/60 px-1 rounded border border-emerald-500/30">
+                    (₹{displayAmount(monthUdhaarLent - effectiveMonthBakaya)} Wapas Aaya • ₹{displayAmount(effectiveMonthBakaya)} Bakaya)
+                  </span>
+                )}
               </div>
             )}
           </div>
@@ -449,13 +511,45 @@ export const OverviewCards: React.FC<OverviewCardsProps> = ({
                 {displayAmount(totalNetSavings)}
               </span>
             </div>
-            {totalUdhaarLent > 0 && !isFamily && (
-              <div className="mt-1 flex items-center gap-1.5">
-                <span className="inline-flex items-center text-[10px] font-medium text-emerald-400 bg-emerald-950/50 border border-emerald-500/30 px-1.5 py-0.5 rounded-md">
-                  🤝 ₹{displayAmount(totalUdhaarLent)} Udhaar Diya (Lena Hai • Bachat Surakshit)
-                </span>
+            {effectiveTotalBakaya > 0 && !isFamily ? (
+              <div className="mt-1 flex items-center gap-1.5 flex-wrap">
+                <button 
+                  type="button"
+                  onClick={onNavigateToUdhaar}
+                  className="inline-flex items-center text-[10px] font-medium text-emerald-400 bg-emerald-950/60 hover:bg-emerald-900/60 border border-emerald-500/40 px-2 py-0.5 rounded-md transition-all cursor-pointer shadow-xs text-left group"
+                  title="Click karke Udhaar Khata (Wealth & Khata) kholein"
+                >
+                  {effectivePrevBakaya > 0 && !isAllTime ? (
+                    <span>
+                      🤝 <b>Udhaar Khata Bakaya:</b> ₹{displayAmount(effectiveTotalBakaya)} (Is Mahine: ₹{displayAmount(effectiveMonthBakaya)} • Pichla: ₹{displayAmount(effectivePrevBakaya)})
+                    </span>
+                  ) : (
+                    <span>
+                      🤝 <b>Udhaar Khata Bakaya:</b> ₹{displayAmount(effectiveTotalBakaya)} Lena Hai (Bachat Surakshit)
+                    </span>
+                  )}
+                  {effectiveTotalSettled > 0 && (
+                    <span className="ml-1 text-[9px] text-emerald-300/80 font-normal">
+                      • ₹{displayAmount(effectiveTotalSettled)} Settle Hua
+                    </span>
+                  )}
+                  <span className="ml-1 text-[9px] text-cyan-400 group-hover:underline font-mono">
+                    [Khata ↗]
+                  </span>
+                </button>
               </div>
-            )}
+            ) : effectiveTotalSettled > 0 && !isFamily ? (
+              <div className="mt-1 flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={onNavigateToUdhaar}
+                  className="inline-flex items-center text-[10px] font-medium text-cyan-400 bg-cyan-950/50 border border-cyan-500/30 px-1.5 py-0.5 rounded-md hover:bg-cyan-900/50 cursor-pointer"
+                  title="Sabhi Udhaar Settle ho chuke hain! Khata dekhne ke liye click karein"
+                >
+                  ✨ Udhaar Khata Settle (₹{displayAmount(effectiveTotalSettled)} Wapas Aaya) [Khata ↗]
+                </button>
+              </div>
+            ) : null}
           </div>
 
           <div className="mt-3 flex items-center justify-between text-xs pt-2.5 border-t border-white/[0.08] relative z-10">

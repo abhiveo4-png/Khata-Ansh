@@ -257,6 +257,8 @@ export interface FinancialSummary {
   totalCashBalance?: number;
   udhaarLentTotal?: number;
   currentMonthUdhaarLent?: number;
+  pendingUdhaarBakaya?: number;
+  currentMonthUdhaarBakaya?: number;
 }
 
 export interface UdhaarRecord {
@@ -727,13 +729,67 @@ let users: UserProfile[] = loadJson<UserProfile[]>(USERS_FILE, []);
 let telegramLogs: TelegramLog[] = loadJson<TelegramLog[]>(LOGS_FILE, []);
 let chatActiveAccounts: Record<string, string> = loadJson<Record<string, string>>(ACTIVE_ACCOUNTS_FILE, {});
 let chatAiAdvisorMode: Record<string, boolean> = loadJson<Record<string, boolean>>(AI_ADVISOR_MODE_FILE, {});
+const TELEGRAM_TOKEN_REGEX = /^\d{7,15}:[A-Za-z0-9_-]{30,50}$/;
+
+export function getEnvBotToken(): string {
+  // 1. Check standard environment variable names
+  const candidates = [
+    process.env.TELEGRAM_BOT_TOKEN,
+    process.env.BOT_TOKEN,
+    process.env.TELEGRAM_TOKEN,
+    process.env.TG_BOT_TOKEN,
+    process.env.TG_TOKEN,
+    process.env.TELEGRAM_API_TOKEN,
+    process.env.VITE_TELEGRAM_BOT_TOKEN,
+  ];
+  for (const val of candidates) {
+    if (val) {
+      const cleaned = val.trim().replace(/^["']|["']$/g, '').trim();
+      if (cleaned) return cleaned;
+    }
+  }
+
+  // 2. Fallback: Auto-detect any environment variable in Render whose value matches Telegram Bot Token format (<bot_id>:<secret>)
+  for (const [, val] of Object.entries(process.env)) {
+    if (!val) continue;
+    const cleaned = val.trim().replace(/^["']|["']$/g, '').trim();
+    if (TELEGRAM_TOKEN_REGEX.test(cleaned)) {
+      return cleaned;
+    }
+  }
+
+  return '';
+}
+
+export function getActiveBotToken(): string {
+  // Environment variable ALWAYS has #1 priority (e.g. Render Environment Variables)
+  const envToken = getEnvBotToken();
+  if (envToken) return envToken;
+
+  if (
+    typeof botConfig !== 'undefined' &&
+    botConfig.botToken &&
+    botConfig.botToken.trim()
+  ) {
+    return botConfig.botToken.trim();
+  }
+  return '';
+}
+
 let botConfig: BotConfig = loadJson<BotConfig>(BOT_CONFIG_FILE, {
-  botToken: process.env.TELEGRAM_BOT_TOKEN || '8805911705:AAFqlnYNiguHCdar15R3XX8JJkuI0nXNanc',
-  isWebhookSet: true,
-  isConnected: true,
-  botUsername: 'khata_ansh_bot',
-  botName: 'khatabot',
+  botToken: '',
+  isWebhookSet: false,
+  isConnected: false,
+  botUsername: '',
+  botName: '',
 });
+
+// If an environment variable token is configured (e.g. on Render), sync it into botConfig
+if (getEnvBotToken()) {
+  botConfig.botToken = getEnvBotToken();
+  botConfig.isConnected = true;
+  saveJson(BOT_CONFIG_FILE, botConfig);
+}
 
 // Cache of loaded user data
 const userDataCache = new Map<string, UserDataStore>();
@@ -786,8 +842,11 @@ async function initPgDatabase(): Promise<boolean> {
         } else if (row.key === 'bot_config') {
           if (row.data) {
             botConfig = { ...botConfig, ...row.data };
-            if (process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_BOT_TOKEN.trim()) {
-              botConfig.botToken = process.env.TELEGRAM_BOT_TOKEN.trim();
+            const envTok = getEnvBotToken();
+            if (envTok) {
+              botConfig.botToken = envTok;
+              botConfig.isConnected = true;
+              persistToPg('bot_config', botConfig).catch(() => {});
             }
             saveJson(BOT_CONFIG_FILE, botConfig);
           }
@@ -1316,6 +1375,8 @@ function calculateUserSummary(userId: string): FinancialSummary {
   let prevTotalExpense = 0;
   let prevPersonalExpense = 0;
   let prevUdhaarLent = 0;
+  let prevUdhaarRecovered = 0;
+  let currentMonthUdhaarRecovered = 0;
 
   const istInfo = getAppDateTime();
   const currentMonthPrefix = istInfo.date.substring(0, 7);
@@ -1336,11 +1397,14 @@ function calculateUserSummary(userId: string): FinancialSummary {
     );
     const isUdhaarRecovery = Boolean(
       t.isUdhaarRecovery ||
-      (t.type === 'income' && (t.category === 'Udhaar Recovery' || t.category === 'Udhaar Received' || t.category === 'Udhaar Settle'))
+      (t.type === 'income' && (t.category === 'Udhaar Recovery' || t.category === 'Udhaar Received' || t.category === 'Udhaar Settle' || (t.category && t.category.toLowerCase().includes('udhaar') && t.type === 'income')))
     );
 
     if (t.type === 'income') {
-      if (!isRimInflow && !isUdhaarRecovery) {
+      if (isUdhaarRecovery) {
+        if (isCurrentMonth) currentMonthUdhaarRecovered += amt;
+        if (isPrevMonth) prevUdhaarRecovered += amt;
+      } else if (!isRimInflow) {
         totalIncome += amt;
         incomeCount++;
         if (isCurrentMonth) currentMonthIncome += amt;
@@ -1413,15 +1477,37 @@ function calculateUserSummary(userId: string): FinancialSummary {
     }
   }
 
-  // True Carryforward Net Savings (Identical to Web App: prevIncome - prevTotalExpense)
+  // Analyze store.udhaars (Udhaar Tab Dedicated Khata Records)
+  const storeUdhaars = store.udhaars || [];
+  const tabPendingLent = storeUdhaars
+    .filter(u => u && u.type === 'lent' && u.status !== 'settled')
+    .reduce((sum, u) => sum + (Number(u.amount) || 0), 0);
+  const tabPendingBorrowed = storeUdhaars
+    .filter(u => u && u.type === 'borrowed' && u.status !== 'settled')
+    .reduce((sum, u) => sum + (Number(u.amount) || 0), 0);
+  const tabMonthPendingLent = storeUdhaars
+    .filter(u => u && u.type === 'lent' && u.status !== 'settled' && u.date && u.date.startsWith(currentMonthPrefix))
+    .reduce((sum, u) => sum + (Number(u.amount) || 0), 0);
+
+  // Unified Bakaya: If Udhaar tab has entries, Udhaar tab pending balance is authoritative!
+  const hasStoreUdhaars = storeUdhaars.length > 0;
+  const pendingUdhaarBakaya = hasStoreUdhaars
+    ? Math.max(0, tabPendingLent - tabPendingBorrowed)
+    : Math.max(0, (prevUdhaarLent + currentMonthUdhaarLent) - (prevUdhaarRecovered + currentMonthUdhaarRecovered));
+
+  const currentMonthUdhaarBakaya = hasStoreUdhaars
+    ? tabMonthPendingLent
+    : Math.max(0, currentMonthUdhaarLent - currentMonthUdhaarRecovered);
+
+  // True Carryforward Net Savings
   const openingCarryforward = prevIncome - prevTotalExpense;
-  const openingCashBalance = prevIncome - prevTotalExpense - prevUdhaarLent;
-  // Net Savings deducts actual expenses from income (Udhar is an asset loan, NOT subtracted from Net Savings!)
+  const openingCashBalance = prevIncome - prevTotalExpense - prevUdhaarLent + prevUdhaarRecovered;
+  // Net Savings deducts actual expenses from income
   const currentMonthNetSavings = currentMonthIncome - currentMonthTotalExpense;
   const totalNetSavings = openingCarryforward + currentMonthNetSavings;
 
-  // True Liquid Cash = Income - Expenses - Money Lent
-  const cashBalance = openingCashBalance + (currentMonthIncome - currentMonthTotalExpense - currentMonthUdhaarLent);
+  // True Liquid Cash = Income - Expenses - Money Lent + Money Recovered
+  const cashBalance = openingCashBalance + (currentMonthIncome - currentMonthTotalExpense - currentMonthUdhaarLent + currentMonthUdhaarRecovered);
   const savingsRate = currentMonthIncome > 0 ? Math.max(0, Math.round((currentMonthNetSavings / currentMonthIncome) * 100)) : 0;
   
   // Budget limit calculation strictly EXCLUDES categories that are exempt from budget!
@@ -1472,8 +1558,10 @@ function calculateUserSummary(userId: string): FinancialSummary {
     totalNetSavings,
     cashBalance,
     totalCashBalance: cashBalance,
-    udhaarLentTotal,
+    udhaarLentTotal: pendingUdhaarBakaya,
     currentMonthUdhaarLent,
+    pendingUdhaarBakaya,
+    currentMonthUdhaarBakaya,
   };
 }
 
@@ -4597,7 +4685,7 @@ async function sendTelegramReply(
 }
 
 async function handleTelegramCallbackQuery(callbackQuery: any) {
-  const token = process.env.TELEGRAM_BOT_TOKEN || botConfig.botToken;
+  const token = getActiveBotToken();
   if (!token) return;
 
   const callbackId = callbackQuery.id;
@@ -4835,7 +4923,7 @@ async function handleTelegramMessage(messageObj: any) {
     ? `${fromUser.first_name}${fromUser.last_name ? ' ' + fromUser.last_name : ''}`.trim()
     : fromUser.username || 'User';
   const rawText = (messageObj.text || messageObj.caption || '').trim();
-  const botToken = process.env.TELEGRAM_BOT_TOKEN || botConfig.botToken;
+  const botToken = getActiveBotToken();
 
   if (!botToken || !chatId) return;
 
@@ -7941,7 +8029,19 @@ Aapne <b>${detectedDuplicateTx.minutesAgo} min pehle</b> bhi same <b>₹${detect
 
 let isPollingActive = false;
 let lastUpdateId = 0;
-let hasRegisteredBotCommands = false;
+let lastRegisteredToken = '';
+const processedUpdateIds = new Set<number>();
+
+function markUpdateProcessed(updateId?: number): boolean {
+  if (!updateId) return true;
+  if (processedUpdateIds.has(updateId)) return false;
+  processedUpdateIds.add(updateId);
+  if (processedUpdateIds.size > 300) {
+    const oldest = processedUpdateIds.values().next().value;
+    if (oldest !== undefined) processedUpdateIds.delete(oldest);
+  }
+  return true;
+}
 
 async function startTelegramPollingWorker() {
   if (isPollingActive) return;
@@ -7950,14 +8050,26 @@ async function startTelegramPollingWorker() {
   console.log('🤖 Starting Telegram Direct Long Polling Engine with Handy Buttons & Commands...');
 
   while (isPollingActive) {
-    const token = process.env.TELEGRAM_BOT_TOKEN || botConfig.botToken;
+    const token = getActiveBotToken();
     if (!token) {
-      await new Promise(r => setTimeout(r, 3000));
+      await new Promise(r => setTimeout(r, 4000));
       continue;
     }
 
-    if (!hasRegisteredBotCommands) {
-      hasRegisteredBotCommands = true;
+    if (lastRegisteredToken !== token) {
+      lastRegisteredToken = token;
+      // Fetch bot info & sync commands whenever token is loaded/changed
+      safeTelegramFetch(`https://api.telegram.org/bot${token}/getMe`)
+        .then(async r => {
+          const d = await r?.json().catch(() => null);
+          if (d && d.ok && d.result) {
+            botConfig.botUsername = d.result.username || botConfig.botUsername;
+            botConfig.botName = d.result.first_name || botConfig.botName;
+            botConfig.isConnected = true;
+            saveJson(BOT_CONFIG_FILE, botConfig);
+          }
+        })
+        .catch(() => {});
       syncTelegramBotCommandsAndMenu(token).catch(e => console.error('Auto sync commands error:', e));
     }
 
@@ -7970,15 +8082,32 @@ async function startTelegramPollingWorker() {
         continue;
       }
 
+      if (response.status === 401) {
+        console.error(`❌ [Telegram Polling] 401 Unauthorized for bot token (${token.slice(0, 10)}...). Please verify TELEGRAM_BOT_TOKEN in Render Environment.`);
+        await new Promise(r => setTimeout(r, 10000));
+        continue;
+      }
+
       if (response.status === 409) {
-        // Webhook is active and receiving updates directly - stop polling loop permanently to save 100% bandwidth!
-        console.log('✅ Webhook is active on Telegram. Stopping background polling loop permanently.');
-        isPollingActive = false;
-        break;
+        const errData = await response.json().catch(() => null);
+        const desc = String(errData?.description || '').toLowerCase();
+        if (desc.includes('webhook')) {
+          console.log('⚠️ [Telegram] Active webhook was blocking getUpdates. Removing webhook to enable Direct Polling...');
+          await safeTelegramFetch(`https://api.telegram.org/bot${token}/deleteWebhook?drop_pending_updates=false`);
+          botConfig.isWebhookSet = false;
+          saveJson(BOT_CONFIG_FILE, botConfig);
+          await new Promise(r => setTimeout(r, 2000));
+          continue;
+        } else {
+          // Overlapping getUpdates request during Render zero-downtime container restart
+          console.log('⏳ [Telegram] Previous container instance closing getUpdates (409). Retrying in 4s...');
+          await new Promise(r => setTimeout(r, 4000));
+          continue;
+        }
       }
 
       if (!response.ok) {
-        await new Promise(r => setTimeout(r, 2000));
+        await new Promise(r => setTimeout(r, 3000));
         continue;
       }
 
@@ -7988,21 +8117,24 @@ async function startTelegramPollingWorker() {
           if (update.update_id > lastUpdateId) {
             lastUpdateId = update.update_id;
           }
-          if (update.message) {
-            await handleTelegramMessage(update.message);
+          if (!markUpdateProcessed(update.update_id)) continue;
+
+          const msg = update.message || update.edited_message;
+          if (msg) {
+            console.log(`📩 [Telegram Incoming] User: ${msg.from?.first_name || 'N/A'} (Chat ID: ${msg.chat?.id}) Text: "${msg.text || msg.caption || ''}"`);
+            await handleTelegramMessage(msg);
           } else if (update.callback_query) {
+            console.log(`🔘 [Telegram Callback] User: ${update.callback_query.from?.first_name || 'N/A'} Data: "${update.callback_query.data}"`);
             await handleTelegramCallbackQuery(update.callback_query);
           }
         }
       }
-    } catch {
-      await new Promise(r => setTimeout(r, 1000));
+    } catch (err: any) {
+      console.error('Telegram polling error:', err?.message || err);
+      await new Promise(r => setTimeout(r, 2000));
     }
   }
 }
-
-// Start worker immediately
-startTelegramPollingWorker();
 
 // ---------------- REST API Endpoints ----------------
 
@@ -8023,15 +8155,13 @@ app.get(['/api/users', '/api/auth/users'], (req, res) => {
 // Telegram Webhook receiver
 app.post('/api/telegram/webhook', async (req, res) => {
   res.status(200).send('OK');
-  if (isPollingActive) {
-    isPollingActive = false;
-    console.log('⚡ Webhook update received! Polling permanently disabled.');
-  }
   try {
     const update = req.body;
-    if (update && update.message) {
-      await handleTelegramMessage(update.message);
-    } else if (update && update.callback_query) {
+    if (!update || !markUpdateProcessed(update.update_id)) return;
+    const msg = update.message || update.edited_message;
+    if (msg) {
+      await handleTelegramMessage(msg);
+    } else if (update.callback_query) {
       await handleTelegramCallbackQuery(update.callback_query);
     }
   } catch (err: any) {
@@ -8310,7 +8440,7 @@ app.post(['/api/auth/delete-account', '/api/users/delete'], async (req, res) => 
 
   // 4. Optionally notify telegram chat if linked
   if (user.telegramChatId) {
-    const botToken = process.env.TELEGRAM_BOT_TOKEN || botConfig.botToken;
+    const botToken = getActiveBotToken();
     if (botToken) {
       sendTelegramReply(
         botToken,
@@ -8515,7 +8645,7 @@ app.post(['/api/members/approve-request', '/api/auth/members/approve-request'], 
   setActiveAccountForChat(foundReq.chatId, user.id);
 
   // Notify member on Telegram
-  const botToken = process.env.TELEGRAM_BOT_TOKEN || botConfig.botToken;
+  const botToken = getActiveBotToken();
   if (botToken) {
     sendTelegramReply(
       botToken,
@@ -8552,7 +8682,7 @@ app.post(['/api/members/reject-request', '/api/auth/members/reject-request'], as
   user.pendingRequests = user.pendingRequests.filter(r => r.id !== requestId);
   saveUsers(users);
 
-  const botToken = process.env.TELEGRAM_BOT_TOKEN || botConfig.botToken;
+  const botToken = getActiveBotToken();
   if (botToken) {
     sendTelegramReply(
       botToken,
@@ -11134,9 +11264,16 @@ let cachedWebhookInfo: any = null;
 let lastTelegramApiCheck = 0;
 
 app.get('/api/telegram/config', async (req, res) => {
-  const currentToken = process.env.TELEGRAM_BOT_TOKEN || botConfig.botToken || '';
-  const appUrl = 'https://ais-dev-tqtvhllm5ccjbvvdxz44bm-657007980218.asia-east1.run.app';
-  const webhookUrl = `${appUrl}/api/telegram/webhook`;
+  const currentToken = getActiveBotToken();
+  const host = req.get('host') || '';
+  const proto = req.protocol === 'https' || req.get('x-forwarded-proto') === 'https' ? 'https' : 'http';
+  const detectedUrl = host ? `${proto}://${host}` : '';
+  const appUrl =
+    process.env.RENDER_EXTERNAL_URL ||
+    process.env.APP_URL ||
+    (detectedUrl.startsWith('https://') ? detectedUrl : '') ||
+    'https://ais-dev-tqtvhllm5ccjbvvdxz44bm-657007980218.asia-east1.run.app';
+  const webhookUrl = `${appUrl.replace(/\/$/, '')}/api/telegram/webhook`;
 
   const forceRefresh = req.query.refresh === 'true';
   const now = Date.now();
@@ -11164,6 +11301,7 @@ app.get('/api/telegram/config', async (req, res) => {
         if (hookData && hookData.ok) {
           webhookInfo = hookData.result;
           cachedWebhookInfo = webhookInfo;
+          botConfig.isWebhookSet = Boolean(webhookInfo?.url);
         }
       }
     } catch {
@@ -11172,7 +11310,6 @@ app.get('/api/telegram/config', async (req, res) => {
   }
 
   botConfig.isConnected = !!(botConfig.botToken && botConfig.botUsername);
-  botConfig.isWebhookSet = !!(botConfig.botToken && botConfig.botUsername);
   saveJson(BOT_CONFIG_FILE, botConfig);
 
   res.json({
@@ -11186,27 +11323,27 @@ app.get('/api/telegram/config', async (req, res) => {
 
 app.post('/api/telegram/config', async (req, res) => {
   const { botToken, geminiApiKey } = req.body;
-  if (botToken !== undefined) {
+  if (botToken !== undefined && (botToken || '').trim()) {
     botConfig.botToken = (botToken || '').trim();
   }
   if (geminiApiKey !== undefined) {
     botConfig.geminiApiKey = (geminiApiKey || '').trim();
   }
 
-  if (botConfig.botToken) {
+  const activeToken = getActiveBotToken();
+  if (activeToken) {
     try {
-      const meRes = await safeTelegramFetch(`https://api.telegram.org/bot${botConfig.botToken}/getMe`);
+      const meRes = await safeTelegramFetch(`https://api.telegram.org/bot${activeToken}/getMe`);
       if (meRes && meRes.ok) {
         const meData = await meRes.json().catch(() => null);
         if (meData && meData.ok) {
           botConfig.botUsername = meData.result.username;
           botConfig.botName = meData.result.first_name;
           botConfig.isConnected = true;
-          botConfig.isWebhookSet = true;
         }
       }
       // Auto sync handy commands and menu button
-      await syncTelegramBotCommandsAndMenu(botConfig.botToken);
+      await syncTelegramBotCommandsAndMenu(activeToken);
     } catch (err: any) {
       botConfig.lastError = err.message;
     }
@@ -11215,6 +11352,79 @@ app.post('/api/telegram/config', async (req, res) => {
   saveJson(BOT_CONFIG_FILE, botConfig);
   persistToPg('bot_config', botConfig).catch(() => {});
   res.json({ success: true, config: botConfig });
+});
+
+// 5.1 Set Webhook Endpoint
+app.post('/api/telegram/set-webhook', async (req, res) => {
+  const { botToken, webhookUrl } = req.body;
+  const token = (botToken || getActiveBotToken()).trim();
+  const host = req.get('host') || '';
+  const proto = req.protocol === 'https' || req.get('x-forwarded-proto') === 'https' ? 'https' : 'http';
+  const autoUrl = host ? `${proto}://${host}/api/telegram/webhook` : '';
+  const url = (webhookUrl || autoUrl || '').trim();
+
+  if (!token) {
+    return res.status(400).json({ success: false, error: 'Telegram Bot Token is required' });
+  }
+  if (!url || !url.startsWith('https://')) {
+    return res.status(400).json({ success: false, error: 'Valid HTTPS Webhook URL is required (must start with https://)' });
+  }
+
+  try {
+    const tgRes = await safeTelegramFetch(`https://api.telegram.org/bot${token}/setWebhook`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        url,
+        allowed_updates: ['message', 'edited_message', 'callback_query'],
+        drop_pending_updates: false,
+      }),
+    });
+
+    const data = await tgRes?.json().catch(() => null);
+    if (data && data.ok) {
+      botConfig.botToken = token;
+      botConfig.isWebhookSet = true;
+      botConfig.isConnected = true;
+      cachedWebhookInfo = null;
+      saveJson(BOT_CONFIG_FILE, botConfig);
+      persistToPg('bot_config', botConfig).catch(() => {});
+      console.log(`✅ [Telegram] Webhook successfully registered: ${url}`);
+      return res.json({ success: true, message: 'Webhook successfully registered on Telegram!', result: data.result });
+    } else {
+      const errDesc = data?.description || 'Telegram rejected webhook registration';
+      console.error(`❌ [Telegram] Webhook registration failed: ${errDesc}`);
+      return res.status(400).json({ success: false, error: errDesc });
+    }
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// 5.2 Delete Webhook Endpoint (switches to Direct Polling)
+app.post('/api/telegram/delete-webhook', async (req, res) => {
+  const { botToken } = req.body;
+  const token = (botToken || getActiveBotToken()).trim();
+
+  try {
+    const delRes = await safeTelegramFetch(`https://api.telegram.org/bot${token}/deleteWebhook?drop_pending_updates=false`);
+    const data = await delRes?.json().catch(() => null);
+    botConfig.isWebhookSet = false;
+    cachedWebhookInfo = null;
+    saveJson(BOT_CONFIG_FILE, botConfig);
+    persistToPg('bot_config', botConfig).catch(() => {});
+
+    // Resume polling engine
+    startTelegramPollingWorker();
+
+    return res.json({
+      success: true,
+      message: 'Telegram Webhook disconnected. Direct Polling engine active.',
+      result: data?.result,
+    });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
 });
 
 // Gemini AI API Configuration Endpoint (Web App)
@@ -11277,7 +11487,7 @@ app.post('/api/gemini/config', async (req, res) => {
 
 // Endpoint to manually or automatically trigger menu & commands synchronization
 app.all('/api/telegram/sync-commands', async (req, res) => {
-  const token = process.env.TELEGRAM_BOT_TOKEN || botConfig.botToken || '';
+  const token = getActiveBotToken();
   if (!token) {
     return res.status(400).json({ success: false, error: 'Telegram bot token is not configured.' });
   }
@@ -12723,7 +12933,7 @@ app.delete('/api/fuel/:id', (req, res) => {
 
 // 7.3 Daily Digest & Smart Alerts Service
 async function sendDailyTelegramDigest(type: 'morning' | 'evening') {
-  const botToken = process.env.TELEGRAM_BOT_TOKEN || botConfig.botToken;
+  const botToken = getActiveBotToken();
   if (!botToken) return;
 
   const activeChats = Object.keys(chatActiveAccounts);
@@ -12947,6 +13157,9 @@ async function startServer() {
     await initPgDatabase();
   }
 
+  // Start Telegram Direct Polling Worker after database hydration
+  startTelegramPollingWorker();
+
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
       server: {
@@ -13102,14 +13315,17 @@ async function startServer() {
       console.log(`📁 Storage Engine: Persistent Disk / Local (${DATA_DIR})`);
     }
 
-    const startupToken = process.env.TELEGRAM_BOT_TOKEN || botConfig.botToken;
+    const startupToken = getActiveBotToken();
     if (startupToken) {
+      console.log(`🔑 Telegram Bot Token detected from ${getEnvBotToken() ? 'Environment Variable' : 'Stored Config'} (${startupToken.slice(0, 8)}...)`);
       syncTelegramBotCommandsAndMenu(startupToken)
         .then(ok => {
           if (ok) console.log('✅ Telegram bot commands & menu button synced successfully with Telegram!');
           else console.log('⚠️ Could not sync Telegram bot commands (check token or network).');
         })
         .catch(e => console.error('Error auto-syncing Telegram bot commands:', e));
+    } else {
+      console.log('ℹ️ No Telegram Bot Token found in environment. Set TELEGRAM_BOT_TOKEN in Render Environment Variables.');
     }
   });
 }
