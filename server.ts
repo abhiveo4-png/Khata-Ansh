@@ -253,6 +253,10 @@ export interface FinancialSummary {
   currentMonthCount?: number;
   openingCarryforward?: number;
   totalNetSavings?: number;
+  cashBalance?: number;
+  totalCashBalance?: number;
+  udhaarLentTotal?: number;
+  currentMonthUdhaarLent?: number;
 }
 
 export interface UdhaarRecord {
@@ -1306,8 +1310,12 @@ function calculateUserSummary(userId: string): FinancialSummary {
   let currentMonthTotalExpense = 0;
   let currentMonthPersonalExpense = 0;
   let currentMonthCount = 0;
+  let currentMonthUdhaarLent = 0;
+  let udhaarLentTotal = 0;
   let prevIncome = 0;
+  let prevTotalExpense = 0;
   let prevPersonalExpense = 0;
+  let prevUdhaarLent = 0;
 
   const istInfo = getAppDateTime();
   const currentMonthPrefix = istInfo.date.substring(0, 7);
@@ -1339,11 +1347,6 @@ function calculateUserSummary(userId: string): FinancialSummary {
         if (isPrevMonth) prevIncome += amt;
       }
     } else {
-      totalExpense += amt;
-      expenseCount++;
-
-      if (isCurrentMonth) currentMonthTotalExpense += amt;
-
       // Check if reimbursement, wife transfer, CC payment, udhaar lent, or custom excluded category
       const isRim = Boolean(t.isReimbursement || t.category === 'Reimbursement');
       const isWifeTr = Boolean(t.isWifeTransfer || t.category === 'Wife Transfer' || (t.category && t.category.toLowerCase().includes('wife')));
@@ -1359,6 +1362,11 @@ function calculateUserSummary(userId: string): FinancialSummary {
       const isExemptFromBudget = Boolean(catDef?.excludeFromBudget) || isRim || isWifeTr || isCcPay || isUdhaarLent;
 
       if (isRim) {
+        totalExpense += amt;
+        expenseCount++;
+        if (isCurrentMonth) currentMonthTotalExpense += amt;
+        if (isPrevMonth) prevTotalExpense += amt;
+
         const settledAmt = t.reimbursementStatus === 'settled'
           ? amt
           : Math.min(amt, Math.max(0, Number(t.reimbursementSettledAmount) || 0));
@@ -1367,9 +1375,24 @@ function calculateUserSummary(userId: string): FinancialSummary {
           pendingReimbursements += remaining;
         }
       } else if (isUdhaarLent) {
-        // Udhaar Lent: Bank/Card/Cash deducted, but EXEMPT from personal consumption and monthly budget limit!
+        // Udhaar Lent: Bank/Card/Cash deducted, but strictly EXEMPT from kharcha/expense, monthly budget, and Net Savings!
+        udhaarLentTotal += amt;
+        if (isCurrentMonth) currentMonthUdhaarLent += amt;
+        if (isPrevMonth) prevUdhaarLent += amt;
       } else {
-        personalExpense += amt;
+        totalExpense += amt;
+        expenseCount++;
+        if (isCurrentMonth) currentMonthTotalExpense += amt;
+        if (isPrevMonth) {
+          prevTotalExpense += amt;
+          if (!t.isSavingsTransfer && !isWifeTr && !isCcPay) {
+            prevPersonalExpense += amt;
+          }
+        }
+
+        if (!t.isSavingsTransfer && !isWifeTr && !isCcPay) {
+          personalExpense += amt;
+        }
         if (t.isInvestment) {
           investmentsTotal += amt;
         }
@@ -1377,29 +1400,36 @@ function calculateUserSummary(userId: string): FinancialSummary {
           savingsTransfers += amt;
         }
 
-        // Allocated monthly budget spent (excludes Wife Transfer, CC Payment, Reimbursements, Udhaar)
+        // Allocated monthly budget spent (excludes Wife Transfer, CC Payment, Reimbursements, Udhaar, and any category with excludeFromBudget)
         if (isCurrentMonth) {
-          currentMonthPersonalExpense += amt;
+          if (!t.isSavingsTransfer && !isWifeTr && !isCcPay) {
+            currentMonthPersonalExpense += amt;
+          }
           if (!isExemptFromBudget) {
             monthlySpent += amt;
           }
-        }
-        if (isPrevMonth) {
-          prevPersonalExpense += amt;
         }
       }
     }
   }
 
-  const openingCarryforward = prevIncome - prevPersonalExpense;
-  // Net Savings deducts all cash expenses (including Wife Transfers & CC Payments) from income
+  // True Carryforward Net Savings (Identical to Web App: prevIncome - prevTotalExpense)
+  const openingCarryforward = prevIncome - prevTotalExpense;
+  const openingCashBalance = prevIncome - prevTotalExpense - prevUdhaarLent;
+  // Net Savings deducts actual expenses from income (Udhar is an asset loan, NOT subtracted from Net Savings!)
   const currentMonthNetSavings = currentMonthIncome - currentMonthTotalExpense;
-  const totalNetSavings = totalIncome - totalExpense;
+  const totalNetSavings = openingCarryforward + currentMonthNetSavings;
 
-  // True Net Savings = Income - Personal Expense
-  const cashBalance = totalIncome - totalExpense;
+  // True Liquid Cash = Income - Expenses - Money Lent
+  const cashBalance = openingCashBalance + (currentMonthIncome - currentMonthTotalExpense - currentMonthUdhaarLent);
   const savingsRate = currentMonthIncome > 0 ? Math.max(0, Math.round((currentMonthNetSavings / currentMonthIncome) * 100)) : 0;
-  const expenseCats = new Set((store.categories || []).filter(c => c.type !== 'income').map(c => c.name.toLowerCase()));
+  
+  // Budget limit calculation strictly EXCLUDES categories that are exempt from budget!
+  const expenseCats = new Set(
+    (store.categories || [])
+      .filter(c => c.type !== 'income' && !c.excludeFromBudget && !['reimbursement', 'wife transfer', 'cc payment', 'udhaar given', 'udhaar', 'loan given'].includes(c.name.toLowerCase()))
+      .map(c => c.name.toLowerCase())
+  );
   const monthlyBudget = (store.budgets || [])
     .filter(b => expenseCats.has(b.category.toLowerCase()))
     .reduce((acc, b) => acc + (Number(b.limit) || 0), 0);
@@ -1440,6 +1470,10 @@ function calculateUserSummary(userId: string): FinancialSummary {
     currentMonthCount,
     openingCarryforward,
     totalNetSavings,
+    cashBalance,
+    totalCashBalance: cashBalance,
+    udhaarLentTotal,
+    currentMonthUdhaarLent,
   };
 }
 
@@ -1983,6 +2017,7 @@ export function extractCustomTimeString(text: string): string | undefined {
 function detectAccountFromText(text: string): string | undefined {
   if (!text) return undefined;
   const lower = text.toLowerCase();
+  if (lower.includes('2005') || (lower.includes('ic') && lower.includes('2005')) || lower.includes('ic bank 2005') || lower.includes('icici 2005')) return 'IC Bank 2005';
   if (lower.includes('0000') || /\b00\b/.test(lower) || lower.includes('rupay') || (lower.includes('icic') && lower.includes('cc')) || lower.includes('icici cc') || lower.includes('icici card')) return 'ICICI CC 0000';
   if (lower.includes('5733') || /\b33\b/.test(lower) || (lower.includes('sbi') && lower.includes('5733'))) return 'SBI CC 5733';
   if (lower.includes('6526') || /\b26\b/.test(lower) || (lower.includes('sbi') && lower.includes('6526'))) return 'SBI CC 6526';
@@ -2047,12 +2082,12 @@ function cleanTransactionDescription(rawDesc: string, detectedCategory?: string)
   if (!rawDesc) return detectedCategory || 'Expense';
   let cleaned = rawDesc
     // Remove account keywords and common bank words
-    .replace(/\b(?:ax\s*bank|axis\s*bank|ic\s*bank|icici\s*bank|sbi\s*bank|hdfc\s*bank|kotak\s*bank)\b/gi, '')
+    .replace(/\b(?:ax\s*bank|axis\s*bank|ic\s*bank\s*2005|ic\s*bank|icici\s*bank|sbi\s*bank|hdfc\s*bank|kotak\s*bank)\b/gi, '')
     .replace(/\b(?:icici\s*cc\s*0000|icici\s*cc|rupay\s*cc|sbi\s*cc\s*5733|sbi\s*cc\s*6526|sbi\s*5733|sbi\s*6526|ax\s*cc\s*8210|ax\s*cc\s*5376|ax\s*8210|ax\s*5376|axis\s*8210|axis\s*5376)\b/gi, '')
     .replace(/\b(?:axis\s*cc|axis\s*card|ax\s*cc|ax\s*card|icici\s*card|sbi\s*card)\b/gi, '')
     .replace(/\b(?:axis|ax|icici|sbi|hdfc|kotak)\s*(?:cc|card|bank)?\b/gi, '')
-    .replace(/\b(?:0000|5733|6526|8210|5376)\b/g, '')
-    .replace(/\b(?:00|33|26|76)\b/g, '')
+    .replace(/\b(?:0000|5733|6526|8210|5376|2005)\b/g, '')
+    .replace(/\b(?:00|33|26|76|05)\b/g, '')
     .replace(/\b(?:cash|nagad|rokda|upi|gpay|paytm|phonepe|net\s*banking|credit\s*card|debit\s*card|card|cc)\b/gi, '')
     .replace(/\b(?:rim|reimburse|reimbursement|office\s*claim|client\s*trip|claim)\b/gi, '')
     .replace(/\b(?:mila|mile|mil\s*gaya|aaya|aaye|aa\s*gaya|credit|credited|received|settled?|wapas)\b/gi, '')
@@ -2913,6 +2948,15 @@ const ACCOUNTS_META: Record<string, {
     color: '#a855f7',
     creditLimit: 90000,
   },
+  'IC Bank 2005': {
+    id: 'IC Bank 2005',
+    name: 'ICICI Bank Credit Card (2005)',
+    shortName: 'IC Bank 2005',
+    type: 'credit_card',
+    badge: 'ICICI CC',
+    color: '#e11d48',
+    creditLimit: 150000,
+  },
   'IC Bank': {
     id: 'IC Bank',
     name: 'ICICI Bank Savings Account',
@@ -3127,10 +3171,13 @@ export function buildBalancesTelegramMessage(userId: string, userName: string, i
   const cash = accounts['Cash'] || {};
 
   const iciciCC = accounts['ICICI CC 0000'] || {};
+  const icBank2005 = accounts['IC Bank 2005'] || {};
   const sbi5733 = accounts['SBI CC 5733'] || {};
   const sbi6526 = accounts['SBI CC 6526'] || {};
   const ax8210 = accounts['AX CC 8210'] || {};
   const ax5376 = accounts['AX CC 5376'] || {};
+
+  const summary = calculateUserSummary(userId);
 
   return `🏦 <b>ACCOUNTS & CARDS LIVE BALANCE</b>
 ━━━━━━━━━━━━━━━━━━━━
@@ -3150,6 +3197,9 @@ export function buildBalancesTelegramMessage(userId: string, userName: string, i
 • 🟠 <b>ICICI RuPay (0000):</b>
   Limit: ₹${(iciciCC.creditLimit || 120000).toLocaleString('en-IN')} | Bacha: 🟢 <b>₹${(iciciCC.availableLimit || 0).toLocaleString('en-IN')}</b>
   Spends/Due: 🔴 ₹${(iciciCC.currentOutstanding || 0).toLocaleString('en-IN')}
+• 🔴 <b>ICICI Bank (2005):</b>
+  Limit: ₹${(icBank2005.creditLimit || 150000).toLocaleString('en-IN')} | Bacha: 🟢 <b>₹${(icBank2005.availableLimit || 0).toLocaleString('en-IN')}</b>
+  Spends/Due: 🔴 ₹${(icBank2005.currentOutstanding || 0).toLocaleString('en-IN')}
 • 🔵 <b>SBI SimplyCLICK (5733):</b>
   Limit: ₹${(sbi5733.creditLimit || 150000).toLocaleString('en-IN')} | Bacha: 🟢 <b>₹${(sbi5733.availableLimit || 0).toLocaleString('en-IN')}</b>
   Spends/Due: 🔴 ₹${(sbi5733.currentOutstanding || 0).toLocaleString('en-IN')}
@@ -3169,6 +3219,12 @@ export function buildBalancesTelegramMessage(userId: string, userName: string, i
 🌸 <b>WIFE'S SAVINGS ACCOUNT:</b>
 • 🌸 <b>Kul Live Balance:</b> <b>₹${wifeSavings.currentBalance.toLocaleString('en-IN')}</b>
   <i>(Base Balance: ₹${wifeSavings.baseBalance.toLocaleString('en-IN')} | Bheja Hua: ₹${wifeSavings.totalTransferred.toLocaleString('en-IN')})</i>
+
+━━━━━━━━━━━━━━━━━━━━
+📊 <b>WEB APP SYNCED DASHBOARD FIGURES:</b>
+• 💎 <b>Net Savings & Balance:</b> <b>₹${(summary.totalNetSavings || summary.netSavings).toLocaleString('en-IN')}</b>
+• 💵 <b>Liquid Cash / In-Hand Balance:</b> <b>₹${(summary.totalCashBalance || summary.cashBalance || 0).toLocaleString('en-IN')}</b>
+${(summary.udhaarLentTotal || 0) > 0 ? `• 🤝 <b>Udhaar Diya (Lena Hai):</b> ₹${summary.udhaarLentTotal.toLocaleString('en-IN')} <i>(Bachat Surakshit)</i>\n` : ''}• 🎯 <b>Monthly Budget:</b> ₹${summary.monthlyBudget.toLocaleString('en-IN')} (₹${Math.max(0, summary.monthlyBudget - summary.monthlySpent).toLocaleString('en-IN')} bacha)
 
 ━━━━━━━━━━━━━━━━━━━━
 💡 <i>Opening balance set karne ke liye bot me bhejein:</i>
@@ -5565,22 +5621,23 @@ Aap neeche diye gaye inline buttons par tap karein, keyboard buttons use karein 
       summaryMsg = `📊 <b>${targetUser.name} ka Khata Hisaab</b>
 ━━━━━━━━━━━━━━━━━━━━
 🗓️ <b>Current Month (${monthName}):</b>
-• 🟢 <b>Income:</b> ₹${(summary.currentMonthIncome || 0).toLocaleString('en-IN')}
-• 🔴 <b>Kharcha:</b> ₹${(summary.currentMonthPersonalExpense || 0).toLocaleString('en-IN')}
-• 📈 <b>Bachat Rate:</b> ${summary.savingsRate}%
+• 🟢 <b>Kamai (Income):</b> ₹${(summary.currentMonthIncome || 0).toLocaleString('en-IN')}
+• 🔴 <b>Kharcha (Personal Spends):</b> ₹${(summary.currentMonthPersonalExpense || 0).toLocaleString('en-IN')}
+• 💎 <b>Is Mahine Ki Net Bachat:</b> ₹${(summary.currentMonthNetSavings || 0).toLocaleString('en-IN')} (${summary.savingsRate}%)
 • 📝 <b>Is Mahine Ke Records:</b> ${summary.currentMonthCount || 0} transactions${summary.currentMonthCount === 0 && totalTxCount > 0 ? ` <i>(Is mahine abhi tak koi naya transaction nahi hai)</i>` : ''}
 
 📦 <b>Pichla Balance Carryforward:</b> ₹${(summary.openingCarryforward || 0).toLocaleString('en-IN')}
-💵 <b>Net Live Balance:</b> <b>₹${(summary.totalNetSavings || summary.netSavings).toLocaleString('en-IN')}</b>
-🎯 <b>Monthly Budget Limit:</b> ₹${summary.monthlyBudget.toLocaleString('en-IN')} (₹${Math.max(0, summary.monthlyBudget - summary.monthlySpent).toLocaleString('en-IN')} bacha)
+💎 <b>Net Savings & Balance:</b> <b>₹${(summary.totalNetSavings || summary.netSavings).toLocaleString('en-IN')}</b>
+💵 <b>Liquid Cash Balance:</b> <b>₹${(summary.totalCashBalance || summary.cashBalance || 0).toLocaleString('en-IN')}</b>
+${(summary.udhaarLentTotal || 0) > 0 ? `🤝 <b>Udhaar Diya (Lena Hai):</b> ₹${summary.udhaarLentTotal.toLocaleString('en-IN')} <i>(Bachat Surakshit)</i>\n` : ''}🎯 <b>Monthly Budget Limit:</b> ₹${summary.monthlyBudget.toLocaleString('en-IN')} (₹${Math.max(0, summary.monthlyBudget - summary.monthlySpent).toLocaleString('en-IN')} bacha • ${summary.monthlyBudget > 0 ? Math.round((summary.monthlySpent / summary.monthlyBudget) * 100) : 0}% used)
 
 ━━━━━━━━━━━━━━━━━━━━
 📈 <b>Kul All-Time Ledger (Saare Mahine):</b>
 • 📋 <b>Total Records:</b> <b>${totalTxCount} entries</b>
 • 💰 <b>Kul Kamai:</b> ₹${(summary.totalIncome || 0).toLocaleString('en-IN')}
 • 💸 <b>Kul Kharcha:</b> ₹${(summary.totalExpense || 0).toLocaleString('en-IN')}
-
-💡 <i>Pichle records dekhne ke liye neeche <b>🕒 Recent 5 Tx</b> dabayein ya <code>/recent</code> bhejein!</i>`;
+${(summary.udhaarLentTotal || 0) > 0 ? `• 🤝 <b>Kul Udhaar Diya:</b> ₹${summary.udhaarLentTotal.toLocaleString('en-IN')}\n` : ''}
+💡 <i>Web Dashboard aur Telegram Bot ka hisaab 100% synchronized hai!</i>`;
     } else {
       summaryMsg = `📊 <b>Financial Summary Report</b> (👤 <b>${senderDisplayName}</b>)\n━━━━━━━━━━━━━━━━━━━━\n👤 <b>Aapka Is Mahine Ka Kharcha:</b> <b>₹${memberMonthSpent.toLocaleString('en-IN')}</b>\n📝 <b>Aapke Records:</b> ${memberTransactions.length} transactions\n━━━━━━━━━━━━━━━━━━━━\n🟢 <b>Kul Family Income:</b> 🔒 Masked (Owner Protected)\n🔴 <b>Kul Family Kharcha:</b> 🔒 Masked (Owner Protected)\n💰 <b>Net Family Savings:</b> 🔒 Masked (Owner Protected)\n\n🔒 <i>(Owner Privacy: Aapko sirf aapke transactions ka amount dikhayi dega)</i>`;
     }

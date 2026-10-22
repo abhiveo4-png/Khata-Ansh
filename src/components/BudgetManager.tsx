@@ -274,8 +274,13 @@ export const BudgetManager: React.FC<BudgetManagerProps> = ({
 
   // Summary statistics
   const totalBudgetLimit = useMemo(() => {
-    return (displayBudgets || []).reduce((acc, b) => acc + (b?.limit || 0), 0);
-  }, [displayBudgets]);
+    return (displayBudgets || []).reduce((acc, b) => {
+      const catDef = categories.find(c => c.name.toLowerCase() === b.category.toLowerCase());
+      const isExempt = catDef?.excludeFromBudget || ['reimbursement', 'wife transfer', 'cc payment', 'udhaar given', 'udhaar', 'loan given'].includes(b.category.toLowerCase());
+      if (isExempt) return acc;
+      return acc + (b?.limit || 0);
+    }, 0);
+  }, [displayBudgets, categories]);
 
   const totalSpent = useMemo(() => {
     return (displayBudgets || []).reduce((acc, b) => {

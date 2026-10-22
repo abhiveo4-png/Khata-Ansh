@@ -16,12 +16,13 @@ import {
   Sparkles,
   Layers
 } from 'lucide-react';
-import { FinancialSummary, Transaction, UserRole, CategoryBudget } from '../types';
+import { FinancialSummary, Transaction, UserRole, CategoryBudget, CategoryDef } from '../types';
 
 interface OverviewCardsProps {
   summary: FinancialSummary;
   transactions?: Transaction[];
   budgets?: CategoryBudget[];
+  categories?: CategoryDef[];
   userRole?: UserRole;
   activeFamilyMemberName?: string;
   isPrivacyMode?: boolean;
@@ -35,6 +36,7 @@ export const OverviewCards: React.FC<OverviewCardsProps> = ({
   summary, 
   transactions = [],
   budgets = [],
+  categories = [],
   userRole = 'owner',
   activeFamilyMemberName,
   isPrivacyMode = false,
@@ -79,6 +81,7 @@ export const OverviewCards: React.FC<OverviewCardsProps> = ({
   let prevIncome = 0;
   let prevTotalExpense = 0;
   let prevPersonalExpense = 0;
+  let prevUdhaarLent = 0;
   let prevPendingRim = 0;
 
   for (const t of prevTransactions) {
@@ -92,7 +95,6 @@ export const OverviewCards: React.FC<OverviewCardsProps> = ({
         prevIncome += amt;
       }
     } else {
-      prevTotalExpense += amt;
       const isRim = Boolean(t.isReimbursement || t.category === 'Reimbursement');
       const isUdhaarLent = Boolean(
         t.isUdhaarLent ||
@@ -101,28 +103,34 @@ export const OverviewCards: React.FC<OverviewCardsProps> = ({
         (t.category && t.category.toLowerCase().includes('udhaar') && t.type === 'expense') ||
         (t.tags && t.tags.includes('udhaar-lent'))
       );
-      if (isRim) {
-        const settledAmt = t.reimbursementStatus === 'settled'
-          ? amt
-          : Math.min(amt, Math.max(0, Number(t.reimbursementSettledAmount) || 0));
-        const rem = Math.max(0, amt - settledAmt);
-        if (t.reimbursementStatus !== 'settled' && rem > 0) {
-          prevPendingRim += rem;
+      if (isUdhaarLent) {
+        prevUdhaarLent += amt;
+      } else {
+        prevTotalExpense += amt;
+        if (isRim) {
+          const settledAmt = t.reimbursementStatus === 'settled'
+            ? amt
+            : Math.min(amt, Math.max(0, Number(t.reimbursementSettledAmount) || 0));
+          const rem = Math.max(0, amt - settledAmt);
+          if (t.reimbursementStatus !== 'settled' && rem > 0) {
+            prevPendingRim += rem;
+          }
+        } else if (!t.isSavingsTransfer && !t.isWifeTransfer && t.category !== 'Wife Transfer' && !t.isCcPayment && t.category !== 'CC Payment') {
+          prevPersonalExpense += amt;
         }
-      } else if (!t.isSavingsTransfer && !t.isWifeTransfer && t.category !== 'Wife Transfer' && !t.isCcPayment && t.category !== 'CC Payment' && !isUdhaarLent) {
-        prevPersonalExpense += amt;
       }
     }
   }
 
-  const openingNetSavings = prevIncome - prevPersonalExpense; // Carryforward true savings
-  const openingCashBalance = prevIncome - prevTotalExpense;   // Carryforward cash balance
+  const openingNetSavings = prevIncome - prevTotalExpense; // Carryforward true savings (Udhar exempt)
+  const openingCashBalance = prevIncome - prevTotalExpense - prevUdhaarLent;   // Carryforward cash balance
 
   // 3. Selected Month figures
   let monthIncome = 0;
   let monthRimRecovery = 0;
   let monthTotalExpense = 0;
   let monthPersonalExpense = 0;
+  let monthBudgetSpent = 0;
   let monthUdhaarLent = 0;
   let monthPendingRim = 0;
   let monthIncomeCount = 0;
@@ -142,8 +150,6 @@ export const OverviewCards: React.FC<OverviewCardsProps> = ({
         monthRimRecovery += amt;
       }
     } else {
-      monthTotalExpense += amt;
-      monthExpenseCount++;
       const isRim = Boolean(t.isReimbursement || t.category === 'Reimbursement');
       const isUdhaarLent = Boolean(
         t.isUdhaarLent ||
@@ -152,18 +158,28 @@ export const OverviewCards: React.FC<OverviewCardsProps> = ({
         (t.category && t.category.toLowerCase().includes('udhaar') && t.type === 'expense') ||
         (t.tags && t.tags.includes('udhaar-lent'))
       );
-      if (isRim) {
-        const settledAmt = t.reimbursementStatus === 'settled'
-          ? amt
-          : Math.min(amt, Math.max(0, Number(t.reimbursementSettledAmount) || 0));
-        const rem = Math.max(0, amt - settledAmt);
-        if (t.reimbursementStatus !== 'settled' && rem > 0) {
-          monthPendingRim += rem;
-        }
-      } else if (isUdhaarLent) {
+      const catDef = categories.find(c => c.name.toLowerCase() === (t.category || '').toLowerCase());
+      const isExemptFromBudget = Boolean(catDef?.excludeFromBudget) || isRim || isUdhaarLent || t.isSavingsTransfer || t.isWifeTransfer || t.category === 'Wife Transfer' || t.isCcPayment || t.category === 'CC Payment';
+
+      if (isUdhaarLent) {
         monthUdhaarLent += amt;
-      } else if (!t.isSavingsTransfer && !t.isWifeTransfer && t.category !== 'Wife Transfer' && !t.isCcPayment && t.category !== 'CC Payment') {
-        monthPersonalExpense += amt;
+      } else {
+        monthTotalExpense += amt;
+        monthExpenseCount++;
+        if (isRim) {
+          const settledAmt = t.reimbursementStatus === 'settled'
+            ? amt
+            : Math.min(amt, Math.max(0, Number(t.reimbursementSettledAmount) || 0));
+          const rem = Math.max(0, amt - settledAmt);
+          if (t.reimbursementStatus !== 'settled' && rem > 0) {
+            monthPendingRim += rem;
+          }
+        } else if (!t.isSavingsTransfer && !t.isWifeTransfer && t.category !== 'Wife Transfer' && !t.isCcPayment && t.category !== 'CC Payment') {
+          monthPersonalExpense += amt;
+          if (!isExemptFromBudget) {
+            monthBudgetSpent += amt;
+          }
+        }
       }
     }
   }
@@ -180,18 +196,19 @@ export const OverviewCards: React.FC<OverviewCardsProps> = ({
     .reduce((sum, t) => sum + (t.amount || 0), 0);
 
   const displayPersonalExpense = isFamily ? memberPersonalExpense : monthPersonalExpense;
-  // Net Savings strictly deducts all cash outflows (personal expenses + wife transfers + CC payments) from income
+  // Net Savings preserves Udhar as receivable asset (income - non-udhaar expense)
   const monthNetSavings = monthIncome - monthTotalExpense;
-  const monthCashBalance = monthIncome - monthTotalExpense;
+  const monthCashBalance = monthIncome - monthTotalExpense - monthUdhaarLent;
 
   // Cumulative / Total at the end of selected month
-  const totalNetSavings = openingCashBalance + monthNetSavings;
+  const totalNetSavings = openingNetSavings + monthNetSavings;
   const totalCashBalance = openingCashBalance + monthCashBalance;
+  const totalUdhaarLent = prevUdhaarLent + monthUdhaarLent;
   const totalPendingRim = prevPendingRim + monthPendingRim;
 
-  // Budget calculations
+  // Budget calculations: monthlySpent excludes categories exempt from budget!
   const monthlyBudgetLimit = summary.monthlyBudget;
-  const monthlySpent = monthPersonalExpense;
+  const monthlySpent = monthBudgetSpent;
   const budgetPercentage = monthlyBudgetLimit > 0 ? Math.round((monthlySpent / monthlyBudgetLimit) * 100) : 0;
   const monthlySavingsRate = monthIncome > 0 ? Math.max(0, Math.round((monthNetSavings / monthIncome) * 100)) : 0;
 
@@ -432,6 +449,13 @@ export const OverviewCards: React.FC<OverviewCardsProps> = ({
                 {displayAmount(totalNetSavings)}
               </span>
             </div>
+            {totalUdhaarLent > 0 && !isFamily && (
+              <div className="mt-1 flex items-center gap-1.5">
+                <span className="inline-flex items-center text-[10px] font-medium text-emerald-400 bg-emerald-950/50 border border-emerald-500/30 px-1.5 py-0.5 rounded-md">
+                  🤝 ₹{displayAmount(totalUdhaarLent)} Udhaar Diya (Lena Hai • Bachat Surakshit)
+                </span>
+              </div>
+            )}
           </div>
 
           <div className="mt-3 flex items-center justify-between text-xs pt-2.5 border-t border-white/[0.08] relative z-10">
@@ -439,11 +463,11 @@ export const OverviewCards: React.FC<OverviewCardsProps> = ({
               {isFamily ? '🔒 Hidden for Family' : !isAllTime && openingNetSavings !== 0 ? (
                 `📦 Carry: ₹${displayAmount(openingNetSavings)} • Is Mahine: ₹${displayAmount(monthNetSavings)}`
               ) : (
-                `Cash Balance: ₹${displayAmount(totalCashBalance)}`
+                `Liquid Cash: ₹${displayAmount(totalCashBalance)}`
               )}
             </span>
             <span className="text-slate-400 text-[11px] font-medium">
-              {isFamily ? 'Master Protected' : `Bachat: ${monthlySavingsRate}%`}
+              {isFamily ? 'Master Protected' : totalUdhaarLent > 0 ? `Cash: ₹${displayAmount(totalCashBalance)}` : `Bachat: ${monthlySavingsRate}%`}
             </span>
           </div>
         </div>

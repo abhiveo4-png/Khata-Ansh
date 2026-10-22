@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { 
   X, 
   Calendar, 
+  Clock,
   CreditCard, 
   Briefcase, 
   HeartHandshake,
@@ -34,6 +35,7 @@ export const EditTransactionModal: React.FC<EditTransactionModalProps> = ({
   const [type, setType] = useState<TransactionType>('expense');
   const [category, setCategory] = useState('');
   const [date, setDate] = useState('');
+  const [time, setTime] = useState('');
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('UPI');
   const [account, setAccount] = useState<AccountId>('ICICI CC 0000');
   const [isReimbursement, setIsReimbursement] = useState(false);
@@ -55,6 +57,7 @@ export const EditTransactionModal: React.FC<EditTransactionModalProps> = ({
       setType(transaction.type || 'expense');
       setCategory(transaction.category || 'Uncategorized');
       setDate(transaction.date || new Date().toISOString().split('T')[0]);
+      setTime(transaction.time || '');
       setPaymentMethod(transaction.paymentMethod || 'UPI');
       setAccount((transaction.account as AccountId) || 'ICICI CC 0000');
       setIsReimbursement(Boolean(transaction.isReimbursement));
@@ -117,6 +120,7 @@ export const EditTransactionModal: React.FC<EditTransactionModalProps> = ({
         type,
         category: category || 'Uncategorized',
         date,
+        time: time || undefined,
         paymentMethod,
         account,
         isReimbursement: isReimbursement || isReimbursementInflow,
@@ -511,24 +515,56 @@ export const EditTransactionModal: React.FC<EditTransactionModalProps> = ({
               </div>
             )}
 
-            {/* Date & Payment Method */}
-            <div className="grid grid-cols-2 gap-3">
+            {/* Date, Time & Payment Method */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
               <div>
-                <label className="block text-slate-400 mb-1">TAREEQ (DATE)</label>
+                <label className="block text-slate-400 mb-1 flex items-center gap-1">
+                  <Calendar className="w-3 h-3 text-cyan-400" />
+                  <span>TAREEQ (DATE)</span>
+                </label>
                 <input
                   type="date"
                   required
                   value={date}
                   onChange={(e) => setDate(e.target.value)}
-                  className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-white focus:outline-hidden focus:border-indigo-500"
+                  className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-white focus:outline-hidden focus:border-indigo-500 font-mono text-xs"
                 />
               </div>
+
               <div>
-                <label className="block text-slate-400 mb-1">PAYMENT METHOD</label>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-slate-400 flex items-center gap-1">
+                    <Clock className="w-3 h-3 text-cyan-400" />
+                    <span>SAMAY (TIME)</span>
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const d = new Date();
+                      setTime(String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'));
+                    }}
+                    className="text-[9px] text-cyan-400 hover:text-cyan-300 font-medium cursor-pointer"
+                  >
+                    Abhi
+                  </button>
+                </div>
+                <input
+                  type="time"
+                  value={time}
+                  onChange={(e) => setTime(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-white focus:outline-hidden focus:border-indigo-500 font-mono text-xs"
+                />
+              </div>
+
+              <div>
+                <label className="block text-slate-400 mb-1 flex items-center gap-1">
+                  <CreditCard className="w-3 h-3 text-slate-500" />
+                  <span>PAYMENT METHOD</span>
+                </label>
                 <select
                   value={paymentMethod}
                   onChange={(e) => setPaymentMethod(e.target.value as PaymentMethod)}
-                  className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-white focus:outline-hidden focus:border-indigo-500 cursor-pointer"
+                  className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-white focus:outline-hidden focus:border-indigo-500 cursor-pointer text-xs"
                 >
                   <option value="UPI">UPI</option>
                   <option value="Cash">Cash</option>

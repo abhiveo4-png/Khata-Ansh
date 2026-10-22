@@ -238,13 +238,25 @@ export const TransactionList: React.FC<TransactionListProps> = ({
     let totalReimbursement = 0;
     let totalFamilyTripPooja = 0;
     let totalSavingsTransfer = 0;
+    let totalUdhaarLent = 0;
     let expenseCount = 0;
     let incomeCount = 0;
 
     filteredTransactions.forEach((tx) => {
+      const isUdhaarLent = Boolean(
+        tx.isUdhaarLent ||
+        tx.category === 'Udhaar Given' ||
+        tx.category === 'Loan Given' ||
+        (tx.category && tx.category.toLowerCase().includes('udhaar') && tx.type === 'expense') ||
+        (tx.tags && tx.tags.includes('udhaar-lent'))
+      );
       if (tx.type === 'expense') {
-        totalExpense += tx.amount;
-        expenseCount++;
+        if (isUdhaarLent) {
+          totalUdhaarLent += tx.amount;
+        } else {
+          totalExpense += tx.amount;
+          expenseCount++;
+        }
         if (tx.isReimbursement) totalReimbursement += tx.amount;
         if (tx.category === 'Family Trip & Pooja') totalFamilyTripPooja += tx.amount;
         if (tx.isSavingsTransfer) totalSavingsTransfer += tx.amount;
@@ -255,13 +267,14 @@ export const TransactionList: React.FC<TransactionListProps> = ({
     });
 
     const netBalance = totalIncome - totalExpense;
-    const totalCombined = totalExpense + totalIncome;
+    const totalCombined = totalExpense + totalIncome + totalUdhaarLent;
 
     return {
       totalExpense,
       totalIncome,
       netBalance,
       totalCombined,
+      totalUdhaarLent,
       expenseCount,
       incomeCount,
       totalCount: filteredTransactions.length,
@@ -515,13 +528,20 @@ export const TransactionList: React.FC<TransactionListProps> = ({
             }`}>
               {userRole === 'family' || isPrivacyMode ? '••••••' : `${summary.netBalance >= 0 ? '+' : ''}${formatCurrency(summary.netBalance)}`}
             </div>
-            <div className="text-[10px] text-indigo-300/80 mt-1 flex items-center justify-between">
+            <div className="text-[10px] text-indigo-300/80 mt-1 flex items-center justify-between flex-wrap gap-1">
               <span>{userRole === 'family' ? '🔒 Family Privacy' : summary.netBalance >= 0 ? 'Surplus / Bachat' : 'Deficit / Extra Kharcha'}</span>
-              {summary.totalReimbursement > 0 && userRole !== 'family' && (
-                <span className="text-[9px] text-amber-300 font-mono">
-                  (Rim: {formatCurrency(summary.totalReimbursement)})
-                </span>
-              )}
+              <div className="flex items-center gap-1.5">
+                {summary.totalUdhaarLent > 0 && userRole !== 'family' && (
+                  <span className="text-[9px] text-emerald-300 font-mono">
+                    (Udhaar: {formatCurrency(summary.totalUdhaarLent)})
+                  </span>
+                )}
+                {summary.totalReimbursement > 0 && userRole !== 'family' && (
+                  <span className="text-[9px] text-amber-300 font-mono">
+                    (Rim: {formatCurrency(summary.totalReimbursement)})
+                  </span>
+                )}
+              </div>
             </div>
           </div>
 

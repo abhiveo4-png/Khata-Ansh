@@ -786,6 +786,7 @@ export default function App() {
           summary={summary} 
           transactions={transactions}
           budgets={budgets}
+          categories={categories}
           userRole={userRole}
           activeFamilyMemberName={activeFamilyMemberName}
           isPrivacyMode={isPrivacyMode} 

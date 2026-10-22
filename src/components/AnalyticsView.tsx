@@ -37,13 +37,20 @@ const CHART_COLORS = [
 ];
 
 export const AnalyticsView: React.FC<AnalyticsViewProps> = ({ transactions }) => {
-  // Category Breakdown for Expenses
+  // Category Breakdown for Expenses (Excludes Udhaar Lent)
   const categoryData = useMemo(() => {
     const map: Record<string, number> = {};
     let totalExpense = 0;
 
     transactions.forEach((tx) => {
-      if (tx.type === 'expense') {
+      const isUdhaarLent = Boolean(
+        tx.isUdhaarLent ||
+        tx.category === 'Udhaar Given' ||
+        tx.category === 'Loan Given' ||
+        (tx.category && tx.category.toLowerCase().includes('udhaar') && tx.type === 'expense') ||
+        (tx.tags && tx.tags.includes('udhaar-lent'))
+      );
+      if (tx.type === 'expense' && !isUdhaarLent) {
         map[tx.category] = (map[tx.category] || 0) + tx.amount;
         totalExpense += tx.amount;
       }
@@ -72,11 +79,18 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({ transactions }) =>
         tx.isReimbursementInflow ||
         (tx.type === 'income' && (tx.isReimbursement || tx.category === 'Reimbursement' || tx.category === 'Reimbursement Received'))
       );
+      const isUdhaarLent = Boolean(
+        tx.isUdhaarLent ||
+        tx.category === 'Udhaar Given' ||
+        tx.category === 'Loan Given' ||
+        (tx.category && tx.category.toLowerCase().includes('udhaar') && tx.type === 'expense') ||
+        (tx.tags && tx.tags.includes('udhaar-lent'))
+      );
       if (tx.type === 'income') {
         if (!isRimInflow) {
           map[d].income += tx.amount;
         }
-      } else {
+      } else if (!isUdhaarLent) {
         map[d].expense += tx.amount;
       }
     });

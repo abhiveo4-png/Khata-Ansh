@@ -57,6 +57,17 @@ export const ACCOUNTS_CONFIG: Record<AccountId, AccountMeta> = {
     billingDay: 20,
     paymentDueDay: 10,
   },
+  'IC Bank 2005': {
+    id: 'IC Bank 2005',
+    name: 'ICICI Bank Credit Card (2005)',
+    shortName: 'IC Bank 2005',
+    type: 'credit_card',
+    badge: 'ICICI CC',
+    color: '#e11d48', // Rose / Red
+    creditLimit: 150000,
+    billingDay: 20,
+    paymentDueDay: 10,
+  },
   'IC Bank': {
     id: 'IC Bank',
     name: 'ICICI Bank Savings Account',
@@ -96,6 +107,16 @@ export const BANK_ACCOUNTS = ALL_ACCOUNTS.filter(a => a.type === 'bank_account')
 export function detectAccount(text: string): AccountId | undefined {
   if (!text) return undefined;
   const lower = text.toLowerCase();
+
+  // IC Bank 2005 Credit Card
+  if (
+    lower.includes('2005') ||
+    (lower.includes('ic') && lower.includes('2005')) ||
+    lower.includes('ic bank 2005') ||
+    lower.includes('icici 2005')
+  ) {
+    return 'IC Bank 2005';
+  }
 
   // ICICI RuPay CC 0000
   if (

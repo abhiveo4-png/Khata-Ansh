@@ -1,7 +1,7 @@
-import React, { useState } from 'react';
-import { X, Plus, Calendar, Tag, CreditCard, Check, Zap, Building2, Briefcase, Sparkles, HeartHandshake, ShieldCheck, ArrowUpRight, ArrowDownLeft } from 'lucide-react';
+import React, { useState, useMemo } from 'react';
+import { X, Plus, Calendar, Clock, ChevronLeft, ChevronRight, Tag, CreditCard, Check, Zap, Building2, Briefcase, Sparkles, HeartHandshake, ShieldCheck, ArrowUpRight, ArrowDownLeft } from 'lucide-react';
 import { Transaction, TransactionType, PaymentMethod, CategoryDef, AccountId } from '../types';
-import { getCurrentDateStr } from '../utils/formatters';
+import { getCurrentDateStr, formatDate } from '../utils/formatters';
 import { ALL_ACCOUNTS, detectAccount, detectReimbursement, detectSavingsTransfer, detectInvestment, detectFamilyTripPooja } from '../utils/accounts';
 
 interface AddTransactionModalProps {
@@ -25,6 +25,15 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
   const [category, setCategory] = useState('Food & Dining');
   const [description, setDescription] = useState('');
   const [date, setDate] = useState(getCurrentDateStr());
+  const [time, setTime] = useState(() => {
+    const d = new Date();
+    return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+  });
+  const [isCalendarOpen, setIsCalendarOpen] = useState(false);
+  const [calMonth, setCalMonth] = useState(() => {
+    const d = new Date();
+    return new Date(d.getFullYear(), d.getMonth(), 1);
+  });
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('UPI');
   const [account, setAccount] = useState<AccountId>('ICICI CC 0000');
   const [isReimbursement, setIsReimbursement] = useState(false);
@@ -114,6 +123,76 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
     setTags(tags.filter((t) => t !== tagToRemove));
   };
 
+  const handlePrevCalMonth = () => {
+    setCalMonth(prev => new Date(prev.getFullYear(), prev.getMonth() - 1, 1));
+  };
+
+  const handleNextCalMonth = () => {
+    setCalMonth(prev => new Date(prev.getFullYear(), prev.getMonth() + 1, 1));
+  };
+
+  const handleSelectDate = (dStr: string) => {
+    setDate(dStr);
+    setIsCalendarOpen(false);
+  };
+
+  const handleSetTimeToNow = () => {
+    const d = new Date();
+    setTime(String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'));
+  };
+
+  // Calendar matrix calculation
+  const calendarDays = useMemo(() => {
+    const year = calMonth.getFullYear();
+    const month = calMonth.getMonth();
+    const firstDay = new Date(year, month, 1).getDay(); // 0 is Sunday
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+
+    const days: Array<{ day: number; dateStr: string; isCurrentMonth: boolean }> = [];
+
+    // Previous month padding
+    const prevMonthDays = new Date(year, month, 0).getDate();
+    for (let i = firstDay - 1; i >= 0; i--) {
+      const d = prevMonthDays - i;
+      const prevDate = new Date(year, month - 1, d);
+      const mStr = String(prevDate.getMonth() + 1).padStart(2, '0');
+      const dStr = String(d).padStart(2, '0');
+      days.push({
+        day: d,
+        dateStr: `${prevDate.getFullYear()}-${mStr}-${dStr}`,
+        isCurrentMonth: false,
+      });
+    }
+
+    // Current month days
+    for (let d = 1; d <= daysInMonth; d++) {
+      const mStr = String(month + 1).padStart(2, '0');
+      const dStr = String(d).padStart(2, '0');
+      days.push({
+        day: d,
+        dateStr: `${year}-${mStr}-${dStr}`,
+        isCurrentMonth: true,
+      });
+    }
+
+    // Next month padding to fill grid to multiple of 7
+    const remaining = 7 - (days.length % 7);
+    if (remaining < 7) {
+      for (let i = 1; i <= remaining; i++) {
+        const nextDate = new Date(year, month + 1, i);
+        const mStr = String(nextDate.getMonth() + 1).padStart(2, '0');
+        const dStr = String(i).padStart(2, '0');
+        days.push({
+          day: i,
+          dateStr: `${nextDate.getFullYear()}-${mStr}-${dStr}`,
+          isCurrentMonth: false,
+        });
+      }
+    }
+
+    return days;
+  }, [calMonth]);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const numAmount = parseFloat(amount);
@@ -135,6 +214,7 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
         category,
         description: description.trim(),
         date: date || getCurrentDateStr(),
+        time: time || undefined,
         paymentMethod,
         account: finalAccount,
         isReimbursement: isReimbursement || category === 'Reimbursement',
@@ -536,26 +616,196 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
                   </select>
                 </div>
 
-                {/* Date & Payment Method */}
-                <div className="grid grid-cols-2 gap-2">
-                  <div>
-                    <label className="block text-[10px] text-slate-400 uppercase tracking-wider font-bold mb-1 flex items-center space-x-1">
-                      <Calendar className="w-3 h-3 text-slate-500" />
-                      <span>TAREEQ</span>
-                    </label>
-                    <input
-                      type="date"
-                      required
-                      value={date}
-                      onChange={(e) => setDate(e.target.value)}
-                      className="w-full px-2.5 py-1.5 bg-slate-950 border border-slate-700/80 rounded-xl text-xs text-white focus:outline-hidden focus:border-cyan-400"
-                    />
+                {/* Date, Time & Payment Method */}
+                <div className="space-y-2.5">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    {/* Date Selector with Interactive Visual Calendar */}
+                    <div className="relative">
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="block text-[10px] text-slate-400 uppercase tracking-wider font-bold flex items-center space-x-1">
+                          <Calendar className="w-3 h-3 text-cyan-400" />
+                          <span>TAREEQ (CALENDAR)</span>
+                        </label>
+                        <span className="text-[9px] text-cyan-400/90 font-medium">Click to pick</span>
+                      </div>
+                      
+                      <button
+                        type="button"
+                        onClick={() => setIsCalendarOpen(!isCalendarOpen)}
+                        className="w-full px-2.5 py-2 bg-slate-950 border border-slate-700/80 hover:border-cyan-500/50 rounded-xl text-xs text-white flex items-center justify-between transition-all cursor-pointer group"
+                      >
+                        <div className="flex items-center gap-2 truncate">
+                          <Calendar className="w-3.5 h-3.5 text-cyan-400 shrink-0 group-hover:scale-110 transition-transform" />
+                          <span className="font-semibold text-white">
+                            {formatDate(date)}
+                          </span>
+                          {date === getCurrentDateStr() && (
+                            <span className="px-1.5 py-0.5 rounded bg-cyan-500/20 text-cyan-300 text-[10px] font-bold border border-cyan-500/30">
+                              Aaj
+                            </span>
+                          )}
+                        </div>
+                        <span className="text-[10px] text-slate-400 group-hover:text-cyan-300 font-medium">
+                          {isCalendarOpen ? 'Band ▴' : 'Badlein ▾'}
+                        </span>
+                      </button>
+
+                      {/* Quick Date Chips */}
+                      <div className="flex items-center gap-1.5 mt-1.5">
+                        <button
+                          type="button"
+                          onClick={() => handleSelectDate(getCurrentDateStr())}
+                          className={`px-2 py-0.5 rounded-md text-[10px] font-medium border transition-colors cursor-pointer ${
+                            date === getCurrentDateStr()
+                              ? 'bg-cyan-500/25 border-cyan-500/50 text-cyan-300 font-bold'
+                              : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
+                          }`}
+                        >
+                          Aaj
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const y = new Date(Date.now() - 86400000);
+                            const yStr = `${y.getFullYear()}-${String(y.getMonth() + 1).padStart(2, '0')}-${String(y.getDate()).padStart(2, '0')}`;
+                            handleSelectDate(yStr);
+                          }}
+                          className={`px-2 py-0.5 rounded-md text-[10px] font-medium border transition-colors cursor-pointer ${
+                            date === new Date(Date.now() - 86400000).toISOString().split('T')[0]
+                              ? 'bg-cyan-500/25 border-cyan-500/50 text-cyan-300 font-bold'
+                              : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
+                          }`}
+                        >
+                          Kal
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const p = new Date(Date.now() - 172800000);
+                            const pStr = `${p.getFullYear()}-${String(p.getMonth() + 1).padStart(2, '0')}-${String(p.getDate()).padStart(2, '0')}`;
+                            handleSelectDate(pStr);
+                          }}
+                          className={`px-2 py-0.5 rounded-md text-[10px] font-medium border transition-colors cursor-pointer ${
+                            date === new Date(Date.now() - 172800000).toISOString().split('T')[0]
+                              ? 'bg-cyan-500/25 border-cyan-500/50 text-cyan-300 font-bold'
+                              : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
+                          }`}
+                        >
+                          Parson
+                        </button>
+                      </div>
+
+                      {/* Visual Interactive Calendar Popover */}
+                      {isCalendarOpen && (
+                        <div className="absolute left-0 top-full mt-2 z-50 w-72 bg-[#090d18] border border-cyan-500/40 rounded-2xl p-3 shadow-2xl shadow-cyan-950/90 backdrop-blur-xl animate-in fade-in zoom-in-95 duration-150">
+                          {/* Header: Month & Year with Navigation */}
+                          <div className="flex items-center justify-between pb-2 mb-2 border-b border-slate-800">
+                            <button
+                              type="button"
+                              onClick={handlePrevCalMonth}
+                              className="p-1 rounded-lg hover:bg-slate-800 text-slate-300 hover:text-white transition-colors cursor-pointer"
+                              title="Pichla Mahina"
+                            >
+                              <ChevronLeft className="w-4 h-4" />
+                            </button>
+                            <span className="font-bold text-xs text-white font-sans">
+                              {calMonth.toLocaleDateString('en-IN', { month: 'long', year: 'numeric' })}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={handleNextCalMonth}
+                              className="p-1 rounded-lg hover:bg-slate-800 text-slate-300 hover:text-white transition-colors cursor-pointer"
+                              title="Agla Mahina"
+                            >
+                              <ChevronRight className="w-4 h-4" />
+                            </button>
+                          </div>
+
+                          {/* Weekday headers */}
+                          <div className="grid grid-cols-7 gap-1 text-center text-[10px] font-bold text-slate-400 mb-1 font-mono">
+                            <span>Su</span>
+                            <span>Mo</span>
+                            <span>Tu</span>
+                            <span>We</span>
+                            <span>Th</span>
+                            <span>Fr</span>
+                            <span>Sa</span>
+                          </div>
+
+                          {/* Day Cells Matrix */}
+                          <div className="grid grid-cols-7 gap-1">
+                            {calendarDays.map((item, idx) => {
+                              const isSelected = item.dateStr === date;
+                              const isToday = item.dateStr === getCurrentDateStr();
+                              return (
+                                <button
+                                  key={`${item.dateStr}-${idx}`}
+                                  type="button"
+                                  onClick={() => handleSelectDate(item.dateStr)}
+                                  className={`h-7 w-7 sm:h-8 sm:w-8 mx-auto rounded-lg text-xs font-mono flex items-center justify-center transition-all cursor-pointer relative ${
+                                    isSelected
+                                      ? 'bg-cyan-500 text-slate-950 font-bold shadow-md shadow-cyan-500/40 ring-1 ring-cyan-400 scale-105 z-10'
+                                      : item.isCurrentMonth
+                                      ? 'text-white hover:bg-slate-800 hover:text-cyan-300'
+                                      : 'text-slate-600 hover:bg-slate-900/60'
+                                  } ${isToday && !isSelected ? 'border border-cyan-500/50 text-cyan-300 font-bold' : ''}`}
+                                >
+                                  {item.day}
+                                </button>
+                              );
+                            })}
+                          </div>
+
+                          {/* Footer with Today button & Close */}
+                          <div className="flex items-center justify-between pt-2.5 mt-2.5 border-t border-slate-800/80 text-[11px]">
+                            <button
+                              type="button"
+                              onClick={() => handleSelectDate(getCurrentDateStr())}
+                              className="text-cyan-400 hover:text-cyan-300 font-medium cursor-pointer"
+                            >
+                              Aaj Chunein (Today)
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setIsCalendarOpen(false)}
+                              className="text-slate-400 hover:text-white cursor-pointer"
+                            >
+                              Band Karein
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Time Input */}
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="block text-[10px] text-slate-400 uppercase tracking-wider font-bold flex items-center space-x-1">
+                          <Clock className="w-3 h-3 text-cyan-400" />
+                          <span>SAMAY (TIME)</span>
+                        </label>
+                        <button
+                          type="button"
+                          onClick={handleSetTimeToNow}
+                          className="text-[9px] text-cyan-400 hover:text-cyan-300 font-medium cursor-pointer"
+                        >
+                          Abhi Ka Time
+                        </button>
+                      </div>
+                      <input
+                        type="time"
+                        value={time}
+                        onChange={(e) => setTime(e.target.value)}
+                        className="w-full px-2.5 py-2 bg-slate-950 border border-slate-700/80 rounded-xl text-xs text-white focus:outline-hidden focus:border-cyan-400 font-mono"
+                      />
+                    </div>
                   </div>
 
+                  {/* Payment Mode */}
                   <div>
                     <label className="block text-[10px] text-slate-400 uppercase tracking-wider font-bold mb-1 flex items-center space-x-1">
                       <CreditCard className="w-3 h-3 text-slate-500" />
-                      <span>MODE</span>
+                      <span>PAYMENT MODE</span>
                     </label>
                     <select
                       value={paymentMethod}

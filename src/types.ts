@@ -8,6 +8,7 @@ export type AccountId =
   | 'SBI CC 6526'
   | 'AX CC 8210'
   | 'AX CC 5376'
+  | 'IC Bank 2005'
   | 'IC Bank'
   | 'AX Bank'
   | 'Cash';
@@ -209,6 +210,10 @@ export interface FinancialSummary {
   currentMonthCount?: number;
   openingCarryforward?: number;
   totalNetSavings?: number;
+  cashBalance?: number;
+  totalCashBalance?: number;
+  udhaarLentTotal?: number;
+  currentMonthUdhaarLent?: number;
 }
 
 export interface CardEmi {
