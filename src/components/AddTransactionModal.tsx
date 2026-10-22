@@ -46,102 +46,20 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
   const [tags, setTags] = useState<string[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  if (!isOpen) return null;
+  // Quick date strings (unconditional hooks)
+  const todayStr = useMemo(() => getCurrentDateStr(), []);
+  const yesterdayStr = useMemo(() => {
+    const y = new Date();
+    y.setDate(y.getDate() - 1);
+    return `${y.getFullYear()}-${String(y.getMonth() + 1).padStart(2, '0')}-${String(y.getDate()).padStart(2, '0')}`;
+  }, []);
+  const dayBeforeStr = useMemo(() => {
+    const p = new Date();
+    p.setDate(p.getDate() - 2);
+    return `${p.getFullYear()}-${String(p.getMonth() + 1).padStart(2, '0')}-${String(p.getDate()).padStart(2, '0')}`;
+  }, []);
 
-  const filteredCategories = categories.filter(
-    (c) => c.type === type || c.type === 'both'
-  );
-
-  // Smart detection when typing description
-  const handleDescriptionChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const val = e.target.value;
-    setDescription(val);
-
-    // Auto-detect account if mentioned in text
-    const detectedAcc = detectAccount(val);
-    if (detectedAcc) {
-      setAccount(detectedAcc);
-    }
-
-    // Auto-detect reimbursement (Point 1: Rim / reimburse / claim)
-    if (detectReimbursement(val)) {
-      setIsReimbursement(true);
-      if (categories.some((c) => c.name === 'Reimbursement')) {
-        setCategory('Reimbursement');
-      }
-    }
-
-    // Auto-detect Family Trip & Pooja (Point 4)
-    if (detectFamilyTripPooja(val)) {
-      if (categories.some((c) => c.name === 'Family Trip & Pooja')) {
-        setCategory('Family Trip & Pooja');
-      }
-    }
-
-    // Auto-detect savings transfer to wife (Point 5)
-    if (detectSavingsTransfer(val)) {
-      setIsSavingsTransfer(true);
-      if (categories.some((c) => c.name.toLowerCase() === 'wife transfer')) {
-        setCategory('Wife Transfer');
-      }
-      setAccount('AX Bank');
-    }
-
-    // Auto-detect investment
-    if (detectInvestment(val)) {
-      setIsInvestment(true);
-      if (categories.some((c) => c.name === 'Investments & Savings')) {
-        setCategory('Investments & Savings');
-      }
-    }
-
-    // Auto-detect Udhaar Given / Received
-    if (/\b(udhaar|udhar|khata|advance)\b/i.test(val)) {
-      if (/\b(diya|diye|de\s+diya|lent|give|gave)\b/i.test(val) || type === 'expense') {
-        setIsUdhaarLent(true);
-        if (categories.some((c) => c.name === 'Udhaar Given')) {
-          setCategory('Udhaar Given');
-        }
-      } else if (/\b(mila|mile|wapas|aaya|liya|repaid|settle)\b/i.test(val) || type === 'income') {
-        setIsUdhaarRecovery(true);
-        if (categories.some((c) => c.name === 'Udhaar Received')) {
-          setCategory('Udhaar Received');
-        }
-      }
-    }
-  };
-
-  const handleAddTag = () => {
-    const trimmed = tagInput.trim().toLowerCase();
-    if (trimmed && !tags.includes(trimmed)) {
-      setTags([...tags, trimmed]);
-      setTagInput('');
-    }
-  };
-
-  const handleRemoveTag = (tagToRemove: string) => {
-    setTags(tags.filter((t) => t !== tagToRemove));
-  };
-
-  const handlePrevCalMonth = () => {
-    setCalMonth(prev => new Date(prev.getFullYear(), prev.getMonth() - 1, 1));
-  };
-
-  const handleNextCalMonth = () => {
-    setCalMonth(prev => new Date(prev.getFullYear(), prev.getMonth() + 1, 1));
-  };
-
-  const handleSelectDate = (dStr: string) => {
-    setDate(dStr);
-    setIsCalendarOpen(false);
-  };
-
-  const handleSetTimeToNow = () => {
-    const d = new Date();
-    setTime(String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'));
-  };
-
-  // Calendar matrix calculation
+  // Calendar matrix calculation (MUST BE UNCONDITIONAL before any early return)
   const calendarDays = useMemo(() => {
     const year = calMonth.getFullYear();
     const month = calMonth.getMonth();
@@ -192,6 +110,103 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
 
     return days;
   }, [calMonth]);
+
+  // Early return after ALL hooks are initialized
+  if (!isOpen) return null;
+
+  const safeCategories = Array.isArray(categories) ? categories : [];
+  const filteredCategories = safeCategories.filter(
+    (c) => c && (c.type === type || c.type === 'both')
+  );
+
+  // Smart detection when typing description
+  const handleDescriptionChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = e.target.value;
+    setDescription(val);
+
+    // Auto-detect account if mentioned in text
+    const detectedAcc = detectAccount(val);
+    if (detectedAcc) {
+      setAccount(detectedAcc);
+    }
+
+    // Auto-detect reimbursement (Point 1: Rim / reimburse / claim)
+    if (detectReimbursement(val)) {
+      setIsReimbursement(true);
+      if (safeCategories.some((c) => c.name === 'Reimbursement')) {
+        setCategory('Reimbursement');
+      }
+    }
+
+    // Auto-detect Family Trip & Pooja (Point 4)
+    if (detectFamilyTripPooja(val)) {
+      if (safeCategories.some((c) => c.name === 'Family Trip & Pooja')) {
+        setCategory('Family Trip & Pooja');
+      }
+    }
+
+    // Auto-detect savings transfer to wife (Point 5)
+    if (detectSavingsTransfer(val)) {
+      setIsSavingsTransfer(true);
+      if (safeCategories.some((c) => c.name.toLowerCase() === 'wife transfer')) {
+        setCategory('Wife Transfer');
+      }
+      setAccount('AX Bank');
+    }
+
+    // Auto-detect investment
+    if (detectInvestment(val)) {
+      setIsInvestment(true);
+      if (safeCategories.some((c) => c.name === 'Investments & Savings')) {
+        setCategory('Investments & Savings');
+      }
+    }
+
+    // Auto-detect Udhaar Given / Received
+    if (/\b(udhaar|udhar|khata|advance)\b/i.test(val)) {
+      if (/\b(diya|diye|de\s+diya|lent|give|gave)\b/i.test(val) || type === 'expense') {
+        setIsUdhaarLent(true);
+        if (safeCategories.some((c) => c.name === 'Udhaar Given')) {
+          setCategory('Udhaar Given');
+        }
+      } else if (/\b(mila|mile|wapas|aaya|liya|repaid|settle)\b/i.test(val) || type === 'income') {
+        setIsUdhaarRecovery(true);
+        if (safeCategories.some((c) => c.name === 'Udhaar Received')) {
+          setCategory('Udhaar Received');
+        }
+      }
+    }
+  };
+
+  const handleAddTag = () => {
+    const trimmed = tagInput.trim().toLowerCase();
+    if (trimmed && !tags.includes(trimmed)) {
+      setTags([...tags, trimmed]);
+      setTagInput('');
+    }
+  };
+
+  const handleRemoveTag = (tagToRemove: string) => {
+    setTags(tags.filter((t) => t !== tagToRemove));
+  };
+
+  const handlePrevCalMonth = () => {
+    setCalMonth(prev => new Date(prev.getFullYear(), prev.getMonth() - 1, 1));
+  };
+
+  const handleNextCalMonth = () => {
+    setCalMonth(prev => new Date(prev.getFullYear(), prev.getMonth() + 1, 1));
+  };
+
+  const handleSelectDate = (dStr: string) => {
+    setDate(dStr);
+    setIsCalendarOpen(false);
+  };
+
+  const handleSetTimeToNow = () => {
+    const d = new Date();
+    setTime(String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'));
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -654,9 +669,9 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
                       <div className="flex items-center gap-1.5 mt-1.5">
                         <button
                           type="button"
-                          onClick={() => handleSelectDate(getCurrentDateStr())}
+                          onClick={() => handleSelectDate(todayStr)}
                           className={`px-2 py-0.5 rounded-md text-[10px] font-medium border transition-colors cursor-pointer ${
-                            date === getCurrentDateStr()
+                            date === todayStr
                               ? 'bg-cyan-500/25 border-cyan-500/50 text-cyan-300 font-bold'
                               : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
                           }`}
@@ -665,13 +680,9 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
                         </button>
                         <button
                           type="button"
-                          onClick={() => {
-                            const y = new Date(Date.now() - 86400000);
-                            const yStr = `${y.getFullYear()}-${String(y.getMonth() + 1).padStart(2, '0')}-${String(y.getDate()).padStart(2, '0')}`;
-                            handleSelectDate(yStr);
-                          }}
+                          onClick={() => handleSelectDate(yesterdayStr)}
                           className={`px-2 py-0.5 rounded-md text-[10px] font-medium border transition-colors cursor-pointer ${
-                            date === new Date(Date.now() - 86400000).toISOString().split('T')[0]
+                            date === yesterdayStr
                               ? 'bg-cyan-500/25 border-cyan-500/50 text-cyan-300 font-bold'
                               : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
                           }`}
@@ -680,13 +691,9 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
                         </button>
                         <button
                           type="button"
-                          onClick={() => {
-                            const p = new Date(Date.now() - 172800000);
-                            const pStr = `${p.getFullYear()}-${String(p.getMonth() + 1).padStart(2, '0')}-${String(p.getDate()).padStart(2, '0')}`;
-                            handleSelectDate(pStr);
-                          }}
+                          onClick={() => handleSelectDate(dayBeforeStr)}
                           className={`px-2 py-0.5 rounded-md text-[10px] font-medium border transition-colors cursor-pointer ${
-                            date === new Date(Date.now() - 172800000).toISOString().split('T')[0]
+                            date === dayBeforeStr
                               ? 'bg-cyan-500/25 border-cyan-500/50 text-cyan-300 font-bold'
                               : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
                           }`}

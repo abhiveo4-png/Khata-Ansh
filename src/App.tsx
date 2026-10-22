@@ -50,6 +50,7 @@ import { AddTransactionModal } from './components/AddTransactionModal';
 import { ReimbursementSummaryModal } from './components/ReimbursementSummaryModal';
 import { OfflineIndicator } from './components/OfflineIndicator';
 import { PWAInstallBanner } from './components/PWAInstallBanner';
+import { ErrorBoundary } from './components/ErrorBoundary';
 
 export default function App() {
   // Multi-user Profile State
@@ -1082,14 +1083,17 @@ export default function App() {
         onOpenBackupModal={() => setIsBackupModalOpen(true)}
         onExportCsv={handleExportCsv}
         onLogout={handleLogout}
+        onOpenAddTransaction={() => setIsAddTransactionOpen(true)}
       />
 
-      <AddTransactionModal
-        isOpen={isAddTransactionOpen}
-        categories={categories}
-        onClose={() => setIsAddTransactionOpen(false)}
-        onAddTransaction={handleAddTransaction}
-      />
+      <ErrorBoundary fallbackMessage="Naya Transaction Modal me error aaya">
+        <AddTransactionModal
+          isOpen={isAddTransactionOpen}
+          categories={categories}
+          onClose={() => setIsAddTransactionOpen(false)}
+          onAddTransaction={handleAddTransaction}
+        />
+      </ErrorBoundary>
 
       <ReimbursementSummaryModal
         isOpen={isReimbursementModalOpen}

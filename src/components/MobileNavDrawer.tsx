@@ -21,7 +21,8 @@ import {
   Building2,
   HeartHandshake,
   Eye,
-  EyeOff
+  EyeOff,
+  Plus
 } from 'lucide-react';
 import { UserProfile } from '../types';
 
@@ -47,6 +48,7 @@ interface MobileNavDrawerProps {
   onOpenBackupModal: () => void;
   onExportCsv: () => void;
   onLogout?: () => void;
+  onOpenAddTransaction?: () => void;
 }
 
 export const MobileNavDrawer: React.FC<MobileNavDrawerProps> = ({
@@ -69,6 +71,7 @@ export const MobileNavDrawer: React.FC<MobileNavDrawerProps> = ({
   onOpenBackupModal,
   onExportCsv,
   onLogout,
+  onOpenAddTransaction,
 }) => {
   // Close on Escape key
   useEffect(() => {
@@ -258,6 +261,20 @@ export const MobileNavDrawer: React.FC<MobileNavDrawerProps> = ({
 
         {/* Main Navigation List */}
         <div className="flex-1 overflow-y-auto p-3 space-y-1.5 custom-scrollbar">
+          {/* Quick Add Kharcha for Mobile */}
+          {onOpenAddTransaction && (
+            <button
+              onClick={() => {
+                onClose();
+                onOpenAddTransaction();
+              }}
+              className="w-full py-2.5 px-3 mb-2 rounded-xl bg-gradient-to-r from-cyan-500 to-teal-400 hover:from-cyan-400 hover:to-teal-300 text-slate-950 font-bold text-xs flex items-center justify-center space-x-2 shadow-lg shadow-cyan-500/20 cursor-pointer active:scale-95 transition-all"
+            >
+              <Plus className="w-4 h-4 stroke-[3]" />
+              <span>+ NAYA KHARCHA JODEIN</span>
+            </button>
+          )}
+
           <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400 px-2 py-1">
             Menu Options
           </p>
