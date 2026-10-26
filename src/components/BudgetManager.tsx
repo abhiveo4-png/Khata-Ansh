@@ -179,7 +179,7 @@ export const BudgetManager: React.FC<BudgetManagerProps> = ({
     let totalSettled = 0;
     let totalCount = 0;
     transactions.forEach((t) => {
-      if (t.isReimbursement || t.category?.toLowerCase() === 'reimbursement') {
+      if (!t.isReimbursementInflow && t.type !== 'income' && (t.isReimbursement || t.category?.toLowerCase() === 'reimbursement')) {
         const amt = Number(t.amount) || 0;
         totalClaimed += amt;
         const settledAmt =

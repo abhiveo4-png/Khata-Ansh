@@ -87,6 +87,7 @@ export const OverviewCards: React.FC<OverviewCardsProps> = ({
   let prevPersonalExpense = 0;
   let prevUdhaarLent = 0;
   let prevUdhaarRecovered = 0;
+  let prevRimRecovery = 0;
   let prevPendingRim = 0;
 
   for (const t of prevTransactions) {
@@ -103,7 +104,9 @@ export const OverviewCards: React.FC<OverviewCardsProps> = ({
     if (t.type === 'income') {
       if (isUdhaarRecovery) {
         prevUdhaarRecovered += amt;
-      } else if (!isRimInflow) {
+      } else if (isRimInflow) {
+        prevRimRecovery += amt;
+      } else {
         prevIncome += amt;
       }
     } else {
@@ -237,9 +240,9 @@ export const OverviewCards: React.FC<OverviewCardsProps> = ({
     ? tabTotalSettled
     : (prevUdhaarRecovered + monthUdhaarRecovered);
 
-  // Opening & Cash Balance (Recovered cash flows back to liquid balance)
-  const openingNetSavings = prevIncome - prevTotalExpense;
-  const openingCashBalance = prevIncome - prevTotalExpense - prevUdhaarLent + prevUdhaarRecovered;
+  // Opening & Cash Balance (Recovered cash & reimbursement inflows flow back to liquid balance)
+  const openingNetSavings = prevIncome - prevTotalExpense + prevRimRecovery;
+  const openingCashBalance = prevIncome - prevTotalExpense - prevUdhaarLent + prevUdhaarRecovered + prevRimRecovery;
 
   // Active family member calculation in selected month
   const memberTxs = monthTransactions.filter(t => {
@@ -253,9 +256,9 @@ export const OverviewCards: React.FC<OverviewCardsProps> = ({
     .reduce((sum, t) => sum + (t.amount || 0), 0);
 
   const displayPersonalExpense = isFamily ? memberPersonalExpense : monthPersonalExpense;
-  // Net Savings preserves Udhar as receivable asset (income - non-udhaar expense)
-  const monthNetSavings = monthIncome - monthTotalExpense;
-  const monthCashBalance = monthIncome - monthTotalExpense - monthUdhaarLent + monthUdhaarRecovered;
+  // Net Savings preserves Udhar as receivable asset (income - non-udhaar expense + rim recovery)
+  const monthNetSavings = monthIncome - monthTotalExpense + monthRimRecovery;
+  const monthCashBalance = monthIncome - monthTotalExpense - monthUdhaarLent + monthUdhaarRecovered + monthRimRecovery;
 
   // Cumulative / Total at the end of selected month
   const totalNetSavings = openingNetSavings + monthNetSavings;

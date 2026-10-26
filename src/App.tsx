@@ -503,39 +503,51 @@ export default function App() {
   };
 
   const handleDeleteTransaction = async (id: string) => {
-    const { data } = await safeFetchJson<{ success?: boolean; summary?: FinancialSummary }>(`/api/transactions/${id}`, {
+    const { data } = await safeFetchJson<{ success?: boolean; transactions?: Transaction[]; summary?: FinancialSummary }>(`/api/transactions/${id}`, {
       method: 'DELETE',
     });
     if (data?.success) {
-      setTransactions((prev) => {
-        const next = prev.filter((t) => t.id !== id);
-        const activeUid = currentUser?.id || getActiveUserId() || 'user_ansh';
-        setCachedTransactions(activeUid, next);
-        return next;
-      });
+      const activeUid = currentUser?.id || getActiveUserId() || 'user_ansh';
+      if (Array.isArray(data.transactions)) {
+        setTransactions(data.transactions);
+        setCachedTransactions(activeUid, data.transactions);
+      } else {
+        setTransactions((prev) => {
+          const next = prev.filter((t) => t.id !== id);
+          setCachedTransactions(activeUid, next);
+          return next;
+        });
+      }
       if (data.summary) {
         setSummary(data.summary);
       }
+      fetchBudgets();
     }
   };
 
   // Reclassify / Change category or full details of a transaction
   const handleEditTransaction = async (updatedTx: Transaction) => {
-    const { data } = await safeFetchJson<{ transaction?: Transaction; summary?: FinancialSummary }>(`/api/transactions/${updatedTx.id}`, {
+    const { data } = await safeFetchJson<{ transaction?: Transaction; transactions?: Transaction[]; summary?: FinancialSummary }>(`/api/transactions/${updatedTx.id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(updatedTx),
     });
     if (data?.transaction) {
-      setTransactions((prev) => {
-        const next = prev.map((t) => (t.id === updatedTx.id ? data.transaction! : t));
-        const activeUid = currentUser?.id || getActiveUserId() || 'user_ansh';
-        setCachedTransactions(activeUid, next);
-        return next;
-      });
+      const activeUid = currentUser?.id || getActiveUserId() || 'user_ansh';
+      if (Array.isArray(data.transactions)) {
+        setTransactions(data.transactions);
+        setCachedTransactions(activeUid, data.transactions);
+      } else {
+        setTransactions((prev) => {
+          const next = prev.map((t) => (t.id === updatedTx.id ? data.transaction! : t));
+          setCachedTransactions(activeUid, next);
+          return next;
+        });
+      }
       if (data.summary) {
         setSummary(data.summary);
       }
+      fetchBudgets();
     }
   };
 
@@ -1109,6 +1121,7 @@ export default function App() {
           fetchBudgets();
         }}
         onEditTransaction={handleEditTransaction}
+        onDeleteTransaction={handleDeleteTransaction}
         onOpenAddTransaction={(cat) => {
           setIsAddTransactionOpen(true);
         }}

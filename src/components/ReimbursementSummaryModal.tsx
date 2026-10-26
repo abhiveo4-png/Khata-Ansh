@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   X,
   Briefcase,
@@ -9,16 +9,21 @@ import {
   Plus,
   RefreshCw,
   Wallet,
-  ArrowRight,
   Sparkles,
   ChevronDown,
   ChevronUp,
   Edit2,
+  Trash2,
   RotateCcw,
   Check,
   TrendingUp,
+  Building2,
+  CreditCard,
+  Banknote,
+  Save,
 } from 'lucide-react';
-import { Transaction } from '../types';
+import { Transaction, PaymentMethod } from '../types';
+import { ALL_ACCOUNTS, BANK_ACCOUNTS, CREDIT_CARDS } from '../utils/accounts';
 import { safeFetchJson } from '../utils/api';
 
 interface ReimbursementSummaryModalProps {
@@ -27,6 +32,7 @@ interface ReimbursementSummaryModalProps {
   transactions: Transaction[];
   onRefreshTransactions?: () => void;
   onEditTransaction?: (tx: Transaction) => Promise<void>;
+  onDeleteTransaction?: (id: string) => Promise<void>;
   onOpenAddTransaction?: (defaultCategory?: string) => void;
   selectedTxId?: string | null;
 }
@@ -37,27 +43,78 @@ export const ReimbursementSummaryModal: React.FC<ReimbursementSummaryModalProps>
   transactions,
   onRefreshTransactions,
   onEditTransaction,
+  onDeleteTransaction,
   onOpenAddTransaction,
   selectedTxId,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'pending' | 'partial' | 'settled'>('all');
+
+  // Inline Settlement State
   const [activeSettleTxId, setActiveSettleTxId] = useState<string | null>(selectedTxId || null);
   const [settleAmountInput, setSettleAmountInput] = useState<string>('');
+  const [settleAccountInput, setSettleAccountInput] = useState<string>('AX Bank');
+  const [settleDateInput, setSettleDateInput] = useState<string>(() => new Date().toISOString().split('T')[0]);
   const [settleNoteInput, setSettleNoteInput] = useState<string>('');
+  const [recordAccountInflow, setRecordAccountInflow] = useState<boolean>(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Bulk Settle All Panel State
+  const [isSettleAllOpen, setIsSettleAllOpen] = useState(false);
+  const [settleAllAccount, setSettleAllAccount] = useState<string>('AX Bank');
+  const [settleAllDate, setSettleAllDate] = useState<string>(() => new Date().toISOString().split('T')[0]);
+  const [settleAllNote, setSettleAllNote] = useState<string>('');
+  const [settleAllRecordInflow, setSettleAllRecordInflow] = useState<boolean>(true);
   const [isSettlingAll, setIsSettlingAll] = useState(false);
+
+  // Inline Edit Reimbursement Claim State
+  const [editingTxId, setEditingTxId] = useState<string | null>(null);
+  const [editDesc, setEditDesc] = useState('');
+  const [editAmount, setEditAmount] = useState('');
+  const [editDate, setEditDate] = useState('');
+  const [editTime, setEditTime] = useState('');
+  const [editAccount, setEditAccount] = useState('ICICI CC 0000');
+  const [editPaymentMethod, setEditPaymentMethod] = useState<PaymentMethod>('UPI');
+  const [editStatus, setEditStatus] = useState<'pending' | 'partial' | 'settled'>('pending');
+  const [editSettledAmount, setEditSettledAmount] = useState('0');
+  const [editSettledInAccount, setEditSettledInAccount] = useState('');
+  const [isSavingEdit, setIsSavingEdit] = useState(false);
+
+  // Inline Delete Confirmation State
+  const [confirmDeleteTxId, setConfirmDeleteTxId] = useState<string | null>(null);
+  const [isDeletingId, setIsDeletingId] = useState<string | null>(null);
+
   const [toastMessage, setToastMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
+
+  useEffect(() => {
+    if (selectedTxId) {
+      setActiveSettleTxId(selectedTxId);
+      const found = transactions.find((t) => t.id === selectedTxId);
+      if (found) {
+        const amt = Number(found.amount) || 0;
+        const settledAmt =
+          found.reimbursementStatus === 'settled'
+            ? amt
+            : Math.min(amt, Math.max(0, Number(found.reimbursementSettledAmount) || 0));
+        const rem = Math.max(0, amt - settledAmt);
+        setSettleAmountInput(rem > 0 ? String(rem) : String(amt));
+        setSettleAccountInput(found.settledInAccount || 'AX Bank');
+      }
+    }
+  }, [selectedTxId, transactions]);
 
   const showToast = (text: string, type: 'success' | 'error' = 'success') => {
     setToastMessage({ text, type });
-    setTimeout(() => setToastMessage(null), 3500);
+    setTimeout(() => setToastMessage(null), 4000);
   };
 
-  // Filter all reimbursement transactions
+  // Filter all expense reimbursement claim transactions (exclude settlement inflow records)
   const reimbursementTxs = useMemo(() => {
     return transactions.filter(
-      (tx) => tx.isReimbursement || tx.category?.toLowerCase() === 'reimbursement'
+      (tx) =>
+        !tx.isReimbursementInflow &&
+        tx.type !== 'income' &&
+        (tx.isReimbursement || tx.category?.toLowerCase() === 'reimbursement')
     );
   }, [transactions]);
 
@@ -115,7 +172,6 @@ export const ReimbursementSummaryModal: React.FC<ReimbursementSummaryModalProps>
         tx.reimbursementStatus === 'settled'
           ? amt
           : Math.min(amt, Math.max(0, Number(tx.reimbursementSettledAmount) || 0));
-      const remaining = Math.max(0, amt - settledAmt);
 
       // Status filter
       if (statusFilter === 'settled') {
@@ -131,9 +187,10 @@ export const ReimbursementSummaryModal: React.FC<ReimbursementSummaryModalProps>
         const q = searchQuery.toLowerCase();
         const descMatch = tx.description?.toLowerCase().includes(q);
         const accMatch = tx.account?.toLowerCase().includes(q);
+        const setAccMatch = tx.settledInAccount?.toLowerCase().includes(q);
         const amtMatch = String(tx.amount).includes(q);
         const dateMatch = tx.date?.includes(q);
-        if (!descMatch && !accMatch && !amtMatch && !dateMatch) return false;
+        if (!descMatch && !accMatch && !setAccMatch && !amtMatch && !dateMatch) return false;
       }
 
       return true;
@@ -142,6 +199,8 @@ export const ReimbursementSummaryModal: React.FC<ReimbursementSummaryModalProps>
 
   // Open inline settlement form
   const handleOpenSettleForm = (tx: Transaction) => {
+    setEditingTxId(null);
+    setConfirmDeleteTxId(null);
     if (activeSettleTxId === tx.id) {
       setActiveSettleTxId(null);
       return;
@@ -155,10 +214,122 @@ export const ReimbursementSummaryModal: React.FC<ReimbursementSummaryModalProps>
 
     setActiveSettleTxId(tx.id);
     setSettleAmountInput(remaining > 0 ? String(remaining) : String(amt));
+    setSettleAccountInput(tx.settledInAccount || 'AX Bank');
+    setSettleDateInput(new Date().toISOString().split('T')[0]);
     setSettleNoteInput('');
+    setRecordAccountInflow(true);
   };
 
-  // Submit Settlement (Full or Partial)
+  // Open inline edit form
+  const handleStartEdit = (tx: Transaction) => {
+    setActiveSettleTxId(null);
+    setConfirmDeleteTxId(null);
+    if (editingTxId === tx.id) {
+      setEditingTxId(null);
+      return;
+    }
+    const amt = Number(tx.amount) || 0;
+    const settledAmt =
+      tx.reimbursementStatus === 'settled'
+        ? amt
+        : Math.min(amt, Math.max(0, Number(tx.reimbursementSettledAmount) || 0));
+
+    setEditingTxId(tx.id);
+    setEditDesc(tx.description || '');
+    setEditAmount(String(amt));
+    setEditDate(tx.date || new Date().toISOString().split('T')[0]);
+    setEditTime(tx.time || '');
+    setEditAccount(tx.account || 'ICICI CC 0000');
+    setEditPaymentMethod(tx.paymentMethod || 'UPI');
+    setEditStatus(
+      tx.reimbursementStatus === 'settled' || (settledAmt >= amt && amt > 0)
+        ? 'settled'
+        : settledAmt > 0
+        ? 'partial'
+        : 'pending'
+    );
+    setEditSettledAmount(String(settledAmt));
+    setEditSettledInAccount(tx.settledInAccount || '');
+  };
+
+  // Save edited reimbursement claim
+  const handleSaveEdit = async (tx: Transaction) => {
+    const numAmt = Math.abs(Number(editAmount)) || 0;
+    if (numAmt <= 0) {
+      showToast('Kripya valid amount daalein (Greater than 0)', 'error');
+      return;
+    }
+    if (!editDesc.trim()) {
+      showToast('Kripya kharche ka naam/description daalein', 'error');
+      return;
+    }
+
+    let finalSettledAmt = 0;
+    if (editStatus === 'settled') {
+      finalSettledAmt = numAmt;
+    } else if (editStatus === 'partial') {
+      finalSettledAmt = Math.min(numAmt, Math.max(0, Number(editSettledAmount) || 0));
+    } else {
+      finalSettledAmt = 0;
+    }
+
+    setIsSavingEdit(true);
+    try {
+      const updatedTx: Transaction = {
+        ...tx,
+        description: editDesc.trim(),
+        amount: numAmt,
+        date: editDate || tx.date,
+        time: editTime || tx.time,
+        account: editAccount,
+        paymentMethod: editPaymentMethod,
+        isReimbursement: true,
+        category: 'Reimbursement',
+        reimbursementStatus: editStatus,
+        reimbursementSettledAmount: finalSettledAmt,
+        settledInAccount: editStatus === 'pending' ? undefined : (editSettledInAccount || tx.settledInAccount),
+      };
+
+      if (onEditTransaction) {
+        await onEditTransaction(updatedTx);
+      } else {
+        await safeFetchJson(`/api/transactions/${tx.id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(updatedTx),
+        });
+      }
+
+      showToast(`✅ Reimbursement "${updatedTx.description}" successfully update ho gaya!`);
+      setEditingTxId(null);
+      if (onRefreshTransactions) onRefreshTransactions();
+    } catch (err: any) {
+      showToast('Update me error aaya: ' + (err.message || 'Unknown'), 'error');
+    } finally {
+      setIsSavingEdit(false);
+    }
+  };
+
+  // Delete reimbursement claim
+  const handleConfirmDelete = async (tx: Transaction) => {
+    setIsDeletingId(tx.id);
+    try {
+      if (onDeleteTransaction) {
+        await onDeleteTransaction(tx.id);
+      } else {
+        await safeFetchJson(`/api/transactions/${tx.id}`, { method: 'DELETE' });
+      }
+      showToast(`🗑️ Reimbursement "${tx.description || 'Claim'}" delete kar diya gaya!`);
+      setConfirmDeleteTxId(null);
+      if (onRefreshTransactions) onRefreshTransactions();
+    } catch (err: any) {
+      showToast('Delete me error aaya: ' + (err.message || 'Unknown'), 'error');
+    } finally {
+      setIsDeletingId(null);
+    }
+  };
+
+  // Submit Settlement (Full or Partial) + Auto Account Credit
   const handleConfirmSettle = async (tx: Transaction, isFullDirect: boolean = false) => {
     const amt = Number(tx.amount) || 0;
     const currentlySettled =
@@ -167,10 +338,15 @@ export const ReimbursementSummaryModal: React.FC<ReimbursementSummaryModalProps>
         : Math.min(amt, Math.max(0, Number(tx.reimbursementSettledAmount) || 0));
     const currentRemaining = Math.max(0, amt - currentlySettled);
 
-    let amountToSettleNow = isFullDirect ? currentRemaining : Number(settleAmountInput);
+    const amountToSettleNow = isFullDirect ? currentRemaining : Number(settleAmountInput);
 
     if (isNaN(amountToSettleNow) || amountToSettleNow <= 0) {
       showToast('Kripya valid settlement amount daalein (Greater than 0)', 'error');
+      return;
+    }
+
+    if (!settleAccountInput) {
+      showToast('Kripya select karein ki paisa kis account me aaya hai', 'error');
       return;
     }
 
@@ -183,33 +359,40 @@ export const ReimbursementSummaryModal: React.FC<ReimbursementSummaryModalProps>
       const { data, error } = await safeFetchJson<{
         success: boolean;
         transaction: Transaction;
+        inflowTransaction?: Transaction | null;
         remainingAmount: number;
       }>(`/api/transactions/${tx.id}/settle-reimbursement`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           settledAmount: newTotalSettled,
+          amountSettledNow: amountToSettleNow,
           isFullSettle: newTotalSettled >= amt,
+          settleAccount: settleAccountInput,
+          settleDate: settleDateInput,
+          recordAccountInflow,
           notes: settleNoteInput.trim() ? `Settle: ${settleNoteInput.trim()}` : undefined,
         }),
       });
 
       if (error || !data?.success) {
-        // Fallback to direct PUT
         if (onEditTransaction) {
           await onEditTransaction({
             ...tx,
             isReimbursement: true,
             reimbursementStatus: nextStatus,
             reimbursementSettledAmount: newTotalSettled,
+            settledInAccount: settleAccountInput,
+            settledDate: settleDateInput,
           });
         }
       }
 
+      const accLabel = settleAccountInput;
       showToast(
         newTotalSettled >= amt
-          ? `🎉 ₹${amountToSettleNow.toLocaleString('en-IN')} pura settle ho gaya!`
-          : `✅ ₹${amountToSettleNow.toLocaleString('en-IN')} settle hua. Baki ₹${newRemaining.toLocaleString('en-IN')} bacha hai.`
+          ? `🎉 ₹${amountToSettleNow.toLocaleString('en-IN')} pura settle ho gaya${recordAccountInflow ? ` aur [${accLabel}] me credit ho gaya!` : '!'}`
+          : `✅ ₹${amountToSettleNow.toLocaleString('en-IN')} [${accLabel}] me settle hua. Baki ₹${newRemaining.toLocaleString('en-IN')} bacha hai.`
       );
 
       setActiveSettleTxId(null);
@@ -226,7 +409,7 @@ export const ReimbursementSummaryModal: React.FC<ReimbursementSummaryModalProps>
     }
   };
 
-  // Re-open settled transaction to pending
+  // Re-open settled transaction to pending (also reverses linked auto-inflow on backend)
   const handleReopenToPending = async (tx: Transaction) => {
     setIsSubmitting(true);
     try {
@@ -236,9 +419,11 @@ export const ReimbursementSummaryModal: React.FC<ReimbursementSummaryModalProps>
           isReimbursement: true,
           reimbursementStatus: 'pending',
           reimbursementSettledAmount: 0,
+          settledInAccount: undefined,
+          settledDate: undefined,
         });
       }
-      showToast('Reimbursement claim wapas "Pending" mark ho gaya!');
+      showToast('Reimbursement claim wapas "Pending" mark ho gaya (linked account inflow bhi hat gaya)!');
       setActiveSettleTxId(null);
       if (onRefreshTransactions) onRefreshTransactions();
     } catch (err: any) {
@@ -248,14 +433,10 @@ export const ReimbursementSummaryModal: React.FC<ReimbursementSummaryModalProps>
     }
   };
 
-  // Settle All Pending / Partial Claims in 1-Click
-  const handleSettleAll = async () => {
+  // Settle All Pending / Partial Claims in 1-Click with Account Selection
+  const handleConfirmSettleAll = async () => {
     if (stats.totalRemaining <= 0) {
       showToast('Koi pending reimbursement claim baki nahi hai.', 'error');
-      return;
-    }
-
-    if (!window.confirm(`Kya aap saare pending reimbursement claims (Kul: ₹${stats.totalRemaining.toLocaleString('en-IN')}) ko ek sath Full Settle mark karna chahte hain?`)) {
       return;
     }
 
@@ -267,12 +448,23 @@ export const ReimbursementSummaryModal: React.FC<ReimbursementSummaryModalProps>
         totalSettledAmount: number;
       }>('/api/transactions/settle-all-reimbursements', {
         method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          settleAccount: settleAllAccount,
+          settleDate: settleAllDate,
+          notes: settleAllNote.trim() || undefined,
+          recordAccountInflow: settleAllRecordInflow,
+        }),
       });
 
       if (error || !data?.success) {
         showToast(error || 'Failed to settle all reimbursements', 'error');
       } else {
-        showToast(`🎉 ${data.settledCount} claims (Kul ₹${(data.totalSettledAmount || stats.totalRemaining).toLocaleString('en-IN')}) successfully settle ho gaye!`);
+        showToast(
+          `🎉 ${data.settledCount} claims (Kul ₹${(data.totalSettledAmount || stats.totalRemaining).toLocaleString('en-IN')}) [${settleAllAccount}] me successfully settle ho gaye!`
+        );
+        setIsSettleAllOpen(false);
+        setSettleAllNote('');
         if (onRefreshTransactions) onRefreshTransactions();
       }
     } catch (err: any) {
@@ -282,22 +474,36 @@ export const ReimbursementSummaryModal: React.FC<ReimbursementSummaryModalProps>
     }
   };
 
+  // Extract settled account from tx or tags
+  const getSettledAccountBadge = (tx: Transaction): string | null => {
+    if (tx.settledInAccount) return tx.settledInAccount;
+    if (Array.isArray(tx.tags)) {
+      const found = tx.tags.find((t) => t.startsWith('account:'));
+      if (found) return found.replace('account:', '');
+    }
+    return null;
+  };
+
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-5 bg-black/80 backdrop-blur-md animate-in fade-in duration-200">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-5 bg-black/80 backdrop-blur-md animate-in fade-in duration-200">
       <div className="relative w-full max-w-4xl max-h-[92vh] flex flex-col bg-slate-900 border border-cyan-500/30 rounded-2xl shadow-2xl overflow-hidden shadow-cyan-950/50">
         
         {/* Toast Notification */}
         {toastMessage && (
           <div
-            className={`absolute top-4 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-xl text-xs font-semibold shadow-xl border flex items-center gap-2 transition-all ${
+            className={`absolute top-4 left-1/2 -translate-x-1/2 z-50 px-4 py-2.5 rounded-xl text-xs font-semibold shadow-xl border flex items-center gap-2 transition-all max-w-md ${
               toastMessage.type === 'error'
                 ? 'bg-rose-950 border-rose-500/50 text-rose-200'
                 : 'bg-emerald-950 border-emerald-500/50 text-emerald-200'
             }`}
           >
-            {toastMessage.type === 'error' ? <AlertCircle className="w-4 h-4 text-rose-400" /> : <CheckCircle2 className="w-4 h-4 text-emerald-400" />}
+            {toastMessage.type === 'error' ? (
+              <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+            ) : (
+              <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+            )}
             <span>{toastMessage.text}</span>
           </div>
         )}
@@ -318,7 +524,7 @@ export const ReimbursementSummaryModal: React.FC<ReimbursementSummaryModalProps>
                 </span>
               </div>
               <p className="text-xs text-slate-400 mt-0.5">
-                Office / client claimable expenses. Yeh aapke Monthly Budget se minus nahi hote.
+                Claims edit/delete karein aur direct Bank Account select karke settle karein (Naya Kharcha se add nahi karna padega).
               </p>
             </div>
           </div>
@@ -354,10 +560,10 @@ export const ReimbursementSummaryModal: React.FC<ReimbursementSummaryModalProps>
             <Sparkles className="w-5 h-5 text-cyan-400 shrink-0 mt-0.5" />
             <div className="text-xs space-y-1">
               <p className="text-cyan-200 font-semibold">
-                Budget Exemption Active: Aapka Personal Budget Surakshit Hai!
+                Direct Account Settlement Active: Naya Kharcha Se Add Karne Ki Zaroorat Nahi!
               </p>
               <p className="text-slate-300 leading-relaxed">
-                Is category ke kharche (jaise cab, client lunch, travel ticket) <b>Monthly Category Budget</b> ya <b>Personal Expense</b> me deduct nahi hote. Yeh company/client se claim hone par niche diye gaye <b>"Settle"</b> button se settle kiye ja sakte hain.
+                Jab bhi office/client se paisa wapas mile, niche <b>"Settle Karein"</b> par click karke apna <b>Bank Account (jaise AX Bank, IC Bank, Cash)</b> select karein. Paisa seedhe us account ke balance me jud jayega! Aap kisi bhi entry ko yahin se <b>Edit ✏️</b> ya <b>Delete 🗑️</b> bhi kar sakte hain.
               </p>
             </div>
           </div>
@@ -425,8 +631,7 @@ export const ReimbursementSummaryModal: React.FC<ReimbursementSummaryModalProps>
           </div>
 
           {/* Action Row: Search, Tabs & Quick Settle All */}
-          <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 pt-2">
-            
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 pt-1">
             {/* Filter Tabs */}
             <div className="flex items-center gap-1.5 p-1 bg-slate-950/60 rounded-xl border border-white/[0.08] overflow-x-auto text-xs shrink-0">
               <button
@@ -477,7 +682,7 @@ export const ReimbursementSummaryModal: React.FC<ReimbursementSummaryModalProps>
                 <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
                 <input
                   type="text"
-                  placeholder="Karcha ya amount search..."
+                  placeholder="Kharcha, account ya amount search..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                   className="w-full pl-9 pr-3 py-1.5 bg-slate-950/60 border border-white/[0.08] rounded-xl text-xs text-white placeholder-slate-500 focus:outline-hidden focus:border-cyan-500"
@@ -486,17 +691,123 @@ export const ReimbursementSummaryModal: React.FC<ReimbursementSummaryModalProps>
 
               {stats.totalRemaining > 0 && (
                 <button
-                  onClick={handleSettleAll}
-                  disabled={isSettlingAll}
-                  className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-xs font-semibold rounded-xl transition-all cursor-pointer whitespace-nowrap flex items-center gap-1.5 shadow-lg shadow-emerald-950"
-                  title="Ek sath saare pending claims full settle karein"
+                  onClick={() => setIsSettleAllOpen(!isSettleAllOpen)}
+                  className={`px-3 py-1.5 text-white text-xs font-semibold rounded-xl transition-all cursor-pointer whitespace-nowrap flex items-center gap-1.5 shadow-lg ${
+                    isSettleAllOpen
+                      ? 'bg-slate-700 border border-slate-600'
+                      : 'bg-emerald-600 hover:bg-emerald-500 shadow-emerald-950'
+                  }`}
+                  title="Ek sath saare pending claims account select karke settle karein"
                 >
-                  {isSettlingAll ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <CheckCircle2 className="w-3.5 h-3.5" />}
+                  <CheckCircle2 className="w-3.5 h-3.5" />
                   <span>Quick Settle All (₹{stats.totalRemaining.toLocaleString('en-IN')})</span>
                 </button>
               )}
             </div>
           </div>
+
+          {/* Bulk Settle All Inline Account Selection Panel */}
+          {isSettleAllOpen && stats.totalRemaining > 0 && (
+            <div className="p-4 rounded-xl bg-emerald-950/30 border border-emerald-500/40 space-y-3 animate-in slide-in-from-top-2 duration-150">
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <div className="flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                  <span className="text-xs sm:text-sm font-bold text-emerald-200">
+                    Saare Baki Claims Ek Sath Settle Karein (Kul ₹{stats.totalRemaining.toLocaleString('en-IN')})
+                  </span>
+                </div>
+                <button
+                  onClick={() => setIsSettleAllOpen(false)}
+                  className="text-xs text-slate-400 hover:text-white cursor-pointer"
+                >
+                  ✕ Band Karein
+                </button>
+              </div>
+
+              {/* Account Selector for Bulk Settle */}
+              <div>
+                <label className="block text-[11px] font-semibold text-emerald-300 mb-1.5">
+                  🏦 Kis Account / Bank me Settle Hua Hai? (Select Account):
+                </label>
+                <div className="flex flex-wrap gap-1.5">
+                  {[...BANK_ACCOUNTS, ...ALL_ACCOUNTS.filter((a) => a.type === 'cash'), ...CREDIT_CARDS].map((acc) => {
+                    const isSelected = settleAllAccount === acc.id;
+                    return (
+                      <button
+                        key={acc.id}
+                        type="button"
+                        onClick={() => setSettleAllAccount(acc.id)}
+                        className={`px-2.5 py-1.5 rounded-xl text-xs font-semibold border transition-all cursor-pointer flex items-center gap-1.5 ${
+                          isSelected
+                            ? 'bg-emerald-600 text-white border-emerald-400 shadow-md shadow-emerald-950'
+                            : 'bg-slate-900/90 text-slate-300 border-white/[0.08] hover:border-emerald-500/40 hover:text-white'
+                        }`}
+                      >
+                        {acc.type === 'bank_account' ? (
+                          <Building2 className="w-3.5 h-3.5 text-emerald-300" />
+                        ) : acc.type === 'cash' ? (
+                          <Banknote className="w-3.5 h-3.5 text-emerald-300" />
+                        ) : (
+                          <CreditCard className="w-3.5 h-3.5 text-cyan-300" />
+                        )}
+                        <span>{acc.id}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[11px] font-medium text-slate-300 mb-1">
+                    Settlement Date:
+                  </label>
+                  <input
+                    type="date"
+                    value={settleAllDate}
+                    onChange={(e) => setSettleAllDate(e.target.value)}
+                    className="w-full px-3 py-1.5 bg-slate-900 border border-slate-700 rounded-xl text-xs text-white focus:outline-hidden focus:border-emerald-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-medium text-slate-300 mb-1">
+                    Note (Optional):
+                  </label>
+                  <input
+                    type="text"
+                    value={settleAllNote}
+                    onChange={(e) => setSettleAllNote(e.target.value)}
+                    placeholder="e.g. Monthly office reimbursement credited"
+                    className="w-full px-3 py-1.5 bg-slate-900 border border-slate-700 rounded-xl text-xs text-white placeholder-slate-500 focus:outline-hidden focus:border-emerald-500"
+                  />
+                </div>
+              </div>
+
+              <div className="flex items-center justify-between flex-wrap gap-3 pt-1">
+                <label className="flex items-center gap-2 text-xs text-emerald-200 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={settleAllRecordInflow}
+                    onChange={(e) => setSettleAllRecordInflow(e.target.checked)}
+                    className="rounded border-emerald-500 bg-slate-900 text-emerald-500 focus:ring-0"
+                  />
+                  <span>
+                    <b>[{settleAllAccount}]</b> me ₹{stats.totalRemaining.toLocaleString('en-IN')} automatically credit (add) karein
+                  </span>
+                </label>
+
+                <button
+                  type="button"
+                  disabled={isSettlingAll}
+                  onClick={handleConfirmSettleAll}
+                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-xs font-bold rounded-xl transition-all cursor-pointer flex items-center gap-1.5 shadow-lg shadow-emerald-950"
+                >
+                  {isSettlingAll ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
+                  <span>Confirm Settle All in {settleAllAccount}</span>
+                </button>
+              </div>
+            </div>
+          )}
 
           {/* Transactions List */}
           <div className="space-y-3">
@@ -533,18 +844,20 @@ export const ReimbursementSummaryModal: React.FC<ReimbursementSummaryModalProps>
 
                 const isSettled = tx.reimbursementStatus === 'settled' || (settledAmt >= totalAmt && totalAmt > 0);
                 const isPartial = !isSettled && settledAmt > 0;
-                const isPending = !isSettled && settledAmt === 0;
 
                 const isExpanded = activeSettleTxId === tx.id;
+                const isEditing = editingTxId === tx.id;
+                const isConfirmingDelete = confirmDeleteTxId === tx.id;
+                const settledAccBadge = getSettledAccountBadge(tx);
 
                 return (
                   <div
                     key={tx.id}
                     className={`glass-card rounded-xl border transition-all overflow-hidden ${
-                      isExpanded
+                      isExpanded || isEditing
                         ? 'border-cyan-500/50 bg-slate-900/90 shadow-xl shadow-cyan-950/30'
                         : isSettled
-                        ? 'border-emerald-500/20 bg-slate-950/30 opacity-90'
+                        ? 'border-emerald-500/20 bg-slate-950/30 opacity-95'
                         : isPartial
                         ? 'border-orange-500/30 bg-slate-950/40'
                         : 'border-white/[0.08] bg-slate-950/40 hover:border-cyan-500/30'
@@ -594,6 +907,14 @@ export const ReimbursementSummaryModal: React.FC<ReimbursementSummaryModalProps>
                                 <span>Pending Claim</span>
                               </span>
                             )}
+
+                            {/* Settled In Account Badge */}
+                            {(isSettled || isPartial) && settledAccBadge && (
+                              <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-cyan-500/15 text-cyan-300 border border-cyan-500/30">
+                                <Building2 className="w-2.5 h-2.5" />
+                                <span>Settled in: {settledAccBadge}</span>
+                              </span>
+                            )}
                           </div>
 
                           <div className="flex items-center gap-2 text-xs text-slate-400 mt-1 flex-wrap">
@@ -601,7 +922,9 @@ export const ReimbursementSummaryModal: React.FC<ReimbursementSummaryModalProps>
                             {tx.time && <span>• ⏰ {tx.time}</span>}
                             <span>• 💳 {tx.paymentMethod || 'UPI/Cash'}</span>
                             {tx.account && (
-                              <span className="text-slate-500">[{tx.account}]</span>
+                              <span className="text-slate-300 font-medium bg-white/[0.05] px-1.5 py-0.5 rounded">
+                                Paid via: {tx.account}
+                              </span>
                             )}
                             {tx.telegramUser && (
                               <span className="text-cyan-400/80">by @{tx.telegramUser}</span>
@@ -610,8 +933,8 @@ export const ReimbursementSummaryModal: React.FC<ReimbursementSummaryModalProps>
                         </div>
                       </div>
 
-                      {/* Right: Amounts & Settlement Actions */}
-                      <div className="flex items-center justify-between sm:justify-end gap-4 shrink-0 pt-2 sm:pt-0 border-t sm:border-t-0 border-white/[0.05]">
+                      {/* Right: Amounts & Action Buttons (Settle / Edit / Delete) */}
+                      <div className="flex items-center justify-between sm:justify-end gap-3 shrink-0 pt-2 sm:pt-0 border-t sm:border-t-0 border-white/[0.05]">
                         <div className="text-right">
                           <div className="text-base sm:text-lg font-bold text-white font-mono">
                             ₹{totalAmt.toLocaleString('en-IN')}
@@ -620,7 +943,7 @@ export const ReimbursementSummaryModal: React.FC<ReimbursementSummaryModalProps>
                           {/* Remaining / Settled subtext */}
                           {isSettled ? (
                             <div className="text-[11px] text-emerald-400 font-medium">
-                              ✓ ₹{totalAmt.toLocaleString('en-IN')} pura wapas mil gaya
+                              ✓ ₹{totalAmt.toLocaleString('en-IN')} wapas mil gaya
                             </div>
                           ) : (
                             <div className="text-[11px] text-amber-300 font-medium font-mono">
@@ -634,8 +957,9 @@ export const ReimbursementSummaryModal: React.FC<ReimbursementSummaryModalProps>
                           )}
                         </div>
 
-                        {/* Settle / Manage Button */}
+                        {/* Action Buttons */}
                         <div className="flex items-center gap-1.5">
+                          {/* Settle / Reopen Button */}
                           {!isSettled ? (
                             <button
                               onClick={() => handleOpenSettleForm(tx)}
@@ -653,35 +977,330 @@ export const ReimbursementSummaryModal: React.FC<ReimbursementSummaryModalProps>
                             <button
                               onClick={() => handleReopenToPending(tx)}
                               disabled={isSubmitting}
-                              className="px-2.5 py-1.5 text-xs text-slate-400 hover:text-amber-300 hover:bg-white/[0.05] rounded-xl border border-white/[0.08] transition-all cursor-pointer flex items-center gap-1"
+                              className="px-2.5 py-1.5 text-xs text-slate-300 hover:text-amber-300 hover:bg-white/[0.05] rounded-xl border border-white/[0.08] transition-all cursor-pointer flex items-center gap-1"
                               title="Wapas pending claim banayein"
                             >
-                              <RotateCcw className="w-3 h-3" />
+                              <RotateCcw className="w-3.5 h-3.5" />
                               <span className="hidden sm:inline">Reopen</span>
+                            </button>
+                          )}
+
+                          {/* Edit Button */}
+                          <button
+                            type="button"
+                            onClick={() => handleStartEdit(tx)}
+                            className={`p-2 rounded-xl border transition-all cursor-pointer ${
+                              isEditing
+                                ? 'bg-indigo-600 text-white border-indigo-400'
+                                : 'text-slate-400 hover:text-indigo-300 hover:bg-indigo-500/10 border-white/[0.08]'
+                            }`}
+                            title="Reimbursement Edit Karein"
+                          >
+                            <Edit2 className="w-3.5 h-3.5" />
+                          </button>
+
+                          {/* Delete Button / Inline Confirm */}
+                          {isConfirmingDelete ? (
+                            <div className="flex items-center gap-1 bg-rose-950/80 border border-rose-500/40 px-2 py-1 rounded-xl">
+                              <button
+                                type="button"
+                                disabled={isDeletingId === tx.id}
+                                onClick={() => handleConfirmDelete(tx)}
+                                className="text-[11px] font-bold text-rose-200 hover:text-white bg-rose-600 px-2 py-0.5 rounded-lg cursor-pointer"
+                              >
+                                {isDeletingId === tx.id ? '...' : 'Delete'}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setConfirmDeleteTxId(null)}
+                                className="text-[11px] text-slate-300 hover:text-white px-1 cursor-pointer"
+                              >
+                                ✕
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setActiveSettleTxId(null);
+                                setEditingTxId(null);
+                                setConfirmDeleteTxId(tx.id);
+                              }}
+                              className="p-2 text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 rounded-xl border border-white/[0.08] transition-all cursor-pointer"
+                              title="Reimbursement Delete Karein"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
                             </button>
                           )}
                         </div>
                       </div>
                     </div>
 
-                    {/* Expandable Inline Settlement Form */}
-                    {isExpanded && !isSettled && (
-                      <div className="px-4 py-3.5 bg-slate-950/80 border-t border-cyan-500/20 space-y-3 animate-in slide-in-from-top-2 duration-150">
+                    {/* Expandable Inline EDIT Form */}
+                    {isEditing && (
+                      <div className="px-4 py-4 bg-slate-950/90 border-t border-indigo-500/30 space-y-3 animate-in slide-in-from-top-2 duration-150">
                         <div className="flex items-center justify-between text-xs">
+                          <span className="text-indigo-300 font-bold flex items-center gap-1.5">
+                            <Edit2 className="w-3.5 h-3.5 text-indigo-400" />
+                            Reimbursement Claim Edit Karein
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => setEditingTxId(null)}
+                            className="text-slate-400 hover:text-white cursor-pointer"
+                          >
+                            ✕ Cancel
+                          </button>
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                          {/* Description */}
+                          <div className="sm:col-span-2">
+                            <label className="block text-[11px] font-medium text-slate-400 mb-1">
+                              Kharcha / Claim Description:
+                            </label>
+                            <input
+                              type="text"
+                              value={editDesc}
+                              onChange={(e) => setEditDesc(e.target.value)}
+                              placeholder="e.g. Cab to Gurgaon / Client Lunch"
+                              className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-xl text-xs text-white focus:outline-hidden focus:border-indigo-500"
+                            />
+                          </div>
+
+                          {/* Amount */}
+                          <div>
+                            <label className="block text-[11px] font-medium text-slate-400 mb-1">
+                              Claim Amount (₹):
+                            </label>
+                            <input
+                              type="number"
+                              min="1"
+                              value={editAmount}
+                              onChange={(e) => setEditAmount(e.target.value)}
+                              className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-xl text-xs text-white font-mono focus:outline-hidden focus:border-indigo-500"
+                            />
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                          {/* Date */}
+                          <div>
+                            <label className="block text-[11px] font-medium text-slate-400 mb-1">
+                              Date:
+                            </label>
+                            <input
+                              type="date"
+                              value={editDate}
+                              onChange={(e) => setEditDate(e.target.value)}
+                              className="w-full px-3 py-1.5 bg-slate-900 border border-slate-700 rounded-xl text-xs text-white focus:outline-hidden focus:border-indigo-500"
+                            />
+                          </div>
+
+                          {/* Paid From Account */}
+                          <div>
+                            <label className="block text-[11px] font-medium text-slate-400 mb-1">
+                              Paid From Account/Card:
+                            </label>
+                            <select
+                              value={editAccount}
+                              onChange={(e) => setEditAccount(e.target.value)}
+                              className="w-full px-2.5 py-1.5 bg-slate-900 border border-slate-700 rounded-xl text-xs text-white focus:outline-hidden focus:border-indigo-500"
+                            >
+                              {ALL_ACCOUNTS.map((acc) => (
+                                <option key={acc.id} value={acc.id} className="bg-slate-900">
+                                  {acc.id} ({acc.badge})
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+
+                          {/* Payment Method */}
+                          <div>
+                            <label className="block text-[11px] font-medium text-slate-400 mb-1">
+                              Payment Mode:
+                            </label>
+                            <select
+                              value={editPaymentMethod}
+                              onChange={(e) => setEditPaymentMethod(e.target.value as PaymentMethod)}
+                              className="w-full px-2.5 py-1.5 bg-slate-900 border border-slate-700 rounded-xl text-xs text-white focus:outline-hidden focus:border-indigo-500"
+                            >
+                              <option value="UPI">UPI</option>
+                              <option value="Card">Card</option>
+                              <option value="Cash">Cash</option>
+                              <option value="Net Banking">Net Banking</option>
+                              <option value="Bank Transfer">Bank Transfer</option>
+                            </select>
+                          </div>
+
+                          {/* Claim Status */}
+                          <div>
+                            <label className="block text-[11px] font-medium text-slate-400 mb-1">
+                              Claim Status:
+                            </label>
+                            <select
+                              value={editStatus}
+                              onChange={(e) => {
+                                const st = e.target.value as 'pending' | 'partial' | 'settled';
+                                setEditStatus(st);
+                                if (st === 'settled') setEditSettledAmount(editAmount);
+                                if (st === 'pending') setEditSettledAmount('0');
+                              }}
+                              className="w-full px-2.5 py-1.5 bg-slate-900 border border-slate-700 rounded-xl text-xs text-white focus:outline-hidden focus:border-indigo-500"
+                            >
+                              <option value="pending">Pending (Baki)</option>
+                              <option value="partial">Partial Settled</option>
+                              <option value="settled">Pura Settled</option>
+                            </select>
+                          </div>
+                        </div>
+
+                        {editStatus !== 'pending' && (
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                            <div>
+                              <label className="block text-[11px] font-medium text-slate-400 mb-1">
+                                Settled Amount (₹):
+                              </label>
+                              <input
+                                type="number"
+                                min="0"
+                                max={Number(editAmount) || undefined}
+                                value={editSettledAmount}
+                                onChange={(e) => setEditSettledAmount(e.target.value)}
+                                className="w-full px-3 py-1.5 bg-slate-900 border border-slate-700 rounded-xl text-xs text-white font-mono focus:outline-hidden focus:border-indigo-500"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-[11px] font-medium text-slate-400 mb-1">
+                                Settled In Account:
+                              </label>
+                              <select
+                                value={editSettledInAccount}
+                                onChange={(e) => setEditSettledInAccount(e.target.value)}
+                                className="w-full px-2.5 py-1.5 bg-slate-900 border border-slate-700 rounded-xl text-xs text-white focus:outline-hidden focus:border-indigo-500"
+                              >
+                                <option value="">-- Select Account --</option>
+                                {ALL_ACCOUNTS.map((acc) => (
+                                  <option key={acc.id} value={acc.id} className="bg-slate-900">
+                                    {acc.id} ({acc.name})
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                          </div>
+                        )}
+
+                        <div className="flex items-center justify-end gap-2 pt-2">
+                          <button
+                            type="button"
+                            onClick={() => setEditingTxId(null)}
+                            className="px-3 py-1.5 text-xs text-slate-400 hover:text-white rounded-xl transition-colors cursor-pointer"
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            type="button"
+                            disabled={isSavingEdit}
+                            onClick={() => handleSaveEdit(tx)}
+                            className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs font-semibold rounded-xl transition-all cursor-pointer flex items-center gap-1.5 shadow-lg shadow-indigo-950"
+                          >
+                            {isSavingEdit ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+                            <span>Changes Save Karein</span>
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Expandable Inline Settlement Form (with Account Selection) */}
+                    {isExpanded && !isSettled && (
+                      <div className="px-4 py-4 bg-slate-950/90 border-t border-cyan-500/30 space-y-3.5 animate-in slide-in-from-top-2 duration-150">
+                        <div className="flex items-center justify-between text-xs flex-wrap gap-2">
                           <span className="text-cyan-300 font-semibold flex items-center gap-1.5">
                             <Wallet className="w-4 h-4 text-cyan-400" />
-                            Settlement Manager (Kitna Paisa Mila?)
+                            Settlement Manager (Kitna Paisa Aur Kis Account Me Mila?)
                           </span>
                           <span className="text-slate-400">
-                            Kul Claim: <b className="text-white">₹{totalAmt.toLocaleString('en-IN')}</b> • Baki: <b className="text-amber-300">₹{remainingAmt.toLocaleString('en-IN')}</b>
+                            Kul Claim: <b className="text-white">₹{totalAmt.toLocaleString('en-IN')}</b> • Baki:{' '}
+                            <b className="text-amber-300">₹{remainingAmt.toLocaleString('en-IN')}</b>
                           </span>
                         </div>
 
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        {/* Step 1: Select Bank Account / Card where Settlement was received */}
+                        <div className="p-3 rounded-xl bg-slate-900/90 border border-cyan-500/20 space-y-2">
+                          <label className="block text-[11px] font-bold text-cyan-300">
+                            1️⃣ Kis Account / Bank me Paisa Settle Hua Hai? (Select Account):
+                          </label>
+
+                          {/* Bank Accounts & Cash */}
+                          <div className="space-y-1.5">
+                            <div className="text-[10px] text-slate-400 font-medium">
+                              🏦 Bank Accounts & Cash (Recommended):
+                            </div>
+                            <div className="flex flex-wrap gap-2">
+                              {[...BANK_ACCOUNTS, ...ALL_ACCOUNTS.filter((a) => a.type === 'cash')].map((acc) => {
+                                const isSelected = settleAccountInput === acc.id;
+                                return (
+                                  <button
+                                    key={acc.id}
+                                    type="button"
+                                    onClick={() => setSettleAccountInput(acc.id)}
+                                    className={`px-3 py-2 rounded-xl text-xs font-semibold border transition-all cursor-pointer flex items-center gap-2 ${
+                                      isSelected
+                                        ? 'bg-cyan-600 text-white border-cyan-400 shadow-lg shadow-cyan-950/80 ring-2 ring-cyan-400/30'
+                                        : 'bg-slate-950 text-slate-300 border-white/[0.08] hover:border-cyan-500/40 hover:text-white'
+                                    }`}
+                                  >
+                                    {acc.type === 'cash' ? (
+                                      <Banknote className="w-4 h-4 text-emerald-400" />
+                                    ) : (
+                                      <Building2 className="w-4 h-4 text-cyan-300" />
+                                    )}
+                                    <div className="text-left">
+                                      <div className="leading-none">{acc.id}</div>
+                                      <div className="text-[9px] opacity-75 font-normal mt-0.5">{acc.name}</div>
+                                    </div>
+                                    {isSelected && <CheckCircle2 className="w-3.5 h-3.5 text-white ml-1" />}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </div>
+
+                          {/* Credit Cards (If refunded to card) */}
+                          <div className="space-y-1.5 pt-1">
+                            <div className="text-[10px] text-slate-400 font-medium">
+                              💳 Credit Cards (Agar Card Statement me Refund/Settle Aaya):
+                            </div>
+                            <div className="flex flex-wrap gap-1.5">
+                              {CREDIT_CARDS.map((acc) => {
+                                const isSelected = settleAccountInput === acc.id;
+                                return (
+                                  <button
+                                    key={acc.id}
+                                    type="button"
+                                    onClick={() => setSettleAccountInput(acc.id)}
+                                    className={`px-2.5 py-1.5 rounded-xl text-[11px] font-semibold border transition-all cursor-pointer flex items-center gap-1.5 ${
+                                      isSelected
+                                        ? 'bg-indigo-600 text-white border-indigo-400 shadow-md shadow-indigo-950'
+                                        : 'bg-slate-950 text-slate-400 border-white/[0.06] hover:border-indigo-500/40 hover:text-white'
+                                    }`}
+                                  >
+                                    <CreditCard className="w-3 h-3 text-indigo-400" />
+                                    <span>{acc.id}</span>
+                                    {isSelected && <Check className="w-3 h-3 text-white" />}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Step 2: Amount & Quick Select */}
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                           {/* Amount Input */}
                           <div>
-                            <label className="block text-[11px] font-medium text-slate-400 mb-1">
-                              Abhi Kitna Amount Receive Hua (₹):
+                            <label className="block text-[11px] font-medium text-slate-300 mb-1">
+                              2️⃣ Kitna Amount Receive Hua (₹):
                             </label>
                             <div className="relative">
                               <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm font-mono">
@@ -701,7 +1320,7 @@ export const ReimbursementSummaryModal: React.FC<ReimbursementSummaryModalProps>
 
                           {/* Quick Settle Presets */}
                           <div>
-                            <label className="block text-[11px] font-medium text-slate-400 mb-1">
+                            <label className="block text-[11px] font-medium text-slate-300 mb-1">
                               Quick Amount Select:
                             </label>
                             <div className="flex items-center gap-2">
@@ -725,6 +1344,19 @@ export const ReimbursementSummaryModal: React.FC<ReimbursementSummaryModalProps>
                               )}
                             </div>
                           </div>
+
+                          {/* Settlement Date */}
+                          <div>
+                            <label className="block text-[11px] font-medium text-slate-300 mb-1">
+                              Settlement Date:
+                            </label>
+                            <input
+                              type="date"
+                              value={settleDateInput}
+                              onChange={(e) => setSettleDateInput(e.target.value)}
+                              className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-xl text-xs text-white focus:outline-hidden focus:border-cyan-500"
+                            />
+                          </div>
                         </div>
 
                         {/* Optional Notes */}
@@ -736,34 +1368,48 @@ export const ReimbursementSummaryModal: React.FC<ReimbursementSummaryModalProps>
                             type="text"
                             value={settleNoteInput}
                             onChange={(e) => setSettleNoteInput(e.target.value)}
-                            placeholder="e.g. Cleared via payroll / Cash returned / Client NEFT"
+                            placeholder="e.g. Cleared via Salary / Office NEFT / Cash received"
                             className="w-full px-3 py-1.5 bg-slate-900 border border-slate-700 rounded-xl text-xs text-white placeholder-slate-500 focus:outline-hidden focus:border-cyan-500"
                           />
                         </div>
 
-                        {/* Submission Buttons */}
-                        <div className="flex items-center justify-end gap-2 pt-1">
-                          <button
-                            type="button"
-                            onClick={() => setActiveSettleTxId(null)}
-                            className="px-3 py-1.5 text-xs text-slate-400 hover:text-white rounded-xl transition-colors cursor-pointer"
-                          >
-                            Cancel
-                          </button>
-
-                          <button
-                            type="button"
-                            disabled={isSubmitting}
-                            onClick={() => handleConfirmSettle(tx, false)}
-                            className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 text-white text-xs font-semibold rounded-xl transition-all cursor-pointer flex items-center gap-1.5 shadow-lg shadow-cyan-950"
-                          >
-                            {isSubmitting ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
+                        {/* Auto-Credit Toggle & Submission Buttons */}
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-1 border-t border-white/[0.06]">
+                          <label className="flex items-center gap-2 text-xs text-cyan-200 cursor-pointer select-none">
+                            <input
+                              type="checkbox"
+                              checked={recordAccountInflow}
+                              onChange={(e) => setRecordAccountInflow(e.target.checked)}
+                              className="rounded border-cyan-500 bg-slate-900 text-cyan-500 focus:ring-0"
+                            />
                             <span>
-                              {Number(settleAmountInput) >= remainingAmt
-                                ? 'Pura Settle Confirm Karein'
-                                : `Partial ₹${(Number(settleAmountInput) || 0).toLocaleString('en-IN')} Settle Karein`}
+                              ✨ <b>[{settleAccountInput}]</b> account balance me ₹{(Number(settleAmountInput) || 0).toLocaleString('en-IN')} automatically add (credit) karein
                             </span>
-                          </button>
+                          </label>
+
+                          <div className="flex items-center justify-end gap-2">
+                            <button
+                              type="button"
+                              onClick={() => setActiveSettleTxId(null)}
+                              className="px-3 py-1.5 text-xs text-slate-400 hover:text-white rounded-xl transition-colors cursor-pointer"
+                            >
+                              Cancel
+                            </button>
+
+                            <button
+                              type="button"
+                              disabled={isSubmitting}
+                              onClick={() => handleConfirmSettle(tx, false)}
+                              className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 text-white text-xs font-bold rounded-xl transition-all cursor-pointer flex items-center gap-1.5 shadow-lg shadow-cyan-950"
+                            >
+                              {isSubmitting ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
+                              <span>
+                                {Number(settleAmountInput) >= remainingAmt
+                                  ? `Settle in ${settleAccountInput} (₹${remainingAmt.toLocaleString('en-IN')})`
+                                  : `Partial ₹${(Number(settleAmountInput) || 0).toLocaleString('en-IN')} in ${settleAccountInput}`}
+                              </span>
+                            </button>
+                          </div>
                         </div>
                       </div>
                     )}

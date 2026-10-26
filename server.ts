@@ -123,6 +123,8 @@ export interface Transaction {
   isReimbursementInflow?: boolean;
   reimbursementStatus?: 'pending' | 'settled' | 'partial';
   reimbursementSettledAmount?: number;
+  settledInAccount?: string;
+  settledDate?: string;
   isSavingsTransfer?: boolean;
   isWifeTransfer?: boolean;
   isCcPayment?: boolean;
@@ -1377,6 +1379,8 @@ function calculateUserSummary(userId: string): FinancialSummary {
   let prevUdhaarLent = 0;
   let prevUdhaarRecovered = 0;
   let currentMonthUdhaarRecovered = 0;
+  let prevRimRecovered = 0;
+  let currentMonthRimRecovered = 0;
 
   const istInfo = getAppDateTime();
   const currentMonthPrefix = istInfo.date.substring(0, 7);
@@ -1404,7 +1408,10 @@ function calculateUserSummary(userId: string): FinancialSummary {
       if (isUdhaarRecovery) {
         if (isCurrentMonth) currentMonthUdhaarRecovered += amt;
         if (isPrevMonth) prevUdhaarRecovered += amt;
-      } else if (!isRimInflow) {
+      } else if (isRimInflow) {
+        if (isCurrentMonth) currentMonthRimRecovered += amt;
+        if (isPrevMonth) prevRimRecovered += amt;
+      } else {
         totalIncome += amt;
         incomeCount++;
         if (isCurrentMonth) currentMonthIncome += amt;
@@ -1499,15 +1506,15 @@ function calculateUserSummary(userId: string): FinancialSummary {
     ? tabMonthPendingLent
     : Math.max(0, currentMonthUdhaarLent - currentMonthUdhaarRecovered);
 
-  // True Carryforward Net Savings
-  const openingCarryforward = prevIncome - prevTotalExpense;
-  const openingCashBalance = prevIncome - prevTotalExpense - prevUdhaarLent + prevUdhaarRecovered;
-  // Net Savings deducts actual expenses from income
-  const currentMonthNetSavings = currentMonthIncome - currentMonthTotalExpense;
+  // True Carryforward Net Savings (Reimbursement recoveries restore the reimbursement expense outflow)
+  const openingCarryforward = prevIncome - prevTotalExpense + prevRimRecovered;
+  const openingCashBalance = prevIncome - prevTotalExpense - prevUdhaarLent + prevUdhaarRecovered + prevRimRecovered;
+  // Net Savings deducts actual expenses from income (+ reimbursement recovery)
+  const currentMonthNetSavings = currentMonthIncome - currentMonthTotalExpense + currentMonthRimRecovered;
   const totalNetSavings = openingCarryforward + currentMonthNetSavings;
 
-  // True Liquid Cash = Income - Expenses - Money Lent + Money Recovered
-  const cashBalance = openingCashBalance + (currentMonthIncome - currentMonthTotalExpense - currentMonthUdhaarLent + currentMonthUdhaarRecovered);
+  // True Liquid Cash = Income - Expenses - Money Lent + Money Recovered + Rim Recovered
+  const cashBalance = openingCashBalance + (currentMonthIncome - currentMonthTotalExpense - currentMonthUdhaarLent + currentMonthUdhaarRecovered + currentMonthRimRecovered);
   const savingsRate = currentMonthIncome > 0 ? Math.max(0, Math.round((currentMonthNetSavings / currentMonthIncome) * 100)) : 0;
   
   // Budget limit calculation strictly EXCLUDES categories that are exempt from budget!
@@ -9117,8 +9124,9 @@ app.put('/api/transactions/:id', (req, res) => {
       if (!tx.account || tx.account.includes('CC')) tx.account = 'AX Bank';
     }
   }
-  if (description) tx.description = description.trim();
+  if (description !== undefined) tx.description = String(description).trim();
   if (date) tx.date = date;
+  if (req.body.time !== undefined) tx.time = req.body.time;
   if (paymentMethod) tx.paymentMethod = paymentMethod;
   if (account !== undefined) tx.account = account;
   if (tags) tx.tags = tags;
@@ -9126,6 +9134,8 @@ app.put('/api/transactions/:id', (req, res) => {
   if (req.body.isReimbursementInflow !== undefined) tx.isReimbursementInflow = Boolean(req.body.isReimbursementInflow);
   if (reimbursementStatus !== undefined) tx.reimbursementStatus = reimbursementStatus;
   if (reimbursementSettledAmount !== undefined) tx.reimbursementSettledAmount = Number(reimbursementSettledAmount) || 0;
+  if (req.body.settledInAccount !== undefined) tx.settledInAccount = req.body.settledInAccount;
+  if (req.body.settledDate !== undefined) tx.settledDate = req.body.settledDate;
   if (isSavingsTransfer !== undefined) tx.isSavingsTransfer = Boolean(isSavingsTransfer);
   if (isWifeTransfer !== undefined) tx.isWifeTransfer = Boolean(isWifeTransfer);
   if (isCcPayment !== undefined) tx.isCcPayment = Boolean(isCcPayment);
@@ -9157,7 +9167,16 @@ app.put('/api/transactions/:id', (req, res) => {
   if (tx.isReimbursement || tx.category === 'Reimbursement') {
     const totalAmt = Number(tx.amount) || 0;
     const settled = Number(tx.reimbursementSettledAmount) || 0;
-    if (settled >= totalAmt && totalAmt > 0) {
+    if (reimbursementStatus === 'pending' && settled === 0) {
+      tx.reimbursementStatus = 'pending';
+      tx.reimbursementSettledAmount = 0;
+      tx.settledInAccount = undefined;
+      tx.settledDate = undefined;
+      // Remove any auto-created linked reimbursement inflow transactions
+      store.transactions = store.transactions.filter(
+        t => !(t.isReimbursementInflow && t.linkedTransferId === tx.id)
+      );
+    } else if (settled >= totalAmt && totalAmt > 0) {
       tx.reimbursementStatus = 'settled';
       tx.reimbursementSettledAmount = totalAmt;
     } else if (settled > 0 && settled < totalAmt) {
@@ -9166,15 +9185,24 @@ app.put('/api/transactions/:id', (req, res) => {
   }
 
   saveUserData(user.id, store);
-  res.json({ success: true, transaction: tx, summary: calculateUserSummary(user.id) });
+  res.json({ success: true, transaction: tx, transactions: store.transactions, summary: calculateUserSummary(user.id) });
 });
 
-// Dedicated Reimbursement Settlement Endpoint (supports full or partial settle)
+// Dedicated Reimbursement Settlement Endpoint (supports full or partial settle + automatic account credit)
 app.post('/api/transactions/:id/settle-reimbursement', (req, res) => {
   const user = getRequestUser(req);
   const store = getUserData(user.id);
   const { id } = req.params;
-  const { settledAmount, isFullSettle, notes } = req.body;
+  const {
+    settledAmount,
+    amountSettledNow,
+    isFullSettle,
+    settleAccount,
+    settleDate,
+    paymentMethod,
+    notes,
+    recordAccountInflow = true,
+  } = req.body;
 
   const tx = store.transactions.find(t => t.id === id);
   if (!tx) {
@@ -9182,6 +9210,11 @@ app.post('/api/transactions/:id/settle-reimbursement', (req, res) => {
   }
 
   const totalAmt = Number(tx.amount) || 0;
+  const previouslySettled =
+    tx.reimbursementStatus === 'settled'
+      ? totalAmt
+      : Math.min(totalAmt, Math.max(0, Number(tx.reimbursementSettledAmount) || 0));
+
   tx.isReimbursement = true;
   if (!tx.category || tx.category === 'Uncategorized') {
     tx.category = 'Reimbursement';
@@ -9203,6 +9236,12 @@ app.post('/api/transactions/:id/settle-reimbursement', (req, res) => {
     }
   }
 
+  const effectiveSettleDate = settleDate || getAppDateTime().date;
+  if (settleAccount) {
+    tx.settledInAccount = settleAccount;
+  }
+  tx.settledDate = effectiveSettleDate;
+
   if (notes && typeof notes === 'string' && notes.trim()) {
     tx.tags = Array.isArray(tx.tags) ? tx.tags : [];
     if (!tx.tags.includes(notes.trim())) {
@@ -9210,35 +9249,125 @@ app.post('/api/transactions/:id/settle-reimbursement', (req, res) => {
     }
   }
 
+  // Calculate how much was settled in this step and credit the chosen account automatically
+  const newSettledTotal = Number(tx.reimbursementSettledAmount) || 0;
+  const deltaSettled =
+    amountSettledNow !== undefined && Number(amountSettledNow) > 0
+      ? Number(amountSettledNow)
+      : Math.max(0, newSettledTotal - previouslySettled);
+
+  let inflowTransaction: Transaction | null = null;
+  if (recordAccountInflow !== false && deltaSettled > 0 && settleAccount) {
+    const cleanNote = notes ? String(notes).replace(/^Settle:\s*/i, '').trim() : '';
+    const defaultMode: PaymentMethod =
+      paymentMethod ||
+      (settleAccount === 'Cash'
+        ? 'Cash'
+        : settleAccount.includes('CC') || settleAccount.includes('2005')
+        ? 'Card'
+        : 'Bank Transfer');
+
+    inflowTransaction = {
+      id: `tx_rim_inflow_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+      userId: user.id,
+      type: 'income',
+      amount: deltaSettled,
+      category: 'Reimbursement',
+      description: `💼 Rim Settled: ${tx.description || 'Office Claim'}${cleanNote ? ` (${cleanNote})` : ''}`,
+      date: effectiveSettleDate,
+      time: getAppDateTime().time,
+      paymentMethod: defaultMode,
+      account: settleAccount,
+      source: 'manual',
+      createdAt: new Date().toISOString(),
+      isReimbursementInflow: true,
+      linkedTransferId: tx.id,
+      tags: ['reimbursement-inflow', `settled-from:${tx.id}`, `account:${settleAccount}`],
+    };
+    store.transactions.unshift(inflowTransaction);
+  }
+
   saveUserData(user.id, store);
   res.json({
     success: true,
     transaction: tx,
+    inflowTransaction,
+    transactions: store.transactions,
     remainingAmount: Math.max(0, totalAmt - (tx.reimbursementSettledAmount || 0)),
     summary: calculateUserSummary(user.id),
   });
 });
 
-// Settle All Pending / Partial Reimbursements in 1-Click
+// Settle All Pending / Partial Reimbursements in 1-Click (+ automatic account credit)
 app.post('/api/transactions/settle-all-reimbursements', (req, res) => {
   const user = getRequestUser(req);
   const store = getUserData(user.id);
+  const {
+    settleAccount,
+    settleDate,
+    paymentMethod,
+    notes,
+    recordAccountInflow = true,
+  } = req.body || {};
 
   let settledCount = 0;
   let totalSettledAmount = 0;
+  const effectiveSettleDate = settleDate || getAppDateTime().date;
+  const settledTitles: string[] = [];
 
   for (const tx of store.transactions) {
-    if (tx.isReimbursement || tx.category === 'Reimbursement') {
-      if (tx.reimbursementStatus !== 'settled') {
-        const amt = Number(tx.amount) || 0;
-        const currentSettled = Number(tx.reimbursementSettledAmount) || 0;
-        totalSettledAmount += Math.max(0, amt - currentSettled);
+    if (!tx.isReimbursementInflow && tx.type !== 'income' && (tx.isReimbursement || tx.category === 'Reimbursement')) {
+      const amt = Number(tx.amount) || 0;
+      const currentSettled =
+        tx.reimbursementStatus === 'settled'
+          ? amt
+          : Math.min(amt, Math.max(0, Number(tx.reimbursementSettledAmount) || 0));
+      const rem = Math.max(0, amt - currentSettled);
+
+      if (tx.reimbursementStatus !== 'settled' && rem > 0) {
+        totalSettledAmount += rem;
         tx.reimbursementStatus = 'settled';
         tx.reimbursementSettledAmount = amt;
         tx.isReimbursement = true;
+        if (settleAccount) tx.settledInAccount = settleAccount;
+        tx.settledDate = effectiveSettleDate;
         settledCount++;
+        if (tx.description && settledTitles.length < 3) {
+          settledTitles.push(tx.description);
+        }
       }
     }
+  }
+
+  let inflowTransaction: Transaction | null = null;
+  if (recordAccountInflow !== false && totalSettledAmount > 0 && settleAccount) {
+    const cleanNote = notes ? String(notes).trim() : '';
+    const defaultMode: PaymentMethod =
+      paymentMethod ||
+      (settleAccount === 'Cash'
+        ? 'Cash'
+        : settleAccount.includes('CC') || settleAccount.includes('2005')
+        ? 'Card'
+        : 'Bank Transfer');
+
+    const summaryDesc = settledTitles.length > 0 ? settledTitles.join(', ') : `${settledCount} Claims`;
+    inflowTransaction = {
+      id: `tx_rim_inflow_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+      userId: user.id,
+      type: 'income',
+      amount: totalSettledAmount,
+      category: 'Reimbursement',
+      description: `💼 Rim Bulk Settled (${settledCount} claims): ${summaryDesc}${cleanNote ? ` - ${cleanNote}` : ''}`,
+      date: effectiveSettleDate,
+      time: getAppDateTime().time,
+      paymentMethod: defaultMode,
+      account: settleAccount,
+      source: 'manual',
+      createdAt: new Date().toISOString(),
+      isReimbursementInflow: true,
+      tags: ['reimbursement-inflow', 'bulk-rim-settle', `account:${settleAccount}`],
+    };
+    store.transactions.unshift(inflowTransaction);
   }
 
   saveUserData(user.id, store);
@@ -9246,6 +9375,7 @@ app.post('/api/transactions/settle-all-reimbursements', (req, res) => {
     success: true,
     settledCount,
     totalSettledAmount,
+    inflowTransaction,
     summary: calculateUserSummary(user.id),
     transactions: store.transactions,
   });
@@ -9507,9 +9637,37 @@ app.delete('/api/transactions/:id', (req, res) => {
   }
 
   const [deleted] = store.transactions.splice(idx, 1);
+
+  // If a reimbursement claim was deleted, also remove any auto-generated settlement inflow linked to it
+  if (deleted && (deleted.isReimbursement || deleted.category === 'Reimbursement') && !deleted.isReimbursementInflow) {
+    store.transactions = store.transactions.filter(
+      t => !(t.isReimbursementInflow && t.linkedTransferId === id)
+    );
+  }
+
+  // If a linked reimbursement inflow was deleted, adjust the parent claim's settled amount
+  if (deleted && deleted.isReimbursementInflow && deleted.linkedTransferId) {
+    const parentClaim = store.transactions.find(t => t.id === deleted.linkedTransferId);
+    if (parentClaim) {
+      const parentAmt = Number(parentClaim.amount) || 0;
+      const curSettled =
+        parentClaim.reimbursementStatus === 'settled'
+          ? parentAmt
+          : Number(parentClaim.reimbursementSettledAmount) || 0;
+      const nextSettled = Math.max(0, curSettled - (Number(deleted.amount) || 0));
+      parentClaim.reimbursementSettledAmount = nextSettled;
+      if (nextSettled <= 0) {
+        parentClaim.reimbursementStatus = 'pending';
+        parentClaim.settledInAccount = undefined;
+      } else if (nextSettled < parentAmt) {
+        parentClaim.reimbursementStatus = 'partial';
+      }
+    }
+  }
+
   saveUserData(user.id, store);
 
-  res.json({ success: true, deleted, summary: calculateUserSummary(user.id) });
+  res.json({ success: true, deleted, transactions: store.transactions, summary: calculateUserSummary(user.id) });
 });
 
 app.delete('/api/transactions', (req, res) => {

@@ -93,6 +93,8 @@ export interface Transaction {
   isReimbursementInflow?: boolean;
   reimbursementStatus?: 'pending' | 'settled' | 'partial';
   reimbursementSettledAmount?: number;
+  settledInAccount?: AccountId | string;
+  settledDate?: string;
   isSavingsTransfer?: boolean;
   isWifeTransfer?: boolean;
   isCcPayment?: boolean;
@@ -101,6 +103,7 @@ export interface Transaction {
   isUdhaarRecovery?: boolean;
   linkedUdhaarId?: string;
   udhaarPersonName?: string;
+  linkedTransferId?: string;
 }
 
 export interface CategoryDef {
