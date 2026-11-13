@@ -2,7 +2,9 @@ import React, { useState, useMemo } from 'react';
 import { X, Plus, Calendar, Clock, ChevronLeft, ChevronRight, Tag, CreditCard, Check, Zap, Building2, Briefcase, Sparkles, HeartHandshake, ShieldCheck, ArrowUpRight, ArrowDownLeft } from 'lucide-react';
 import { Transaction, TransactionType, PaymentMethod, CategoryDef, AccountId } from '../types';
 import { getCurrentDateStr, formatDate } from '../utils/formatters';
-import { ALL_ACCOUNTS, detectAccount, detectReimbursement, detectSavingsTransfer, detectInvestment, detectFamilyTripPooja } from '../utils/accounts';
+import { ALL_ACCOUNTS, detectAccount, detectReimbursement, detectSavingsTransfer, detectInvestment, detectFamilyTripPooja, syncCustomAccounts } from '../utils/accounts';
+import { safeFetchJson } from '../utils/api';
+import { AccountBalancesData } from '../types';
 
 interface AddTransactionModalProps {
   isOpen: boolean;
@@ -45,6 +47,51 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
   const [tagInput, setTagInput] = useState('');
   const [tags, setTags] = useState<string[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Quick inline New Card creator state
+  const [showQuickAddCard, setShowQuickAddCard] = useState(false);
+  const [quickCardShortName, setQuickCardShortName] = useState('');
+  const [quickCardType, setQuickCardType] = useState<'credit_card' | 'rupay_card' | 'bank_account'>('credit_card');
+  const [quickCardLimit, setQuickCardLimit] = useState('150000');
+  const [isAddingQuickCard, setIsAddingQuickCard] = useState(false);
+
+  const handleQuickAddCard = async () => {
+    const cleanShort = quickCardShortName.trim();
+    if (!cleanShort) return;
+    setIsAddingQuickCard(true);
+    try {
+      const badge = quickCardType === 'rupay_card'
+        ? 'RuPay CC'
+        : quickCardType === 'credit_card'
+        ? `${cleanShort.split(' ')[0]} CC`
+        : `${cleanShort.split(' ')[0]} Bank`;
+
+      const { data } = await safeFetchJson<AccountBalancesData>('/api/accounts/custom', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: cleanShort,
+          shortName: cleanShort,
+          name: cleanShort,
+          type: quickCardType,
+          badge,
+          color: '#ec4899',
+          isUpiCapable: quickCardType === 'rupay_card' || quickCardType === 'bank_account',
+          creditLimit: parseFloat(quickCardLimit) || 100000,
+        }),
+      });
+      if (data?.customAccounts) {
+        syncCustomAccounts(data.customAccounts);
+      }
+      setAccount(cleanShort);
+      setQuickCardShortName('');
+      setShowQuickAddCard(false);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setIsAddingQuickCard(false);
+    }
+  };
 
   // Quick date strings (unconditional hooks)
   const todayStr = useMemo(() => getCurrentDateStr(), []);
@@ -601,7 +648,58 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
                       <CreditCard className="w-3 h-3 text-indigo-400" />
                       ACCOUNT / CARD
                     </span>
+                    <button
+                      type="button"
+                      onClick={() => setShowQuickAddCard(!showQuickAddCard)}
+                      className="text-[10px] font-bold text-amber-400 hover:text-amber-300 flex items-center gap-0.5 cursor-pointer"
+                    >
+                      <Plus className="w-3 h-3" />
+                      <span>{showQuickAddCard ? 'Close' : '+ New Card'}</span>
+                    </button>
                   </label>
+
+                  {showQuickAddCard && (
+                    <div className="mb-2 p-2.5 bg-slate-900 border border-amber-500/40 rounded-xl space-y-2 text-xs">
+                      <div className="flex items-center gap-1.5">
+                        <select
+                          value={quickCardType}
+                          onChange={(e) => setQuickCardType(e.target.value as any)}
+                          className="bg-slate-950 border border-slate-700 rounded-lg px-2 py-1.5 text-[11px] text-white"
+                        >
+                          <option value="credit_card">💳 Credit Card</option>
+                          <option value="rupay_card">⚡ RuPay CC</option>
+                          <option value="bank_account">🏦 Bank A/c</option>
+                        </select>
+                        <input
+                          type="text"
+                          placeholder="e.g. HDFC CC 4512"
+                          value={quickCardShortName}
+                          onChange={(e) => setQuickCardShortName(e.target.value)}
+                          className="flex-1 bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-[11px] text-white font-semibold"
+                        />
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        {quickCardType !== 'bank_account' && (
+                          <input
+                            type="number"
+                            placeholder="Limit ₹ (e.g. 150000)"
+                            value={quickCardLimit}
+                            onChange={(e) => setQuickCardLimit(e.target.value)}
+                            className="flex-1 bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1 text-[11px] text-white font-mono"
+                          />
+                        )}
+                        <button
+                          type="button"
+                          disabled={isAddingQuickCard || !quickCardShortName.trim()}
+                          onClick={handleQuickAddCard}
+                          className="px-3 py-1 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold rounded-lg text-[11px] cursor-pointer disabled:opacity-50"
+                        >
+                          {isAddingQuickCard ? 'Saving...' : 'Add & Select'}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
                   <select
                     value={account}
                     onChange={(e) => setAccount(e.target.value as AccountId)}

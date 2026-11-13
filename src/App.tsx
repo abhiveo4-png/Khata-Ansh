@@ -26,9 +26,11 @@ import {
   SavingsTransfer, 
   CardEmi, 
   RestoreBackupResult,
-  UserRole
+  UserRole,
+  AccountMeta
 } from './types';
 import { safeFetchJson, setActiveUserId, setAuthSession, getActiveUserId, clearAuthSession } from './utils/api';
+import { syncCustomAccounts } from './utils/accounts';
 import { DEFAULT_CATEGORIES } from './utils/categories';
 import { Header } from './components/Header';
 import { MobileNavDrawer, AppNavTab } from './components/MobileNavDrawer';
@@ -237,8 +239,11 @@ export default function App() {
   // Fetch transactions and summary
   const fetchTransactions = useCallback(async () => {
     const activeUid = getActiveUserId() || 'user_ansh';
-    const { data } = await safeFetchJson<{ transactions?: Transaction[]; summary?: FinancialSummary }>('/api/transactions');
+    const { data } = await safeFetchJson<{ transactions?: Transaction[]; summary?: FinancialSummary; customAccounts?: AccountMeta[] }>('/api/transactions');
     
+    if (data?.customAccounts) {
+      syncCustomAccounts(data.customAccounts);
+    }
     if (data?.transactions) {
       setTransactions(data.transactions);
       setCachedTransactions(activeUid, data.transactions);
@@ -612,21 +617,42 @@ export default function App() {
     }
   };
 
-  const handleSettleUdhaar = async (id: string) => {
-    const { data } = await safeFetchJson<{ success?: boolean; udhaars?: UdhaarRecord[] }>(`/api/udhaar/${id}`, {
-      method: 'PUT',
+  const handleSettleUdhaar = async (
+    id: string,
+    payload?: { amountSettled?: number; settleAccount?: string; settleDate?: string; notes?: string }
+  ) => {
+    const { data } = await safeFetchJson<{
+      success?: boolean;
+      udhaars?: UdhaarRecord[];
+      transactions?: Transaction[];
+      summary?: FinancialSummary;
+    }>(`/api/udhaar/${id}/settle`, {
+      method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status: 'settled' }),
+      body: JSON.stringify(payload || {}),
     });
     if (data?.udhaars) {
       setUdhaars(data.udhaars);
     } else {
       await fetchUdhaars();
     }
+    if (Array.isArray(data?.transactions)) {
+      const activeUid = currentUser?.id || getActiveUserId() || 'user_ansh';
+      setTransactions(data.transactions);
+      setCachedTransactions(activeUid, data.transactions);
+    }
+    if (data?.summary) {
+      setSummary(data.summary);
+    }
   };
 
   const handleDeleteUdhaar = async (id: string) => {
-    const { data } = await safeFetchJson<{ success?: boolean; udhaars?: UdhaarRecord[] }>(`/api/udhaar/${id}`, {
+    const { data } = await safeFetchJson<{
+      success?: boolean;
+      udhaars?: UdhaarRecord[];
+      transactions?: Transaction[];
+      summary?: FinancialSummary;
+    }>(`/api/udhaar/${id}`, {
       method: 'DELETE',
     });
     if (data?.udhaars) {
@@ -634,10 +660,23 @@ export default function App() {
     } else {
       await fetchUdhaars();
     }
+    if (Array.isArray(data?.transactions)) {
+      const activeUid = currentUser?.id || getActiveUserId() || 'user_ansh';
+      setTransactions(data.transactions);
+      setCachedTransactions(activeUid, data.transactions);
+    }
+    if (data?.summary) {
+      setSummary(data.summary);
+    }
   };
 
   const handleUpdateUdhaar = async (id: string, updates: Partial<UdhaarRecord>) => {
-    const { data } = await safeFetchJson<{ success?: boolean; udhaars?: UdhaarRecord[] }>(`/api/udhaar/${id}`, {
+    const { data } = await safeFetchJson<{
+      success?: boolean;
+      udhaars?: UdhaarRecord[];
+      transactions?: Transaction[];
+      summary?: FinancialSummary;
+    }>(`/api/udhaar/${id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(updates),
@@ -646,6 +685,14 @@ export default function App() {
       setUdhaars(data.udhaars);
     } else {
       await fetchUdhaars();
+    }
+    if (Array.isArray(data?.transactions)) {
+      const activeUid = currentUser?.id || getActiveUserId() || 'user_ansh';
+      setTransactions(data.transactions);
+      setCachedTransactions(activeUid, data.transactions);
+    }
+    if (data?.summary) {
+      setSummary(data.summary);
     }
   };
 
@@ -1085,7 +1132,7 @@ export default function App() {
         transactionCount={transactions.length}
         categoryCount={categories.length}
         surplusAmount={summary.totalIncome - summary.totalExpense}
-        udhaarCount={udhaars.filter(u => u.status === 'pending').length}
+        udhaarCount={udhaars.filter(u => u.status !== 'settled').length}
         fuelLogCount={fuelLogs.length}
         isPrivacyMode={isPrivacyMode}
         onTogglePrivacyMode={togglePrivacyMode}

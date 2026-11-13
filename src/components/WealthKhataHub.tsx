@@ -20,19 +20,23 @@ import {
   Clock,
   CheckCircle2,
   AlertCircle,
-  Settings
+  Settings,
+  Zap,
+  RefreshCw,
+  Shield
 } from 'lucide-react';
 import { InvestmentRecord, SavingsTransfer, UdhaarRecord, AccountId, AccountBalancesData, Transaction } from '../types';
 import { safeFetchJson } from '../utils/api';
 import { calculateInvestmentMetrics } from '../utils/investmentCalculator';
-import { UdhaarKhataView } from './UdhaarKhataView';
+import { ALL_ACCOUNTS, BANK_ACCOUNTS } from '../utils/accounts';
+import { UdhaarKhataView, UdhaarSettlePayload } from './UdhaarKhataView';
 
 interface WealthKhataHubProps {
   transactions?: Transaction[];
   udhaars?: UdhaarRecord[];
   isPrivacyMode?: boolean;
   onAddUdhaar?: (record: Omit<UdhaarRecord, 'id' | 'createdAt'>) => Promise<void>;
-  onSettleUdhaar?: (id: string) => Promise<void>;
+  onSettleUdhaar?: (id: string, payload?: UdhaarSettlePayload) => Promise<void>;
   onDeleteUdhaar?: (id: string) => Promise<void>;
   onUpdateUdhaar?: (id: string, updates: Partial<UdhaarRecord>) => Promise<void>;
   onRefreshTransactions?: () => Promise<void>;
@@ -54,9 +58,11 @@ export const WealthKhataHub: React.FC<WealthKhataHubProps> = ({
   const [investments, setInvestments] = useState<InvestmentRecord[]>([]);
   const [isAddInvOpen, setIsAddInvOpen] = useState(false);
   const [editingInvId, setEditingInvId] = useState<string | null>(null);
+  const [payingInvId, setPayingInvId] = useState<string | null>(null);
+  const [wealthToast, setWealthToast] = useState<string | null>(null);
 
   // Form states
-  const [invType, setInvType] = useState<'RD' | 'FD' | 'Mutual Fund' | 'Gold' | 'PPF' | 'Other'>('RD');
+  const [invType, setInvType] = useState<'RD' | 'Insurance' | 'FD' | 'Mutual Fund' | 'Gold' | 'PPF' | 'Other'>('RD');
   const [invName, setInvName] = useState('');
   const [invAmount, setInvAmount] = useState('');
   const [invAccount, setInvAccount] = useState<AccountId>('IC Bank');
@@ -66,6 +72,10 @@ export const WealthKhataHub: React.FC<WealthKhataHubProps> = ({
   const [invNotes, setInvNotes] = useState('');
   const [invTenureMonths, setInvTenureMonths] = useState('12');
   const [invPaidMonths, setInvPaidMonths] = useState('1');
+  const [invFrequency, setInvFrequency] = useState<'monthly' | 'quarterly' | 'yearly'>('monthly');
+  const [invAutoDebitEnabled, setInvAutoDebitEnabled] = useState<boolean>(false);
+  const [invAutoDebitDay, setInvAutoDebitDay] = useState<string>('5');
+  const [invMarkCurrentCyclePaid, setInvMarkCurrentCyclePaid] = useState<boolean>(true);
 
   // Savings transfers state (e.g. transfers to wife's account)
   const [savingsTransfers, setSavingsTransfers] = useState<SavingsTransfer[]>([]);
@@ -86,12 +96,17 @@ export const WealthKhataHub: React.FC<WealthKhataHubProps> = ({
   // Fetch investments, savings transfers, and live account balances
   const fetchWealthData = async () => {
     const [invRes, savRes, balRes] = await Promise.all([
-      safeFetchJson<{ investments?: InvestmentRecord[] }>('/api/investments'),
+      safeFetchJson<{ investments?: InvestmentRecord[]; autoDebitedCount?: number }>('/api/investments'),
       safeFetchJson<{ savingsTransfers?: SavingsTransfer[] }>('/api/savings-transfers'),
       safeFetchJson<AccountBalancesData>('/api/accounts/balances'),
     ]);
     if (invRes.data?.investments) {
       setInvestments(invRes.data.investments);
+    }
+    if (invRes.data?.autoDebitedCount && invRes.data.autoDebitedCount > 0) {
+      setWealthToast(`🤖 Auto-Debit: ${invRes.data.autoDebitedCount} scheduled kisht(s) bank se debit ho gayi!`);
+      setTimeout(() => setWealthToast(null), 4000);
+      if (onRefreshTransactions) await onRefreshTransactions();
     }
     if (savRes.data?.savingsTransfers) {
       setSavingsTransfers(savRes.data.savingsTransfers);
@@ -104,7 +119,7 @@ export const WealthKhataHub: React.FC<WealthKhataHubProps> = ({
 
   useEffect(() => {
     fetchWealthData();
-  }, [transactions]);
+  }, [transactions.length]);
 
   const handleSaveWifeBase = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -145,6 +160,10 @@ export const WealthKhataHub: React.FC<WealthKhataHubProps> = ({
     setInvMaturity(mat.toISOString().split('T')[0]);
     setInvRate('6.25');
     setInvNotes('');
+    setInvFrequency('monthly');
+    setInvAutoDebitEnabled(false);
+    setInvAutoDebitDay(String(new Date().getDate()));
+    setInvMarkCurrentCyclePaid(true);
     setIsAddInvOpen(true);
   };
 
@@ -159,6 +178,10 @@ export const WealthKhataHub: React.FC<WealthKhataHubProps> = ({
     setInvMaturity(inv.maturityDate || '');
     setInvRate(inv.interestRate !== undefined ? String(inv.interestRate) : '');
     setInvNotes(inv.notes || '');
+    setInvFrequency(inv.installmentFrequency || 'monthly');
+    setInvAutoDebitEnabled(Boolean(inv.autoDebitEnabled));
+    setInvAutoDebitDay(String(inv.autoDebitDay || 5));
+    setInvMarkCurrentCyclePaid(Boolean(inv.lastAutoDebitMonth));
 
     const metrics = calculateInvestmentMetrics(inv);
     setInvTenureMonths(String(inv.totalInstallments || metrics.totalInstallments || 12));
@@ -170,17 +193,21 @@ export const WealthKhataHub: React.FC<WealthKhataHubProps> = ({
     e.preventDefault();
     if (!invName.trim() || !invAmount || isNaN(Number(invAmount))) return;
     const numAmt = Number(invAmount);
-    const isRd = invType === 'RD' || invType === 'Mutual Fund';
-    const paidM = isRd ? (Number(invPaidMonths) || 1) : 1;
-    const tenureM = isRd ? (Number(invTenureMonths) || 12) : 1;
+    const isRecurring = invType === 'RD' || invType === 'Mutual Fund' || invType === 'Insurance' || invAutoDebitEnabled;
+    const paidM = isRecurring ? Math.max(0, Number(invPaidMonths) || 0) : 1;
+    const tenureM = isRecurring ? Math.max(1, Number(invTenureMonths) || 12) : 1;
 
     const payload = {
       type: invType,
       name: invName.trim(),
       amount: numAmt,
-      monthlyAmount: isRd ? numAmt : undefined,
-      paidInstallments: isRd ? paidM : undefined,
-      totalInstallments: isRd ? tenureM : undefined,
+      monthlyAmount: isRecurring ? numAmt : undefined,
+      paidInstallments: isRecurring ? paidM : undefined,
+      totalInstallments: isRecurring ? tenureM : undefined,
+      installmentFrequency: isRecurring ? invFrequency : undefined,
+      autoDebitEnabled: invAutoDebitEnabled,
+      autoDebitDay: invAutoDebitEnabled ? Math.min(31, Math.max(1, parseInt(invAutoDebitDay, 10) || 1)) : undefined,
+      markCurrentCyclePaid: invAutoDebitEnabled ? invMarkCurrentCyclePaid : false,
       account: invAccount,
       date: invDate,
       maturityDate: invMaturity || undefined,
@@ -211,6 +238,47 @@ export const WealthKhataHub: React.FC<WealthKhataHubProps> = ({
     setEditingInvId(null);
     setIsAddInvOpen(false);
     if (onRefreshTransactions) await onRefreshTransactions();
+  };
+
+  const handlePayInstallmentNow = async (inv: InvestmentRecord) => {
+    setPayingInvId(inv.id);
+    try {
+      const { data } = await safeFetchJson<{ success?: boolean; investments?: InvestmentRecord[] }>(
+        `/api/investments/${inv.id}/pay-installment`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ account: inv.account }),
+        }
+      );
+      if (data?.investments) {
+        setInvestments(data.investments);
+      }
+      setWealthToast(`✅ ${inv.name} ki ₹${(inv.monthlyAmount || inv.amount).toLocaleString('en-IN')} kisht ${inv.account} se debit ho gayi & entry badh gayi!`);
+      setTimeout(() => setWealthToast(null), 4000);
+      if (onRefreshTransactions) await onRefreshTransactions();
+    } catch (err) {
+      console.error('Pay installment error:', err);
+    } finally {
+      setPayingInvId(null);
+    }
+  };
+
+  const handleRunAutoDebitsNow = async () => {
+    const { data } = await safeFetchJson<{ success?: boolean; investments?: InvestmentRecord[]; processedCount?: number }>(
+      '/api/investments/process-auto-debits',
+      { method: 'POST' }
+    );
+    if (data?.investments) {
+      setInvestments(data.investments);
+    }
+    if (data?.processedCount && data.processedCount > 0) {
+      setWealthToast(`🤖 Auto-Debit Complete: ${data.processedCount} scheduled kisht(s) bank se debit ho gayi!`);
+      if (onRefreshTransactions) await onRefreshTransactions();
+    } else {
+      setWealthToast('ℹ️ Aaj ki tarikh tak koi pending auto-debit due nahi hai.');
+    }
+    setTimeout(() => setWealthToast(null), 3500);
   };
 
   const handleDeleteInvestment = async (id: string) => {
@@ -259,18 +327,20 @@ export const WealthKhataHub: React.FC<WealthKhataHubProps> = ({
   // Live calculation inside modal
   const liveModalMetrics = useMemo(() => {
     const numAmt = Number(invAmount) || 0;
-    const isRd = invType === 'RD' || invType === 'Mutual Fund';
+    const isRecurring = invType === 'RD' || invType === 'Mutual Fund' || invType === 'Insurance' || invAutoDebitEnabled;
     return calculateInvestmentMetrics({
       type: invType,
       amount: numAmt,
-      monthlyAmount: isRd ? numAmt : undefined,
+      monthlyAmount: isRecurring ? numAmt : undefined,
+      installmentFrequency: invFrequency,
+      autoDebitEnabled: invAutoDebitEnabled,
       date: invDate,
       maturityDate: invMaturity || undefined,
       interestRate: Number(invRate) || 0,
-      paidInstallments: isRd ? (Number(invPaidMonths) || undefined) : undefined,
-      totalInstallments: isRd ? (Number(invTenureMonths) || undefined) : undefined,
+      paidInstallments: isRecurring ? (invPaidMonths !== '' ? Number(invPaidMonths) : undefined) : undefined,
+      totalInstallments: isRecurring ? (Number(invTenureMonths) || undefined) : undefined,
     });
-  }, [invType, invAmount, invDate, invMaturity, invRate, invPaidMonths, invTenureMonths]);
+  }, [invType, invAmount, invDate, invMaturity, invRate, invPaidMonths, invTenureMonths, invFrequency, invAutoDebitEnabled]);
 
   // Overall Portfolio Totals
   const totalInvestments = useMemo(() => {
@@ -304,16 +374,28 @@ export const WealthKhataHub: React.FC<WealthKhataHubProps> = ({
 
   const wifeCurrentLiveBalance = wifeBaseBalance + totalSavingsTransferred;
 
+  const getRemainingUdhaar = (u: UdhaarRecord) =>
+    Math.max(0, (Number(u.amount) || 0) - (Number(u.settledAmount) || 0));
+
   const pendingLent = udhaars
     .filter((u) => u.type === 'lent' && u.status !== 'settled')
-    .reduce((sum, u) => sum + (Number(u.amount) || 0), 0);
+    .reduce((sum, u) => sum + getRemainingUdhaar(u), 0);
   const pendingBorrowed = udhaars
     .filter((u) => u.type === 'borrowed' && u.status !== 'settled')
-    .reduce((sum, u) => sum + (Number(u.amount) || 0), 0);
+    .reduce((sum, u) => sum + getRemainingUdhaar(u), 0);
   const netUdhaar = pendingLent - pendingBorrowed;
 
   return (
     <div className="space-y-6">
+      {wealthToast && (
+        <div className="fixed top-5 right-5 z-50 bg-cyan-950 border border-cyan-500/50 text-cyan-100 px-4 py-3 rounded-xl shadow-2xl flex items-center gap-2 text-xs font-semibold animate-in slide-in-from-top-3">
+          <CheckCircle2 className="w-4 h-4 text-cyan-400 shrink-0" />
+          <span>{wealthToast}</span>
+          <button onClick={() => setWealthToast(null)} className="ml-2 text-cyan-300 hover:text-white cursor-pointer">
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
       {/* 3 Clickable Top Cards (Investments, Savings to Wife, Udhaar Khata) */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         {/* 1. Investments Card */}
@@ -328,7 +410,7 @@ export const WealthKhataHub: React.FC<WealthKhataHubProps> = ({
           <div className="flex items-center justify-between">
             <span className="text-xs font-semibold text-cyan-300 flex items-center gap-1.5">
               <TrendingUp className="w-4 h-4" />
-              Investments (RD / FD / SIP)
+              Investments, RD & Insurance
             </span>
             <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 font-bold">
               {investments.length} Active Plans
@@ -456,19 +538,29 @@ export const WealthKhataHub: React.FC<WealthKhataHubProps> = ({
             <div>
               <h3 className="text-base font-bold text-white flex items-center gap-2">
                 <TrendingUp className="w-4 h-4 text-cyan-400" />
-                Investments Portfolio (RD, FD, Mutual Funds & Gold)
+                Investments, Insurance & Auto-Debit Hub
               </h3>
               <p className="text-xs text-slate-400 mt-0.5">
-                Yahan aapki sabhi RDs, FDs aur Investments ka real-time accumulated value (Principal + Byaj) calculate hota hai.
+                RD, FD, Mutual Fund aur Insurance par Auto-Debit tarikh set karein — us tarikh par Bank se auto-debit aur RD entry badhegi.
               </p>
             </div>
-            <button
-              onClick={handleOpenAddInvestment}
-              className="px-3.5 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white font-semibold text-xs flex items-center gap-1.5 shadow-md cursor-pointer transition-all"
-            >
-              <Plus className="w-4 h-4" />
-              + Nayi RD / FD Jodein
-            </button>
+            <div className="flex items-center gap-2 flex-wrap">
+              <button
+                onClick={handleRunAutoDebitsNow}
+                className="px-3 py-2 rounded-xl bg-indigo-500/20 hover:bg-indigo-500/35 text-indigo-200 border border-indigo-500/40 font-semibold text-xs flex items-center gap-1.5 cursor-pointer transition-all"
+                title="Aaj tak due auto-debits abhi check & execute karein"
+              >
+                <RefreshCw className="w-3.5 h-3.5 text-indigo-300" />
+                <span>Auto-Debit Check</span>
+              </button>
+              <button
+                onClick={handleOpenAddInvestment}
+                className="px-3.5 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white font-semibold text-xs flex items-center gap-1.5 shadow-md cursor-pointer transition-all"
+              >
+                <Plus className="w-4 h-4" />
+                + Nayi RD / Insurance / FD Jodein
+              </button>
+            </div>
           </div>
 
           {investments.length === 0 ? (
@@ -479,6 +571,8 @@ export const WealthKhataHub: React.FC<WealthKhataHubProps> = ({
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               {investments.map((inv) => {
                 const metrics = calculateInvestmentMetrics(inv);
+                const freqLabel = inv.installmentFrequency === 'yearly' ? 'yr' : inv.installmentFrequency === 'quarterly' ? 'qtr' : 'mo';
+                const freqHindi = inv.installmentFrequency === 'yearly' ? 'Har saal' : inv.installmentFrequency === 'quarterly' ? 'Har 3 mahine' : 'Har mahine';
                 return (
                   <div
                     key={inv.id}
@@ -489,12 +583,22 @@ export const WealthKhataHub: React.FC<WealthKhataHubProps> = ({
                       <div className="flex items-start justify-between">
                         <div>
                           <div className="flex items-center gap-1.5 flex-wrap">
-                            <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded bg-cyan-500/20 text-cyan-300 border border-cyan-500/30">
-                              {inv.type === 'RD' ? 'Recurring Deposit (RD)' : inv.type}
+                            <span className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded border ${
+                              inv.type === 'Insurance'
+                                ? 'bg-amber-500/20 text-amber-300 border-amber-500/30'
+                                : 'bg-cyan-500/20 text-cyan-300 border-cyan-500/30'
+                            }`}>
+                              {inv.type === 'RD' ? 'Recurring Deposit (RD)' : inv.type === 'Insurance' ? '🛡️ Insurance' : inv.type}
                             </span>
                             {metrics.isRecurring && (
                               <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 font-semibold">
-                                ₹{metrics.monthlyAmount.toLocaleString('en-IN')} / mo
+                                ₹{metrics.monthlyAmount.toLocaleString('en-IN')} / {freqLabel}
+                              </span>
+                            )}
+                            {inv.autoDebitEnabled && (
+                              <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 font-bold flex items-center gap-1">
+                                <Zap className="w-2.5 h-2.5" />
+                                Auto: {inv.autoDebitDay || 5}th ({freqHindi})
                               </span>
                             )}
                           </div>
@@ -502,7 +606,9 @@ export const WealthKhataHub: React.FC<WealthKhataHubProps> = ({
                           
                           {/* Current Accumulated Value */}
                           <div className="mt-1.5">
-                            <span className="text-[10px] text-slate-400 block uppercase font-mono tracking-wider">Current Portfolio Value</span>
+                            <span className="text-[10px] text-slate-400 block uppercase font-mono tracking-wider">
+                              {inv.type === 'Insurance' ? 'Total Premium Deposited' : 'Current Portfolio Value'}
+                            </span>
                             <div className="text-xl font-bold font-mono text-cyan-300 flex items-baseline gap-1.5">
                               <span>₹{metrics.currentValue.toLocaleString('en-IN')}</span>
                               {metrics.accruedInterest > 0 && (
@@ -519,7 +625,7 @@ export const WealthKhataHub: React.FC<WealthKhataHubProps> = ({
                           <button
                             onClick={() => handleOpenEditInvestment(inv)}
                             className="text-slate-500 hover:text-cyan-400 p-1.5 transition-colors cursor-pointer rounded-lg hover:bg-white/[0.05]"
-                            title="Edit investment plan"
+                            title="Edit investment plan & Auto-Debit"
                           >
                             <Edit3 className="w-3.5 h-3.5" />
                           </button>
@@ -538,7 +644,7 @@ export const WealthKhataHub: React.FC<WealthKhataHubProps> = ({
                         <div className="flex items-center justify-between text-[11px]">
                           <span className="text-slate-400">
                             {metrics.isRecurring 
-                              ? `Deposited (${metrics.paidInstallments} Installments):` 
+                              ? `Deposited (${metrics.paidInstallments} Kisht Paid):` 
                               : 'Principal Invested:'}
                           </span>
                           <span className="font-bold text-white">
@@ -559,7 +665,7 @@ export const WealthKhataHub: React.FC<WealthKhataHubProps> = ({
                           <div className="pt-1.5 border-t border-white/[0.04]">
                             <div className="flex items-center justify-between text-[10px] text-slate-400 mb-1">
                               <span>Tenure Progress:</span>
-                              <span>{metrics.paidInstallments} of {metrics.totalInstallments} months ({metrics.progressPercent}%)</span>
+                              <span>{metrics.paidInstallments} of {metrics.totalInstallments} kisht ({metrics.progressPercent}%)</span>
                             </div>
                             <div className="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden">
                               <div 
@@ -572,18 +678,18 @@ export const WealthKhataHub: React.FC<WealthKhataHubProps> = ({
                       </div>
                     </div>
 
-                    {/* Metadata & Maturity Projections */}
+                    {/* Metadata, Auto-Debit Log & Quick Pay Kisht Button */}
                     <div className="mt-4 pt-3 border-t border-white/[0.06] text-[11px] text-slate-400 space-y-1.5 font-mono">
                       <div className="flex items-center justify-between">
                         <span>Debited Account:</span>
                         <span className="font-semibold text-slate-200">{inv.account}</span>
                       </div>
-                      {inv.interestRate && (
+                      {inv.interestRate ? (
                         <div className="flex items-center justify-between">
                           <span>Interest Rate:</span>
                           <span className="font-semibold text-emerald-400">{inv.interestRate}% p.a.</span>
                         </div>
-                      )}
+                      ) : null}
                       <div className="flex items-center justify-between">
                         <span>Start Date:</span>
                         <span className="text-slate-300">{inv.date}</span>
@@ -593,6 +699,38 @@ export const WealthKhataHub: React.FC<WealthKhataHubProps> = ({
                           <span>Maturity Date:</span>
                           <span className="text-slate-300">{inv.maturityDate}</span>
                         </div>
+                      )}
+                      {inv.autoDebitEnabled && (
+                        <div className="flex items-center justify-between text-emerald-300/90">
+                          <span>Last Auto-Debit:</span>
+                          <span className="font-semibold">{inv.lastAutoDebitMonth || 'Scheduled'}</span>
+                        </div>
+                      )}
+                      {Array.isArray(inv.autoDebitHistory) && inv.autoDebitHistory.length > 0 && (
+                        <div className="mt-1.5 p-2 bg-slate-900/70 border border-white/[0.05] rounded-lg space-y-0.5 text-[10px]">
+                          <span className="text-slate-300 font-semibold block">Recent Kisht History:</span>
+                          {inv.autoDebitHistory.slice(0, 2).map((ad) => (
+                            <div key={ad.id} className="flex items-center justify-between text-slate-400">
+                              <span>• {ad.date} ({ad.account})</span>
+                              <span className="text-emerald-400 font-bold">₹{ad.amount.toLocaleString('en-IN')}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      {metrics.isRecurring && (
+                        <button
+                          type="button"
+                          onClick={() => handlePayInstallmentNow(inv)}
+                          disabled={payingInvId === inv.id}
+                          className="w-full mt-2 py-1.5 px-3 rounded-lg bg-indigo-600/25 hover:bg-indigo-600/45 text-indigo-200 border border-indigo-500/40 font-semibold text-[11px] flex items-center justify-center gap-1.5 cursor-pointer transition-colors disabled:opacity-50"
+                        >
+                          <Zap className="w-3 h-3 text-amber-300" />
+                          <span>
+                            {payingInvId === inv.id
+                              ? 'Debiting...'
+                              : `⚡ Pay 1 Kisht Now (${inv.account})`}
+                          </span>
+                        </button>
                       )}
                       {metrics.maturityAmount > metrics.currentValue && (
                         <div className="mt-2 pt-2 border-t border-white/[0.04] bg-cyan-950/30 border border-cyan-500/20 p-2 rounded-lg flex items-center justify-between text-[11px]">
@@ -828,11 +966,16 @@ export const WealthKhataHub: React.FC<WealthKhataHubProps> = ({
                       setInvType(newType);
                       if (newType === 'RD') {
                         setInvRate(invRate || '6.25');
+                        setInvFrequency('monthly');
+                      } else if (newType === 'Insurance') {
+                        setInvRate('0');
+                        setInvAutoDebitEnabled(true);
                       }
                     }}
                     className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white text-xs font-mono"
                   >
                     <option value="RD">Recurring Deposit (RD)</option>
+                    <option value="Insurance">🛡️ Insurance Policy / Premium</option>
                     <option value="FD">Fixed Deposit (FD)</option>
                     <option value="Mutual Fund">Mutual Fund / SIP</option>
                     <option value="Gold">Digital / Physical Gold</option>
@@ -847,18 +990,25 @@ export const WealthKhataHub: React.FC<WealthKhataHubProps> = ({
                     onChange={(e) => setInvAccount(e.target.value as AccountId)}
                     className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white text-xs font-mono"
                   >
-                    <option value="IC Bank">IC Bank (ICICI Savings)</option>
-                    <option value="AX Bank">AX Bank (Axis Salary)</option>
-                    <option value="Cash">Cash</option>
+                    <optgroup label="Bank Accounts & Cash">
+                      {ALL_ACCOUNTS.filter(a => a.type === 'bank_account' || a.type === 'cash').map(acc => (
+                        <option key={acc.id} value={acc.id}>{acc.badge}: {acc.name}</option>
+                      ))}
+                    </optgroup>
+                    <optgroup label="Credit & RuPay Cards">
+                      {ALL_ACCOUNTS.filter(a => a.type === 'credit_card' || a.type === 'rupay_card').map(acc => (
+                        <option key={acc.id} value={acc.id}>{acc.badge}: {acc.name}</option>
+                      ))}
+                    </optgroup>
                   </select>
                 </div>
               </div>
 
               <div>
-                <label className="block text-slate-300 mb-1 font-semibold">Plan / Bank Name</label>
+                <label className="block text-slate-300 mb-1 font-semibold">Plan / Policy / Bank Name</label>
                 <input
                   type="text"
-                  placeholder="e.g. ICICI 1-Year RD / HDFC Flexi FD"
+                  placeholder={invType === 'Insurance' ? 'e.g. LIC Jeevan Anand / HDFC Term Insurance' : 'e.g. ICICI 1-Year RD / HDFC Flexi FD'}
                   value={invName}
                   onChange={(e) => setInvName(e.target.value)}
                   className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white text-xs"
@@ -869,7 +1019,9 @@ export const WealthKhataHub: React.FC<WealthKhataHubProps> = ({
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-slate-300 mb-1 font-semibold">
-                    {invType === 'RD' || invType === 'Mutual Fund' ? 'Monthly Installment (₹)' : 'Invested Principal (₹)'}
+                    {invType === 'RD' || invType === 'Mutual Fund' || invType === 'Insurance' || invAutoDebitEnabled
+                      ? 'Installment / Premium (₹)'
+                      : 'Invested Principal (₹)'}
                   </label>
                   <div className="relative">
                     <span className="absolute left-3 top-2 text-slate-400 font-bold">₹</span>
@@ -888,7 +1040,7 @@ export const WealthKhataHub: React.FC<WealthKhataHubProps> = ({
                   <input
                     type="number"
                     step="0.01"
-                    placeholder="6.25"
+                    placeholder={invType === 'Insurance' ? '0' : '6.25'}
                     value={invRate}
                     onChange={(e) => setInvRate(e.target.value)}
                     className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white text-xs"
@@ -900,7 +1052,7 @@ export const WealthKhataHub: React.FC<WealthKhataHubProps> = ({
                 <div>
                   <label className="block text-slate-300 mb-1 font-semibold flex items-center gap-1">
                     <Calendar className="w-3 h-3 text-slate-400" />
-                    {invType === 'RD' ? 'RD Start Date' : 'Investment Date'}
+                    {invType === 'RD' ? 'RD Start Date' : invType === 'Insurance' ? 'Policy Start Date' : 'Investment Date'}
                   </label>
                   <input
                     type="date"
@@ -908,7 +1060,7 @@ export const WealthKhataHub: React.FC<WealthKhataHubProps> = ({
                     onChange={(e) => {
                       const newDate = e.target.value;
                       setInvDate(newDate);
-                      if (invType === 'RD' && newDate) {
+                      if ((invType === 'RD' || invType === 'Insurance') && newDate) {
                         const start = new Date(newDate);
                         const now = new Date();
                         let elapsed = (now.getFullYear() - start.getFullYear()) * 12 + (now.getMonth() - start.getMonth());
@@ -952,20 +1104,20 @@ export const WealthKhataHub: React.FC<WealthKhataHubProps> = ({
                 </div>
               </div>
 
-              {/* RD Specific: Tenure & Already Paid Installments */}
-              {(invType === 'RD' || invType === 'Mutual Fund') && (
+              {/* Recurring Specific: Tenure & Already Paid Installments */}
+              {(invType === 'RD' || invType === 'Mutual Fund' || invType === 'Insurance' || invAutoDebitEnabled) && (
                 <div className="grid grid-cols-2 gap-3 p-3 bg-slate-950/60 border border-white/[0.06] rounded-xl">
                   <div>
-                    <label className="block text-slate-300 mb-1 font-semibold">Total Tenure (Months)</label>
+                    <label className="block text-slate-300 mb-1 font-semibold">Total Kisht / Tenure</label>
                     <input
                       type="number"
                       min="1"
-                      max="120"
+                      max="360"
                       value={invTenureMonths}
                       onChange={(e) => {
                         const newTenure = e.target.value;
                         setInvTenureMonths(newTenure);
-                        if (invDate && Number(newTenure) > 0) {
+                        if (invDate && Number(newTenure) > 0 && invFrequency === 'monthly') {
                           const mat = new Date(invDate);
                           mat.setMonth(mat.getMonth() + Number(newTenure));
                           setInvMaturity(mat.toISOString().split('T')[0]);
@@ -976,11 +1128,11 @@ export const WealthKhataHub: React.FC<WealthKhataHubProps> = ({
                     />
                   </div>
                   <div>
-                    <label className="block text-slate-300 mb-1 font-semibold">Paid Months Till Date</label>
+                    <label className="block text-slate-300 mb-1 font-semibold">Paid Kisht Till Date</label>
                     <input
                       type="number"
-                      min="1"
-                      max="120"
+                      min="0"
+                      max="360"
                       value={invPaidMonths}
                       onChange={(e) => setInvPaidMonths(e.target.value)}
                       className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-white text-xs"
@@ -990,17 +1142,90 @@ export const WealthKhataHub: React.FC<WealthKhataHubProps> = ({
                 </div>
               )}
 
+              {/* 🤖 Auto-Debit Schedule Configuration (RD, Insurance, SIP) */}
+              <div className="p-3.5 bg-emerald-950/25 border border-emerald-500/35 rounded-xl space-y-3">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="text-xs font-bold text-emerald-300 flex items-center gap-1.5">
+                      <Zap className="w-3.5 h-3.5 text-amber-300" />
+                      Auto-Debit Facility (Automatic Bank Cut)
+                    </div>
+                    <p className="text-[10px] text-slate-400 mt-0.5 font-sans">
+                      Set tarikh par bina add kiye chune gaye bank se cut hoga aur entry badh jayegi
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setInvAutoDebitEnabled(!invAutoDebitEnabled)}
+                    className={`px-3 py-1 rounded-lg font-bold text-[11px] cursor-pointer transition-all border ${
+                      invAutoDebitEnabled
+                        ? 'bg-emerald-500 text-slate-950 border-emerald-300 shadow-sm'
+                        : 'bg-slate-900 text-slate-400 border-slate-700 hover:text-white'
+                    }`}
+                  >
+                    {invAutoDebitEnabled ? 'ON ✓' : 'OFF'}
+                  </button>
+                </div>
+
+                {invAutoDebitEnabled && (
+                  <div className="space-y-3 pt-2 border-t border-emerald-500/20">
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-emerald-200 mb-1 font-semibold text-[11px]">
+                          Auto-Debit Frequency
+                        </label>
+                        <select
+                          value={invFrequency}
+                          onChange={(e) => setInvFrequency(e.target.value as any)}
+                          className="w-full bg-slate-900 border border-slate-700 rounded-xl px-2.5 py-2 text-white text-xs"
+                        >
+                          <option value="monthly">Monthly (Har Mahine)</option>
+                          <option value="quarterly">Quarterly (Har 3 Mahine)</option>
+                          <option value="yearly">Yearly (Har Saal)</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-emerald-200 mb-1 font-semibold text-[11px]">
+                          Tarikh / Day (1-31)
+                        </label>
+                        <input
+                          type="number"
+                          min="1"
+                          max="31"
+                          value={invAutoDebitDay}
+                          onChange={(e) => setInvAutoDebitDay(e.target.value)}
+                          className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-white text-xs font-mono font-bold"
+                          required
+                        />
+                      </div>
+                    </div>
+
+                    <label className="flex items-center gap-2 text-[11px] text-slate-300 cursor-pointer font-sans">
+                      <input
+                        type="checkbox"
+                        checked={invMarkCurrentCyclePaid}
+                        onChange={(e) => setInvMarkCurrentCyclePaid(e.target.checked)}
+                        className="rounded bg-slate-900 border-slate-700 text-emerald-500 h-3.5 w-3.5 cursor-pointer"
+                      />
+                      <span>
+                        Is mahine / cycle ki kisht pehle se paid hai (Agli tarikh se auto-debit shuru ho)
+                      </span>
+                    </label>
+                  </div>
+                )}
+              </div>
+
               {/* Live Calculation Preview Box */}
               {Number(invAmount) > 0 && (
                 <div className="p-3.5 bg-cyan-950/40 border border-cyan-500/40 rounded-xl space-y-2">
                   <div className="flex items-center justify-between text-xs">
                     <span className="font-bold text-cyan-300 flex items-center gap-1.5">
                       <Calculator className="w-3.5 h-3.5 text-cyan-400" />
-                      Live RD & Byaj Calculation
+                      Live {invType} & Byaj Calculation
                     </span>
                     <span className="text-[10px] text-cyan-400 font-mono">
-                      {invType === 'RD' 
-                        ? `${liveModalMetrics.paidInstallments} of ${liveModalMetrics.totalInstallments} Installments` 
+                      {liveModalMetrics.isRecurring
+                        ? `${liveModalMetrics.paidInstallments} of ${liveModalMetrics.totalInstallments} Kisht` 
                         : 'Lump Sum Principal'}
                     </span>
                   </div>
@@ -1127,8 +1352,9 @@ export const WealthKhataHub: React.FC<WealthKhataHubProps> = ({
                     onChange={(e) => setTransAccount(e.target.value as AccountId)}
                     className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white text-xs"
                   >
-                    <option value="AX Bank">AX Bank (Axis Salary)</option>
-                    <option value="IC Bank">IC Bank (ICICI Savings)</option>
+                    {BANK_ACCOUNTS.map(b => (
+                      <option key={b.id} value={b.id}>{b.badge}: {b.name}</option>
+                    ))}
                     <option value="Cash">Cash</option>
                   </select>
                 </div>

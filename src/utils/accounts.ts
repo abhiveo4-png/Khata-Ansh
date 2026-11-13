@@ -1,6 +1,6 @@
 import { AccountId, AccountMeta } from '../types';
 
-export const ACCOUNTS_CONFIG: Record<AccountId, AccountMeta> = {
+export const DEFAULT_ACCOUNTS_CONFIG: Record<string, AccountMeta> = {
   'ICICI CC 0000': {
     id: 'ICICI CC 0000',
     name: 'ICICI RuPay UPI CC (0000)',
@@ -96,10 +96,72 @@ export const ACCOUNTS_CONFIG: Record<AccountId, AccountMeta> = {
   },
 };
 
-export const ALL_ACCOUNTS: AccountMeta[] = Object.values(ACCOUNTS_CONFIG);
+const CUSTOM_ACCOUNTS_STORAGE_KEY = 'hisab_custom_accounts_v1';
 
-export const CREDIT_CARDS = ALL_ACCOUNTS.filter(a => a.type === 'credit_card' || a.type === 'rupay_card');
-export const BANK_ACCOUNTS = ALL_ACCOUNTS.filter(a => a.type === 'bank_account');
+export const ACCOUNTS_CONFIG: Record<string, AccountMeta> = { ...DEFAULT_ACCOUNTS_CONFIG };
+export const ALL_ACCOUNTS: AccountMeta[] = Object.values(ACCOUNTS_CONFIG);
+export const CREDIT_CARDS: AccountMeta[] = ALL_ACCOUNTS.filter(a => a.type === 'credit_card' || a.type === 'rupay_card');
+export const BANK_ACCOUNTS: AccountMeta[] = ALL_ACCOUNTS.filter(a => a.type === 'bank_account');
+
+function rebuildAccountExports(customList: AccountMeta[]) {
+  // Clear existing keys in ACCOUNTS_CONFIG
+  for (const key of Object.keys(ACCOUNTS_CONFIG)) {
+    delete ACCOUNTS_CONFIG[key];
+  }
+  // Restore defaults
+  for (const [k, v] of Object.entries(DEFAULT_ACCOUNTS_CONFIG)) {
+    ACCOUNTS_CONFIG[k] = v;
+  }
+  // Add custom accounts
+  if (Array.isArray(customList)) {
+    for (const item of customList) {
+      if (item && item.id) {
+        ACCOUNTS_CONFIG[item.id] = { ...item, isCustom: true };
+      }
+    }
+  }
+
+  const allValues = Object.values(ACCOUNTS_CONFIG);
+  // Sort so Credit Cards come first, then Bank Accounts, then Cash (matching original order)
+  const cards = allValues.filter(a => a.type === 'credit_card' || a.type === 'rupay_card');
+  const banks = allValues.filter(a => a.type === 'bank_account');
+  const cash = allValues.filter(a => a.type === 'cash');
+  const ordered = [...cards, ...banks, ...cash];
+
+  ALL_ACCOUNTS.splice(0, ALL_ACCOUNTS.length, ...ordered);
+  CREDIT_CARDS.splice(0, CREDIT_CARDS.length, ...cards);
+  BANK_ACCOUNTS.splice(0, BANK_ACCOUNTS.length, ...banks);
+}
+
+export function loadSavedCustomAccounts(): AccountMeta[] {
+  try {
+    if (typeof window !== 'undefined' && window.localStorage) {
+      const raw = window.localStorage.getItem(CUSTOM_ACCOUNTS_STORAGE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    }
+  } catch {
+    // ignore storage errors
+  }
+  return [];
+}
+
+export function syncCustomAccounts(customList?: AccountMeta[]) {
+  const safeList = Array.isArray(customList) ? customList : [];
+  try {
+    if (typeof window !== 'undefined' && window.localStorage) {
+      window.localStorage.setItem(CUSTOM_ACCOUNTS_STORAGE_KEY, JSON.stringify(safeList));
+    }
+  } catch {
+    // ignore storage errors
+  }
+  rebuildAccountExports(safeList);
+}
+
+// Initialize on module load from localStorage if available
+rebuildAccountExports(loadSavedCustomAccounts());
 
 /**
  * Smart detection of account/card from text
@@ -107,6 +169,19 @@ export const BANK_ACCOUNTS = ALL_ACCOUNTS.filter(a => a.type === 'bank_account')
 export function detectAccount(text: string): AccountId | undefined {
   if (!text) return undefined;
   const lower = text.toLowerCase();
+
+  // Check custom cards/accounts first (by 4-digit suffix or shortName)
+  for (const acc of ALL_ACCOUNTS) {
+    if (acc.isCustom) {
+      const sLower = acc.shortName.toLowerCase();
+      if (lower.includes(sLower)) return acc.id;
+      const digitsMatch = acc.id.match(/\b(\d{4})\b/);
+      if (digitsMatch && lower.includes(digitsMatch[1])) {
+        return acc.id;
+      }
+    }
+  }
+
 
   // IC Bank 2005 Credit Card
   if (

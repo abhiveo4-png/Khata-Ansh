@@ -11,7 +11,8 @@ export type AccountId =
   | 'IC Bank 2005'
   | 'IC Bank'
   | 'AX Bank'
-  | 'Cash';
+  | 'Cash'
+  | (string & {});
 
 export interface AccountMeta {
   id: AccountId;
@@ -24,6 +25,7 @@ export interface AccountMeta {
   creditLimit?: number;
   billingDay?: number;
   paymentDueDay?: number;
+  isCustom?: boolean;
 }
 
 export interface LinkedMember {
@@ -101,6 +103,7 @@ export interface Transaction {
   isInvestment?: boolean;
   isUdhaarLent?: boolean;
   isUdhaarRecovery?: boolean;
+  isUdhaarRepaid?: boolean;
   linkedUdhaarId?: string;
   udhaarPersonName?: string;
   linkedTransferId?: string;
@@ -180,6 +183,7 @@ export interface AccountBalancesData {
   wifeBaseBalance: number;
   wifeBalanceSetTimestamp?: string;
   cardCreditLimits?: Record<string, number>;
+  customAccounts?: AccountMeta[];
   accounts: Record<string, AccountBalanceInfo>;
   totalBankCashBalance: number;
   totalCardAvailableLimit: number;
@@ -246,21 +250,36 @@ export interface SavingsTransfer {
   createdAt: string;
 }
 
+export interface InvestmentAutoDebitEntry {
+  id: string;
+  date: string;
+  monthKey: string;
+  amount: number;
+  account: string;
+  linkedTxId: string;
+  createdAt: string;
+}
+
 export interface InvestmentRecord {
   id: string;
   userId?: string;
-  type: 'RD' | 'FD' | 'Mutual Fund' | 'Gold' | 'PPF' | 'Other';
+  type: 'RD' | 'FD' | 'Mutual Fund' | 'Insurance' | 'Gold' | 'PPF' | 'Other';
   name: string;
   amount: number;
   monthlyAmount?: number;
   paidInstallments?: number;
   totalInstallments?: number;
+  installmentFrequency?: 'monthly' | 'quarterly' | 'yearly';
   account: AccountId;
   date: string;
   maturityDate?: string;
   interestRate?: number;
   currentValue?: number;
   maturityAmount?: number;
+  autoDebitEnabled?: boolean;
+  autoDebitDay?: number;
+  lastAutoDebitMonth?: string;
+  autoDebitHistory?: InvestmentAutoDebitEntry[];
   notes?: string;
   createdAt: string;
 }
@@ -336,16 +355,29 @@ export interface GullakSummary {
   monthlyHistory: GullakMonthRecord[];
 }
 
+export interface UdhaarSettlementEntry {
+  id: string;
+  amount: number;
+  account: AccountId | string;
+  date: string;
+  notes?: string;
+  linkedTxId?: string;
+  createdAt: string;
+}
+
 export interface UdhaarRecord {
   id: string;
   userId: string;
   type: 'lent' | 'borrowed'; // 'lent' (Diya / Lena hai / You'll Get) | 'borrowed' (Liya / Dena hai / You'll Give)
   personName: string; // e.g. "Rohan", "Papa", "Sharma Ji"
   amount: number;
+  settledAmount?: number;
+  settledInAccount?: AccountId | string;
+  settlementHistory?: UdhaarSettlementEntry[];
   description?: string;
   date: string; // YYYY-MM-DD
   time?: string;
-  status: 'pending' | 'settled';
+  status: 'pending' | 'partial' | 'settled';
   account?: AccountId;
   linkedTransactionId?: string;
   settledAt?: string;

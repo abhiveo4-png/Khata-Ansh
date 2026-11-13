@@ -191,7 +191,12 @@ export const OverviewCards: React.FC<OverviewCardsProps> = ({
 
       monthExpenseCount++;
       const isRim = Boolean(t.isReimbursement || t.category === 'Reimbursement');
-      const isUdhaarLent = Boolean(
+      const isUdhaarRepaid = Boolean(
+        t.isUdhaarRepaid ||
+        t.category === 'Udhaar Repaid' ||
+        (t.tags && t.tags.includes('udhaar-repaid'))
+      );
+      const isUdhaarLent = !isUdhaarRepaid && Boolean(
         t.isUdhaarLent ||
         t.category === 'Udhaar Given' ||
         t.category === 'Loan Given' ||
@@ -214,7 +219,7 @@ export const OverviewCards: React.FC<OverviewCardsProps> = ({
       } else {
         budgetAndGharKharcha += amt;
         const catDef = categories.find(c => c.name.toLowerCase() === (t.category || '').toLowerCase());
-        const isExemptFromBudget = Boolean(catDef?.excludeFromBudget) || t.isSavingsTransfer || t.isWifeTransfer || t.category === 'Wife Transfer';
+        const isExemptFromBudget = Boolean(catDef?.excludeFromBudget) || isUdhaarRepaid || t.isSavingsTransfer || t.isWifeTransfer || t.category === 'Wife Transfer';
         if (!isExemptFromBudget) {
           monthBudgetSpent += amt;
         }
@@ -257,14 +262,16 @@ export const OverviewCards: React.FC<OverviewCardsProps> = ({
   // Example: 70,000 Bank/Cash - 30,000 Card Reserve = 40,000 Final Savings (or 1,00,000 - 60,000 = 40,000)
   const finalPureSavings = bankAndCashInHand - cardReserveAmount;
 
-  // Udhaar Tab Pending info for quick reference
+  // Udhaar Tab Pending info for quick reference (accounting for partial settlements)
   const safeUdhaars = Array.isArray(udhaars) ? udhaars : [];
+  const getRemainingUdhaar = (u: UdhaarRecord) =>
+    Math.max(0, (Number(u.amount) || 0) - (Number(u.settledAmount) || 0));
   const tabPendingLent = safeUdhaars
     .filter(u => u && u.type === 'lent' && u.status !== 'settled')
-    .reduce((sum, u) => sum + (Number(u.amount) || 0), 0);
+    .reduce((sum, u) => sum + getRemainingUdhaar(u), 0);
   const tabPendingBorrowed = safeUdhaars
     .filter(u => u && u.type === 'borrowed' && u.status !== 'settled')
-    .reduce((sum, u) => sum + (Number(u.amount) || 0), 0);
+    .reduce((sum, u) => sum + getRemainingUdhaar(u), 0);
   const effectiveTotalBakaya = safeUdhaars.length > 0
     ? Math.max(0, tabPendingLent - tabPendingBorrowed)
     : Math.max(0, udhaarDiyaKharcha - udhaarRecoveryIncome);

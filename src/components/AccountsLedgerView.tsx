@@ -26,8 +26,8 @@ import {
   HeartHandshake,
   RefreshCw
 } from 'lucide-react';
-import { Transaction, AccountId, CardEmi, UserRole, CategoryDef, AccountBalancesData } from '../types';
-import { ACCOUNTS_CONFIG, ALL_ACCOUNTS, CREDIT_CARDS, BANK_ACCOUNTS } from '../utils/accounts';
+import { Transaction, AccountId, CardEmi, UserRole, CategoryDef, AccountBalancesData, AccountMeta } from '../types';
+import { ACCOUNTS_CONFIG, ALL_ACCOUNTS, CREDIT_CARDS, BANK_ACCOUNTS, syncCustomAccounts } from '../utils/accounts';
 import { safeFetchJson } from '../utils/api';
 import { DEFAULT_CATEGORIES } from '../utils/categories';
 import { 
@@ -107,9 +107,30 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
   const [editWifeBalance, setEditWifeBalance] = useState('');
   const [isSavingBalances, setIsSavingBalances] = useState(false);
 
+  // Individual Account / Card Limit & Balance Modal State
+  const [editingSingleAccount, setEditingSingleAccount] = useState<AccountMeta | null>(null);
+  const [singleBaseInput, setSingleBaseInput] = useState('');
+  const [singleLimitInput, setSingleLimitInput] = useState('');
+  const [isSavingSingleAccount, setIsSavingSingleAccount] = useState(false);
+
+  // Add New Card / Account Modal State
+  const [isAddCardModalOpen, setIsAddCardModalOpen] = useState(false);
+  const [newCardType, setNewCardType] = useState<'credit_card' | 'rupay_card' | 'bank_account'>('credit_card');
+  const [newCardShortName, setNewCardShortName] = useState('');
+  const [newCardFullName, setNewCardFullName] = useState('');
+  const [newCardLimit, setNewCardLimit] = useState('150000');
+  const [newCardOpeningBalance, setNewCardOpeningBalance] = useState('0');
+  const [newCardBillingDay, setNewCardBillingDay] = useState('15');
+  const [newCardDueDay, setNewCardDueDay] = useState('5');
+  const [newCardColor, setNewCardColor] = useState('#ec4899');
+  const [isSavingNewCard, setIsSavingNewCard] = useState(false);
+
   const fetchBalances = async () => {
     const { data } = await safeFetchJson<AccountBalancesData>('/api/accounts/balances');
     if (data) {
+      if (data.customAccounts) {
+        syncCustomAccounts(data.customAccounts);
+      }
       setBalancesData(data);
       const initialMap: Record<string, string> = {};
       const initialLimits: Record<string, string> = {};
@@ -122,6 +143,83 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
       setEditBaseBalances(initialMap);
       setEditCardLimits(initialLimits);
       setEditWifeBalance(String(data.wifeBaseBalance ?? ''));
+    }
+  };
+
+  const handleCreateCustomCard = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const cleanShort = newCardShortName.trim();
+    if (!cleanShort) return;
+    setIsSavingNewCard(true);
+    try {
+      const badge = newCardType === 'rupay_card'
+        ? 'RuPay CC'
+        : newCardType === 'credit_card'
+        ? `${cleanShort.split(' ')[0]} CC`
+        : `${cleanShort.split(' ')[0]} Bank`;
+
+      const { data, error } = await safeFetchJson<AccountBalancesData & { account?: any }>('/api/accounts/custom', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: cleanShort,
+          shortName: cleanShort,
+          name: (newCardFullName.trim() || cleanShort),
+          type: newCardType,
+          badge,
+          color: newCardColor,
+          isUpiCapable: newCardType === 'rupay_card' || newCardType === 'bank_account',
+          creditLimit: parseFloat(newCardLimit) || 100000,
+          openingBalance: parseFloat(newCardOpeningBalance) || 0,
+          billingDay: parseInt(newCardBillingDay, 10) || 15,
+          paymentDueDay: parseInt(newCardDueDay, 10) || 5,
+        }),
+      });
+
+      if (data) {
+        if (data.customAccounts) {
+          syncCustomAccounts(data.customAccounts);
+        }
+        setBalancesData(data);
+        setSelectedAccountId(cleanShort);
+        setNewCardShortName('');
+        setNewCardFullName('');
+        setNewCardOpeningBalance('0');
+        setIsAddCardModalOpen(false);
+        setToastMessage(`✅ Naya Card "${cleanShort}" successfully add ho gaya!`);
+        setTimeout(() => setToastMessage(null), 3500);
+        await fetchBalances();
+      } else if (error) {
+        setToastMessage(`⚠️ ${error}`);
+        setTimeout(() => setToastMessage(null), 3000);
+      }
+    } catch (err) {
+      console.error(err);
+      setToastMessage('⚠️ Card add karne me error aaya');
+      setTimeout(() => setToastMessage(null), 3000);
+    } finally {
+      setIsSavingNewCard(false);
+    }
+  };
+
+  const handleDeleteCustomCard = async (cardId: string) => {
+    try {
+      const { data } = await safeFetchJson<AccountBalancesData>(`/api/accounts/custom/${encodeURIComponent(cardId)}`, {
+        method: 'DELETE',
+      });
+      if (data) {
+        if (data.customAccounts) {
+          syncCustomAccounts(data.customAccounts);
+        }
+        setBalancesData(data);
+        if (selectedAccountId === cardId) {
+          setSelectedAccountId('all');
+        }
+        setToastMessage(`🗑️ Card "${cardId}" hata diya gaya.`);
+        setTimeout(() => setToastMessage(null), 3000);
+      }
+    } catch (err) {
+      console.error(err);
     }
   };
 
@@ -145,6 +243,58 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
     const effectiveTransferred = Math.max(serverTransferred, liveWifeTransferred);
     return base + effectiveTransferred;
   }, [balancesData, liveWifeTransferred]);
+
+  const handleOpenSingleAccountModal = (acc: AccountMeta) => {
+    setEditingSingleAccount(acc);
+    const liveInfo = balancesData?.accounts?.[acc.id];
+    const isCard = acc.type === 'credit_card' || acc.type === 'rupay_card';
+    const currentBase = balancesData?.accountBaseBalances?.[acc.id] ?? liveInfo?.baseBalance ?? 0;
+    const currentLimit = balancesData?.cardCreditLimits?.[acc.id] ?? liveInfo?.creditLimit ?? acc.creditLimit ?? 100000;
+    setSingleBaseInput(String(currentBase));
+    setSingleLimitInput(isCard ? String(currentLimit) : '');
+  };
+
+  const handleSaveSingleAccount = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingSingleAccount) return;
+    setIsSavingSingleAccount(true);
+    try {
+      const isCard = editingSingleAccount.type === 'credit_card' || editingSingleAccount.type === 'rupay_card';
+      const baseVal = parseFloat(singleBaseInput) || 0;
+      const bodyPayload: Record<string, any> = {
+        accountBaseBalances: { [editingSingleAccount.id]: baseVal },
+      };
+      if (isCard) {
+        const limVal = parseFloat(singleLimitInput);
+        if (!isNaN(limVal) && limVal > 0) {
+          bodyPayload.cardCreditLimits = { [editingSingleAccount.id]: limVal };
+        }
+      }
+
+      const { data } = await safeFetchJson<AccountBalancesData>('/api/accounts/balances', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(bodyPayload),
+      });
+      if (data) {
+        setBalancesData(data);
+        setEditBaseBalances(prev => ({ ...prev, [editingSingleAccount.id]: String(baseVal) }));
+        if (isCard && bodyPayload.cardCreditLimits?.[editingSingleAccount.id]) {
+          setEditCardLimits(prev => ({ ...prev, [editingSingleAccount.id]: String(bodyPayload.cardCreditLimits[editingSingleAccount.id]) }));
+        }
+      }
+      setToastMessage(`✅ ${editingSingleAccount.shortName} ka ${isCard ? 'Limit & Due' : 'Base Balance'} update ho gaya!`);
+      setTimeout(() => setToastMessage(null), 3500);
+      setEditingSingleAccount(null);
+      if (onRefreshTransactions) await onRefreshTransactions();
+    } catch (err) {
+      console.error(err);
+      setToastMessage('⚠️ Balance update karne me error aaya');
+      setTimeout(() => setToastMessage(null), 3000);
+    } finally {
+      setIsSavingSingleAccount(false);
+    }
+  };
 
   const handleSaveBalances = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -445,6 +595,16 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
           </div>
 
           <div className="flex items-center gap-2 flex-wrap">
+            {/* Add New Card / Account Button */}
+            <button
+              onClick={() => setIsAddCardModalOpen(true)}
+              className="px-3.5 py-1.5 rounded-xl bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-400 hover:to-orange-500 text-white text-xs font-bold flex items-center gap-1.5 transition-all shadow-md shadow-orange-900/30 cursor-pointer"
+            >
+              <CreditCard className="w-3.5 h-3.5" />
+              <Plus className="w-3 h-3 -ml-1" />
+              <span>+ New Card Add Karein</span>
+            </button>
+
             {/* Set Opening Balances Button */}
             <button
               onClick={() => setIsBalancesModalOpen(true)}
@@ -547,6 +707,16 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
               </button>
             );
           })}
+
+          <button
+            type="button"
+            onClick={() => setIsAddCardModalOpen(true)}
+            className="px-3 py-2 rounded-xl text-xs font-bold transition-all shrink-0 cursor-pointer flex items-center gap-1.5 bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/40"
+            title="Naya Credit Card ya Bank Account jodein"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            <span>New Card</span>
+          </button>
         </div>
       </div>
 
@@ -585,14 +755,14 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
               Cards Available Limit
             </span>
             <span className="text-[10px] bg-sky-500/20 text-sky-300 px-1.5 py-0.5 rounded font-mono">
-              5 Cards
+              {CREDIT_CARDS.length} Cards
             </span>
           </div>
           <div className="text-xl sm:text-2xl font-bold font-mono text-white mt-1.5">
             {isFamily || isPrivacyMode ? '••••••' : `₹${(balancesData?.totalCardAvailableLimit || 0).toLocaleString('en-IN')}`}
           </div>
           <div className="text-[11px] text-slate-400 mt-1">
-            Total Limit: ₹6,40,000
+            Total Limit: ₹{CREDIT_CARDS.reduce((sum, c) => sum + (balancesData?.cardCreditLimits?.[c.id] || balancesData?.accounts?.[c.id]?.creditLimit || c.creditLimit || 100000), 0).toLocaleString('en-IN')}
           </div>
         </div>
 
@@ -644,10 +814,21 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
       {/* Selected Account Overview Strip / Stats */}
       {selectedMeta ? (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          <div className="bg-slate-900/50 border border-white/[0.08] rounded-2xl p-4">
-            <div className="text-xs text-slate-400">Account Type & Badge</div>
-            <div className="flex items-center gap-2 mt-1.5">
-              <span className="font-bold text-white text-sm">{selectedMeta.name}</span>
+          <div className="bg-slate-900/50 border border-white/[0.08] rounded-2xl p-4 flex flex-col justify-between">
+            <div>
+              <div className="text-xs text-slate-400 flex items-center justify-between">
+                <span>Account Type & Badge</span>
+                <button
+                  type="button"
+                  onClick={() => handleOpenSingleAccountModal(selectedMeta)}
+                  className="text-[10px] px-2 py-0.5 rounded-md bg-indigo-500/20 hover:bg-indigo-500/35 text-indigo-300 border border-indigo-500/30 font-semibold cursor-pointer transition-colors"
+                >
+                  ✏️ Edit Is Card/Bank
+                </button>
+              </div>
+              <div className="flex items-center gap-2 mt-1.5">
+                <span className="font-bold text-white text-sm">{selectedMeta.name}</span>
+              </div>
             </div>
             <div className="text-[11px] text-slate-400 mt-1 flex items-center gap-1.5">
               <span className="px-1.5 py-0.5 rounded bg-white/[0.06] font-mono text-[10px] text-indigo-300">
@@ -676,7 +857,7 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
                 <div className="text-[11px] text-slate-400 mt-1 flex items-center justify-between">
                   <span>Total Limit: ₹{(balancesData?.accounts[selectedAccountId]?.creditLimit || balancesData?.cardCreditLimits?.[selectedAccountId] || selectedMeta.creditLimit || 100000).toLocaleString('en-IN')}</span>
                   <button
-                    onClick={() => setIsBalancesModalOpen(true)}
+                    onClick={() => handleOpenSingleAccountModal(selectedMeta)}
                     className="text-sky-400 hover:text-sky-300 text-[10px] font-semibold underline cursor-pointer"
                   >
                     ✏️ Limit / Due Badlein
@@ -688,7 +869,7 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
                 <div className="text-xs text-slate-400 flex items-center justify-between">
                   <span>Current Spends / Outstanding</span>
                   <button
-                    onClick={() => setIsBalancesModalOpen(true)}
+                    onClick={() => handleOpenSingleAccountModal(selectedMeta)}
                     className="text-rose-400 hover:text-rose-300 text-[10px] font-semibold underline cursor-pointer"
                   >
                     ✏️ Due Set Karein
@@ -720,10 +901,10 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
                 <div className="text-xs text-emerald-300 font-medium flex items-center justify-between">
                   <span>Current Live Balance</span>
                   <button
-                    onClick={() => setIsBalancesModalOpen(true)}
+                    onClick={() => handleOpenSingleAccountModal(selectedMeta)}
                     className="text-[10px] text-emerald-400 hover:underline cursor-pointer"
                   >
-                    ✏️ Set Base
+                    ✏️ Set Base Balance
                   </button>
                 </div>
                 <div className="text-xl font-bold text-emerald-400 font-mono mt-1">
@@ -759,29 +940,99 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
           )}
         </div>
       ) : (
-        <div className="bg-slate-900/50 border border-white/[0.08] rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <div>
-            <div className="text-xs text-slate-300 font-medium">
-              Showing all accounts consolidated summary ({transactions.length} transactions total)
+        <div className="space-y-4">
+          <div className="bg-slate-900/50 border border-white/[0.08] rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
+              <div className="text-xs text-slate-300 font-medium">
+                Showing all accounts consolidated summary ({transactions.length} transactions total)
+              </div>
+              <div className="text-[11px] text-slate-400 mt-0.5">
+                Includes {CREDIT_CARDS.length} Credit/RuPay cards, {BANK_ACCOUNTS.length} Bank accounts & Cash ledger
+              </div>
             </div>
-            <div className="text-[11px] text-slate-400 mt-0.5">
-              Includes 5 Credit/RuPay cards, 2 Bank accounts & Cash ledger
+            <div className="flex items-center gap-3">
+              <span className="text-xs font-mono font-bold text-indigo-400">
+                Kul Kharcha: {isFamily || isPrivacyMode ? '₹••••••' : `₹${totalAccountExpense.toLocaleString('en-IN')}`}
+              </span>
+              <button
+                onClick={() => {
+                  setExportAccountId('all');
+                  setIsStatementModalOpen(true);
+                }}
+                className="px-3 py-1 bg-emerald-600/30 hover:bg-emerald-600/50 text-emerald-300 border border-emerald-500/40 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer"
+              >
+                <Download className="w-3 h-3" />
+                Consolidated Excel Statement
+              </button>
             </div>
           </div>
-          <div className="flex items-center gap-3">
-            <span className="text-xs font-mono font-bold text-indigo-400">
-              Kul Kharcha: {isFamily || isPrivacyMode ? '₹••••••' : `₹${totalAccountExpense.toLocaleString('en-IN')}`}
-            </span>
-            <button
-              onClick={() => {
-                setExportAccountId('all');
-                setIsStatementModalOpen(true);
-              }}
-              className="px-3 py-1 bg-emerald-600/30 hover:bg-emerald-600/50 text-emerald-300 border border-emerald-500/40 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer"
-            >
-              <Download className="w-3 h-3" />
-              Consolidated Excel Statement
-            </button>
+
+          {/* Individual Cards & Banks Quick Grid with Per-Account Set Base/Limit Buttons */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+            {ALL_ACCOUNTS.map((acc) => {
+              const isCard = acc.type === 'credit_card' || acc.type === 'rupay_card';
+              const accInfo = balancesData?.accounts?.[acc.id];
+              const cardLimit = balancesData?.cardCreditLimits?.[acc.id] || accInfo?.creditLimit || acc.creditLimit || 100000;
+              const liveBal = accInfo?.currentBalance ?? 0;
+              const cardDue = accInfo?.currentOutstanding ?? 0;
+              const avlLimit = accInfo?.availableLimit ?? Math.max(0, cardLimit - cardDue);
+
+              return (
+                <div
+                  key={acc.id}
+                  onClick={() => setSelectedAccountId(acc.id)}
+                  className="bg-slate-900/60 hover:bg-slate-900/90 border border-white/[0.08] hover:border-indigo-500/40 rounded-2xl p-3.5 cursor-pointer transition-all flex flex-col justify-between gap-2"
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-white/[0.06] text-slate-300">
+                        {acc.badge}
+                      </span>
+                      <h4 className="font-bold text-xs text-white mt-1.5">{acc.shortName}</h4>
+                      <p className="text-[10px] text-slate-400 truncate max-w-[160px]">{acc.name}</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleOpenSingleAccountModal(acc);
+                      }}
+                      className="px-2 py-1 rounded-lg bg-indigo-500/20 hover:bg-indigo-500/40 text-indigo-300 border border-indigo-500/30 text-[10px] font-semibold cursor-pointer shrink-0 transition-colors"
+                      title={isCard ? 'Is card ki Limit aur Due set karein' : 'Is bank/cash ka Base Balance set karein'}
+                    >
+                      ✏️ {isCard ? 'Limit / Due' : 'Set Base'}
+                    </button>
+                  </div>
+
+                  {isCard ? (
+                    <div className="pt-2 border-t border-white/[0.06] space-y-0.5 text-[11px] font-mono">
+                      <div className="flex justify-between">
+                        <span className="text-slate-400">Available:</span>
+                        <span className="font-bold text-sky-300">
+                          {isFamily || isPrivacyMode ? '••••' : `₹${avlLimit.toLocaleString('en-IN')}`}
+                        </span>
+                      </div>
+                      <div className="flex justify-between text-[10px]">
+                        <span className="text-slate-500">Limit: ₹{cardLimit.toLocaleString('en-IN')}</span>
+                        <span className="text-rose-400">Due: ₹{cardDue.toLocaleString('en-IN')}</span>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="pt-2 border-t border-white/[0.06] space-y-0.5 text-[11px] font-mono">
+                      <div className="flex justify-between">
+                        <span className="text-slate-400">Live Balance:</span>
+                        <span className="font-bold text-emerald-400">
+                          {isFamily || isPrivacyMode ? '••••' : `₹${liveBal.toLocaleString('en-IN')}`}
+                        </span>
+                      </div>
+                      <div className="text-[10px] text-slate-500">
+                        Base Set: ₹{(accInfo?.baseBalance || 0).toLocaleString('en-IN')}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
         </div>
       )}
@@ -1593,8 +1844,9 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
                     onChange={(e) => setBillFromAccount(e.target.value as AccountId)}
                     className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white focus:outline-hidden focus:border-emerald-500 text-xs"
                   >
-                    <option value="AX Bank">AX Bank (Salary)</option>
-                    <option value="IC Bank">IC Bank (Savings)</option>
+                    {BANK_ACCOUNTS.map(b => (
+                      <option key={b.id} value={b.id}>{b.name}</option>
+                    ))}
                   </select>
                 </div>
               </div>
@@ -1833,6 +2085,366 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
                   className="px-5 py-2 bg-gradient-to-r from-sky-600 to-indigo-600 hover:from-sky-500 hover:to-indigo-500 text-white font-bold rounded-xl shadow-md transition-all cursor-pointer font-sans"
                 >
                   {isSavingBalances ? 'Save ho raha hai...' : '💾 Balances Save Karein'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {/* Modal: Add New Card / Bank Account */}
+      {isAddCardModalOpen && typeof document !== 'undefined' && createPortal(
+        <div
+          className="fixed inset-0 z-[9999] flex items-center justify-center p-3 sm:p-4 bg-black/80 backdrop-blur-md animate-in fade-in duration-150"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setIsAddCardModalOpen(false);
+          }}
+        >
+          <div className="bg-slate-900 border border-amber-500/40 rounded-2xl w-full max-w-lg max-h-[90vh] flex flex-col shadow-2xl overflow-hidden">
+            <div className="p-4 sm:p-5 border-b border-slate-800 flex items-center justify-between bg-slate-900/95 shrink-0">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-400">
+                  <CreditCard className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-white">
+                    Naya Credit Card / Account Jodein
+                  </h3>
+                  <p className="text-xs text-slate-400">
+                    Naya card add karte hi Kharcha, Reimbursement aur Card Reserve me dikhne lagega
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsAddCardModalOpen(false)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleCreateCustomCard} className="overflow-y-auto p-5 space-y-4 text-xs">
+              {/* Type Selector */}
+              <div>
+                <label className="block text-slate-300 font-semibold mb-1.5">
+                  1. Card / Account Type Chunein
+                </label>
+                <div className="grid grid-cols-3 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setNewCardType('credit_card')}
+                    className={`p-2.5 rounded-xl border text-center font-semibold cursor-pointer transition-all ${
+                      newCardType === 'credit_card'
+                        ? 'bg-sky-500/20 border-sky-400 text-sky-200 shadow-sm'
+                        : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    💳 Credit Card
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setNewCardType('rupay_card')}
+                    className={`p-2.5 rounded-xl border text-center font-semibold cursor-pointer transition-all ${
+                      newCardType === 'rupay_card'
+                        ? 'bg-amber-500/20 border-amber-400 text-amber-200 shadow-sm'
+                        : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    ⚡ RuPay UPI CC
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setNewCardType('bank_account')}
+                    className={`p-2.5 rounded-xl border text-center font-semibold cursor-pointer transition-all ${
+                      newCardType === 'bank_account'
+                        ? 'bg-emerald-500/20 border-emerald-400 text-emerald-200 shadow-sm'
+                        : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    🏦 Bank Account
+                  </button>
+                </div>
+              </div>
+
+              {/* Short Name / Card ID */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-slate-300 font-semibold mb-1">
+                    2. Short Name + Last 4 Digit *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    placeholder={newCardType === 'bank_account' ? 'e.g. HDFC Bank' : 'e.g. HDFC CC 4512'}
+                    value={newCardShortName}
+                    onChange={(e) => setNewCardShortName(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white font-semibold focus:border-amber-500 focus:outline-hidden"
+                  />
+                  <span className="text-[10px] text-slate-400 mt-0.5 block">
+                    Telegram me bhi last 4 digit likhne se auto-detect hoga
+                  </span>
+                </div>
+
+                <div>
+                  <label className="block text-slate-300 font-semibold mb-1">
+                    3. Pura Naam (Optional)
+                  </label>
+                  <input
+                    type="text"
+                    placeholder={newCardType === 'bank_account' ? 'e.g. HDFC Savings Account' : 'e.g. HDFC Millennia CC (4512)'}
+                    value={newCardFullName}
+                    onChange={(e) => setNewCardFullName(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white focus:border-amber-500 focus:outline-hidden"
+                  />
+                </div>
+              </div>
+
+              {/* Credit Limit & Opening Due/Balance */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {(newCardType === 'credit_card' || newCardType === 'rupay_card') && (
+                  <div>
+                    <label className="block text-slate-300 font-semibold mb-1">
+                      💳 Total Credit Limit (₹)
+                    </label>
+                    <input
+                      type="number"
+                      step="any"
+                      placeholder="150000"
+                      value={newCardLimit}
+                      onChange={(e) => setNewCardLimit(e.target.value)}
+                      className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white font-mono focus:border-sky-500 focus:outline-hidden"
+                    />
+                  </div>
+                )}
+
+                <div>
+                  <label className="block text-slate-300 font-semibold mb-1">
+                    {newCardType === 'bank_account' ? '🏦 Starting Bank Balance (₹)' : '🔴 Aaj Ka Running Bill / Due (₹)'}
+                  </label>
+                  <input
+                    type="number"
+                    step="any"
+                    placeholder="0"
+                    value={newCardOpeningBalance}
+                    onChange={(e) => setNewCardOpeningBalance(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white font-mono focus:border-rose-500 focus:outline-hidden"
+                  />
+                </div>
+              </div>
+
+              {/* Billing Day & Due Day for Cards */}
+              {(newCardType === 'credit_card' || newCardType === 'rupay_card') && (
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-slate-300 font-semibold mb-1">
+                      📅 Statement Billing Tarikh (1-31)
+                    </label>
+                    <input
+                      type="number"
+                      min={1}
+                      max={31}
+                      value={newCardBillingDay}
+                      onChange={(e) => setNewCardBillingDay(e.target.value)}
+                      className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white font-mono"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-slate-300 font-semibold mb-1">
+                      ⏰ Bill Due Tarikh (1-31)
+                    </label>
+                    <input
+                      type="number"
+                      min={1}
+                      max={31}
+                      value={newCardDueDay}
+                      onChange={(e) => setNewCardDueDay(e.target.value)}
+                      className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white font-mono"
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* Color Picker */}
+              <div>
+                <label className="block text-slate-300 font-semibold mb-1.5">
+                  🎨 Card Color Theme
+                </label>
+                <div className="flex items-center gap-2 flex-wrap">
+                  {[
+                    { hex: '#ec4899', label: 'Pink' },
+                    { hex: '#06b6d4', label: 'Cyan' },
+                    { hex: '#8b5cf6', label: 'Violet' },
+                    { hex: '#f59e0b', label: 'Amber' },
+                    { hex: '#10b981', label: 'Emerald' },
+                    { hex: '#3b82f6', label: 'Blue' },
+                    { hex: '#ef4444', label: 'Red' },
+                  ].map((c) => (
+                    <button
+                      key={c.hex}
+                      type="button"
+                      onClick={() => setNewCardColor(c.hex)}
+                      className={`px-2.5 py-1 rounded-lg border text-[11px] font-semibold flex items-center gap-1.5 cursor-pointer ${
+                        newCardColor === c.hex ? 'border-white bg-slate-800 text-white' : 'border-slate-800 bg-slate-950 text-slate-400'
+                      }`}
+                    >
+                      <span className="w-3 h-3 rounded-full" style={{ backgroundColor: c.hex }} />
+                      {c.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Existing Custom Cards List (with Delete option) */}
+              {ALL_ACCOUNTS.some(a => a.isCustom) && (
+                <div className="pt-3 border-t border-slate-800 space-y-2">
+                  <div className="text-[11px] font-bold text-slate-400 uppercase">
+                    Aapke Added Custom Cards / Accounts:
+                  </div>
+                  <div className="space-y-1.5">
+                    {ALL_ACCOUNTS.filter(a => a.isCustom).map(acc => (
+                      <div key={acc.id} className="flex items-center justify-between bg-slate-950 border border-slate-800 px-3 py-2 rounded-xl">
+                        <div>
+                          <span className="font-bold text-white">{acc.shortName}</span>
+                          <span className="text-slate-400 ml-2 text-[11px]">{acc.name}</span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteCustomCard(acc.id)}
+                          className="text-rose-400 hover:text-rose-300 p-1 rounded hover:bg-rose-950/50 cursor-pointer flex items-center gap-1 text-[11px]"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                          Delete
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div className="pt-3 border-t border-slate-800 flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsAddCardModalOpen(false)}
+                  className="px-4 py-2 rounded-xl border border-slate-700 text-slate-400 hover:text-white cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSavingNewCard || !newCardShortName.trim()}
+                  className="px-5 py-2 bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-400 hover:to-orange-500 text-white font-bold rounded-xl shadow-md transition-all cursor-pointer disabled:opacity-50"
+                >
+                  {isSavingNewCard ? 'Adding...' : '➕ Add Card / Account'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>,
+        document.body
+      )}
+      {/* Modal: Individual Single Card / Bank Limit & Base Balance Editor */}
+      {editingSingleAccount && typeof document !== 'undefined' && createPortal(
+        <div
+          className="fixed inset-0 z-[9999] flex items-center justify-center p-3 sm:p-4 bg-black/80 backdrop-blur-md animate-in fade-in duration-150"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setEditingSingleAccount(null);
+          }}
+        >
+          <div
+            className="bg-slate-900 border border-indigo-500/40 rounded-2xl w-full max-w-md shadow-2xl overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="p-4 sm:p-5 border-b border-slate-800 flex items-center justify-between bg-slate-900/95">
+              <div>
+                <h3 className="text-base font-bold text-white flex items-center gap-2">
+                  {(editingSingleAccount.type === 'credit_card' || editingSingleAccount.type === 'rupay_card')
+                    ? <CreditCard className="w-4 h-4 text-sky-400" />
+                    : <Building2 className="w-4 h-4 text-emerald-400" />}
+                  <span>{editingSingleAccount.shortName}</span>
+                </h3>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  {editingSingleAccount.name} • Alag se Limit / Base Balance set karein
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setEditingSingleAccount(null)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveSingleAccount} className="p-5 space-y-4 text-xs">
+              {(editingSingleAccount.type === 'credit_card' || editingSingleAccount.type === 'rupay_card') ? (
+                <>
+                  <div>
+                    <label className="block text-slate-300 font-semibold mb-1">
+                      💳 Total Credit Limit (₹)
+                    </label>
+                    <input
+                      type="number"
+                      step="any"
+                      min="1"
+                      required
+                      value={singleLimitInput}
+                      onChange={(e) => setSingleLimitInput(e.target.value)}
+                      className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white font-mono text-sm focus:border-sky-500 focus:outline-hidden"
+                      autoFocus
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-rose-300 font-semibold mb-1">
+                      🔴 Aaj Ka Running Due / Unpaid Spends (₹)
+                    </label>
+                    <input
+                      type="number"
+                      step="any"
+                      min="0"
+                      value={singleBaseInput}
+                      onChange={(e) => setSingleBaseInput(e.target.value)}
+                      className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white font-mono text-sm focus:border-rose-500 focus:outline-hidden"
+                    />
+                    <p className="text-[10px] text-slate-400 mt-1">
+                      Available Limit: <strong className="text-emerald-400 font-mono">₹{Math.max(0, (parseFloat(singleLimitInput) || 0) - (parseFloat(singleBaseInput) || 0)).toLocaleString('en-IN')}</strong>
+                    </p>
+                  </div>
+                </>
+              ) : (
+                <div>
+                  <label className="block text-emerald-300 font-semibold mb-1">
+                    🏦 Aaj Ka Base / Opening Balance (₹)
+                  </label>
+                  <input
+                    type="number"
+                    step="any"
+                    value={singleBaseInput}
+                    onChange={(e) => setSingleBaseInput(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2.5 text-white font-mono text-sm focus:border-emerald-500 focus:outline-hidden"
+                    autoFocus
+                  />
+                  <p className="text-[10px] text-slate-400 mt-1.5">
+                    Iske baad aane wale transactions aur auto-debits sirf is account me live add/deduct honge. Baaki accounts untouched rahenge.
+                  </p>
+                </div>
+              )}
+
+              <div className="pt-3 border-t border-slate-800 flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setEditingSingleAccount(null)}
+                  className="px-4 py-2 rounded-xl border border-slate-700 text-slate-400 hover:text-white cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSavingSingleAccount}
+                  className="px-5 py-2 bg-gradient-to-r from-indigo-600 to-sky-600 hover:from-indigo-500 hover:to-sky-500 text-white font-bold rounded-xl shadow-md transition-all cursor-pointer disabled:opacity-50"
+                >
+                  {isSavingSingleAccount ? 'Saving...' : '💾 Save Only This Account'}
                 </button>
               </div>
             </form>

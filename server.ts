@@ -131,6 +131,7 @@ export interface Transaction {
   isInvestment?: boolean;
   isUdhaarLent?: boolean;
   isUdhaarRecovery?: boolean;
+  isUdhaarRepaid?: boolean;
   linkedUdhaarId?: string;
   udhaarPersonName?: string;
   linkedTransferId?: string;
@@ -161,21 +162,36 @@ export interface SavingsTransfer {
   createdAt: string;
 }
 
+export interface InvestmentAutoDebitEntry {
+  id: string;
+  date: string;
+  monthKey: string;
+  amount: number;
+  account: string;
+  linkedTxId: string;
+  createdAt: string;
+}
+
 export interface InvestmentRecord {
   id: string;
   userId: string;
-  type: 'RD' | 'FD' | 'Mutual Fund' | 'Gold' | 'PPF' | 'Other';
+  type: 'RD' | 'FD' | 'Mutual Fund' | 'Insurance' | 'Gold' | 'PPF' | 'Other';
   name: string;
   amount: number;
   monthlyAmount?: number;
   paidInstallments?: number;
   totalInstallments?: number;
+  installmentFrequency?: 'monthly' | 'quarterly' | 'yearly';
   account: string;
   date: string;
   maturityDate?: string;
   interestRate?: number;
   currentValue?: number;
   maturityAmount?: number;
+  autoDebitEnabled?: boolean;
+  autoDebitDay?: number;
+  lastAutoDebitMonth?: string;
+  autoDebitHistory?: InvestmentAutoDebitEntry[];
   notes?: string;
   createdAt: string;
 }
@@ -263,16 +279,29 @@ export interface FinancialSummary {
   currentMonthUdhaarBakaya?: number;
 }
 
+export interface UdhaarSettlementEntry {
+  id: string;
+  amount: number;
+  account: string;
+  date: string;
+  notes?: string;
+  linkedTxId?: string;
+  createdAt: string;
+}
+
 export interface UdhaarRecord {
   id: string;
   userId: string;
   type: 'lent' | 'borrowed'; // 'lent' (Maine Diya / Lena hai) | 'borrowed' (Maine Liya / Dena hai)
   personName: string; // e.g. "Rohan", "Papa"
   amount: number;
+  settledAmount?: number;
+  settledInAccount?: string;
+  settlementHistory?: UdhaarSettlementEntry[];
   description?: string;
   date: string; // YYYY-MM-DD
   time?: string;
-  status: 'pending' | 'settled';
+  status: 'pending' | 'partial' | 'settled';
   account?: string;
   linkedTransactionId?: string;
   settledAt?: string;
@@ -724,6 +753,19 @@ interface UserDataStore {
   wifeBaseBalance?: number;
   wifeBalanceSetTimestamp?: string;
   cardCreditLimits?: Record<string, number>;
+  customAccounts?: Array<{
+    id: string;
+    name: string;
+    shortName: string;
+    type: 'rupay_card' | 'credit_card' | 'bank_account' | 'cash';
+    badge: string;
+    color: string;
+    isUpiCapable?: boolean;
+    creditLimit?: number;
+    billingDay?: number;
+    paymentDueDay?: number;
+    isCustom?: boolean;
+  }>;
   deletedCategories?: string[];
 }
 
@@ -1278,7 +1320,14 @@ export function computeInvestmentDetails(inv: any) {
   const startDate = inv.date ? new Date(inv.date) : new Date();
   const today = new Date();
 
-  if (inv.type === 'RD' || inv.type === 'Mutual Fund') {
+  const isRecurring =
+    inv.type === 'RD' ||
+    inv.type === 'Mutual Fund' ||
+    inv.type === 'Insurance' ||
+    (inv.monthlyAmount !== undefined && Number(inv.monthlyAmount) > 0) ||
+    Boolean(inv.autoDebitEnabled);
+
+  if (isRecurring) {
     let totalMonths = Number(inv.totalInstallments) || 0;
     if (!totalMonths && inv.maturityDate && inv.date) {
       const matDate = new Date(inv.maturityDate);
@@ -1287,7 +1336,7 @@ export function computeInvestmentDetails(inv: any) {
     if (!totalMonths) totalMonths = 12;
 
     let paidCount = Number(inv.paidInstallments);
-    if (paidCount === undefined || isNaN(paidCount) || paidCount <= 0) {
+    if (inv.paidInstallments === undefined || isNaN(paidCount) || paidCount < 0) {
       let monthsElapsed = (today.getFullYear() - startDate.getFullYear()) * 12 + (today.getMonth() - startDate.getMonth());
       if (today.getDate() >= startDate.getDate()) {
         monthsElapsed += 1;
@@ -1296,11 +1345,12 @@ export function computeInvestmentDetails(inv: any) {
     }
 
     const totalDeposited = paidCount * rawMonthly;
+    const freqMultiplier = inv.installmentFrequency === 'yearly' ? 12 : inv.installmentFrequency === 'quarterly' ? 3 : 1;
     let interest = 0;
     if (rate > 0) {
       const qRate = (rate / 100) / 4;
       for (let i = 1; i <= paidCount; i++) {
-        const mHeld = paidCount - i + 1;
+        const mHeld = (paidCount - i + 1) * freqMultiplier;
         interest += rawMonthly * (Math.pow(1 + qRate, mHeld / 3) - 1);
       }
     }
@@ -1312,7 +1362,7 @@ export function computeInvestmentDetails(inv: any) {
       const qRate = (rate / 100) / 4;
       let totalInterest = 0;
       for (let i = 1; i <= totalMonths; i++) {
-        const mHeld = totalMonths - i + 1;
+        const mHeld = (totalMonths - i + 1) * freqMultiplier;
         totalInterest += rawMonthly * (Math.pow(1 + qRate, mHeld / 3) - 1);
       }
       maturityAmount = Math.round((totalMonths * rawMonthly) + totalInterest);
@@ -1422,7 +1472,12 @@ function calculateUserSummary(userId: string): FinancialSummary {
       const isRim = Boolean(t.isReimbursement || t.category === 'Reimbursement');
       const isWifeTr = Boolean(t.isWifeTransfer || t.category === 'Wife Transfer' || (t.category && t.category.toLowerCase().includes('wife')));
       const isCcPay = Boolean(t.isCcPayment || t.category === 'CC Payment' || (t.category && t.category.toLowerCase().includes('cc payment')) || (t.category && t.category.toLowerCase().includes('credit card payment')) || (t.category && t.category.toLowerCase().includes('cc bill')));
-      const isUdhaarLent = Boolean(
+      const isUdhaarRepaid = Boolean(
+        t.isUdhaarRepaid ||
+        t.category === 'Udhaar Repaid' ||
+        (t.tags && t.tags.includes('udhaar-repaid'))
+      );
+      const isUdhaarLent = !isUdhaarRepaid && Boolean(
         t.isUdhaarLent ||
         t.category === 'Udhaar Given' ||
         t.category === 'Loan Given' ||
@@ -1430,7 +1485,7 @@ function calculateUserSummary(userId: string): FinancialSummary {
         (t.tags && t.tags.includes('udhaar-lent'))
       );
       const catDef = (store.categories || []).find(c => c.name.toLowerCase() === (t.category || '').toLowerCase());
-      const isExemptFromBudget = Boolean(catDef?.excludeFromBudget) || isRim || isWifeTr || isCcPay || isUdhaarLent;
+      const isExemptFromBudget = Boolean(catDef?.excludeFromBudget) || isRim || isWifeTr || isCcPay || isUdhaarLent || isUdhaarRepaid;
 
       if (isRim) {
         totalExpense += amt;
@@ -1484,17 +1539,20 @@ function calculateUserSummary(userId: string): FinancialSummary {
     }
   }
 
-  // Analyze store.udhaars (Udhaar Tab Dedicated Khata Records)
+  // Analyze store.udhaars (Udhaar Tab Dedicated Khata Records — accounting for partial settlements)
   const storeUdhaars = store.udhaars || [];
+  const getRemainingUdhaar = (u: UdhaarRecord) =>
+    Math.max(0, (Number(u.amount) || 0) - (Number(u.settledAmount) || 0));
+
   const tabPendingLent = storeUdhaars
     .filter(u => u && u.type === 'lent' && u.status !== 'settled')
-    .reduce((sum, u) => sum + (Number(u.amount) || 0), 0);
+    .reduce((sum, u) => sum + getRemainingUdhaar(u), 0);
   const tabPendingBorrowed = storeUdhaars
     .filter(u => u && u.type === 'borrowed' && u.status !== 'settled')
-    .reduce((sum, u) => sum + (Number(u.amount) || 0), 0);
+    .reduce((sum, u) => sum + getRemainingUdhaar(u), 0);
   const tabMonthPendingLent = storeUdhaars
     .filter(u => u && u.type === 'lent' && u.status !== 'settled' && u.date && u.date.startsWith(currentMonthPrefix))
-    .reduce((sum, u) => sum + (Number(u.amount) || 0), 0);
+    .reduce((sum, u) => sum + getRemainingUdhaar(u), 0);
 
   // Unified Bakaya: If Udhaar tab has entries, Udhaar tab pending balance is authoritative!
   const hasStoreUdhaars = storeUdhaars.length > 0;
@@ -3095,7 +3153,28 @@ export function calculateAccountsBalances(userId: string) {
 
   let needsSave = false;
 
-  for (const [accId, meta] of Object.entries(ACCOUNTS_META)) {
+  const combinedAccountsMeta: Record<string, {
+    id: string;
+    name: string;
+    shortName: string;
+    type: 'rupay_card' | 'credit_card' | 'bank_account' | 'cash';
+    badge: string;
+    color: string;
+    creditLimit?: number;
+    billingDay?: number;
+    paymentDueDay?: number;
+    isCustom?: boolean;
+  }> = { ...ACCOUNTS_META };
+
+  if (Array.isArray(store.customAccounts)) {
+    for (const cAcc of store.customAccounts) {
+      if (cAcc && cAcc.id) {
+        combinedAccountsMeta[cAcc.id] = { ...cAcc, isCustom: true };
+      }
+    }
+  }
+
+  for (const [accId, meta] of Object.entries(combinedAccountsMeta)) {
     const isCard = meta.type === 'credit_card' || meta.type === 'rupay_card';
     const base = Number(baseBalances[accId]) || 0;
     let setTimeStr = baseTimestamps[accId];
@@ -3241,6 +3320,7 @@ export function calculateAccountsBalances(userId: string) {
     wifeBaseBalance: wifeBase,
     wifeBalanceSetTimestamp: store.wifeBalanceSetTimestamp,
     cardCreditLimits: cardLimits,
+    customAccounts: store.customAccounts || [],
     accounts,
     totalBankCashBalance,
     totalCardAvailableLimit,
@@ -3251,6 +3331,126 @@ export function calculateAccountsBalances(userId: string) {
       currentBalance: wifeCurrentBalance,
     },
   };
+}
+
+export function processInvestmentAutoDebits(targetUserId?: string): { processedCount: number; processedItems: Array<{ userId: string; investmentName: string; amount: number; account: string; date: string }> } {
+  const istNow = getAppDateTime();
+  const todayStr = istNow.date; // YYYY-MM-DD
+  const curYear = parseInt(todayStr.substring(0, 4), 10);
+  const curMonth = parseInt(todayStr.substring(5, 7), 10);
+  const curDay = parseInt(todayStr.substring(8, 10), 10);
+  const currentMonthKey = todayStr.substring(0, 7); // YYYY-MM
+  const daysInCurMonth = new Date(curYear, curMonth, 0).getDate();
+
+  const userIdsToProcess = targetUserId ? [targetUserId] : users.map(u => u.id);
+  let processedCount = 0;
+  const processedItems: Array<{ userId: string; investmentName: string; amount: number; account: string; date: string }> = [];
+
+  for (const uid of userIdsToProcess) {
+    if (!uid) continue;
+    const store = getUserData(uid);
+    if (!Array.isArray(store.investments) || store.investments.length === 0) continue;
+
+    let changed = false;
+
+    for (const inv of store.investments) {
+      if (!inv.autoDebitEnabled) continue;
+      const dueDayNum = Number(inv.autoDebitDay);
+      if (!dueDayNum || isNaN(dueDayNum) || dueDayNum < 1 || dueDayNum > 31) continue;
+
+      const effectiveDueDay = Math.min(dueDayNum, daysInCurMonth);
+      if (curDay < effectiveDueDay) continue; // Due date for this month hasn't arrived yet
+
+      const dueDateStr = `${curYear}-${String(curMonth).padStart(2, '0')}-${String(effectiveDueDay).padStart(2, '0')}`;
+      const startDateStr = inv.date || todayStr;
+      if (startDateStr > dueDateStr) continue; // Starts in the future
+
+      const freq = inv.installmentFrequency || 'monthly';
+      const startYear = parseInt(startDateStr.substring(0, 4), 10) || curYear;
+      const startMonth = parseInt(startDateStr.substring(5, 7), 10) || curMonth;
+
+      let cycleKey = currentMonthKey;
+      let isFreqMatch = true;
+
+      if (freq === 'quarterly') {
+        const monthsDiff = (curYear - startYear) * 12 + (curMonth - startMonth);
+        isFreqMatch = monthsDiff >= 0 && (monthsDiff % 3 === 0);
+        cycleKey = currentMonthKey;
+      } else if (freq === 'yearly') {
+        isFreqMatch = curMonth === startMonth;
+        cycleKey = String(curYear);
+      }
+
+      if (!isFreqMatch) continue;
+      if (inv.lastAutoDebitMonth === cycleKey) continue;
+      if (Array.isArray(inv.autoDebitHistory) && inv.autoDebitHistory.some(h => h.monthKey === cycleKey)) continue;
+
+      const totalInst = Number(inv.totalInstallments) || 0;
+      const paidInst = Number(inv.paidInstallments) || 0;
+      if (totalInst > 0 && paidInst >= totalInst) continue;
+
+      const debitAmt = Math.abs(Number(inv.monthlyAmount) || Number(inv.amount) || 0);
+      if (debitAmt <= 0) continue;
+
+      const debitAcc = inv.account || 'IC Bank';
+      const nowIso = new Date().toISOString();
+      const txId = `tx_ad_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+
+      const insuranceCat = (store.categories || []).find(c => c.name.toLowerCase().includes('insurance'))?.name;
+      const txCategory = inv.type === 'Insurance'
+        ? (insuranceCat || 'Bills & Utilities')
+        : 'Investments & Savings';
+
+      const autoTx: Transaction = {
+        id: txId,
+        userId: uid,
+        type: 'expense',
+        amount: debitAmt,
+        category: txCategory,
+        description: `🤖 Auto-Debit (${inv.type}): ${inv.name}`,
+        date: dueDateStr,
+        time: '09:00',
+        paymentMethod: debitAcc === 'Cash' ? 'Cash' : 'Bank Transfer',
+        account: debitAcc,
+        source: 'wealth',
+        createdAt: nowIso,
+        tags: ['auto-debit', inv.type.toLowerCase(), inv.id],
+        isInvestment: true,
+      };
+
+      if (!store.transactions) store.transactions = [];
+      store.transactions.unshift(autoTx);
+
+      inv.paidInstallments = paidInst + 1;
+      inv.lastAutoDebitMonth = cycleKey;
+      if (!inv.autoDebitHistory) inv.autoDebitHistory = [];
+      inv.autoDebitHistory.unshift({
+        id: `ad_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
+        date: dueDateStr,
+        monthKey: cycleKey,
+        amount: debitAmt,
+        account: debitAcc,
+        linkedTxId: txId,
+        createdAt: nowIso,
+      });
+
+      changed = true;
+      processedCount++;
+      processedItems.push({
+        userId: uid,
+        investmentName: inv.name,
+        amount: debitAmt,
+        account: debitAcc,
+        date: dueDateStr,
+      });
+    }
+
+    if (changed) {
+      saveUserData(uid, store);
+    }
+  }
+
+  return { processedCount, processedItems };
 }
 
 export function buildBalancesTelegramMessage(userId: string, userName: string, isOwner = true): string {
@@ -8892,10 +9092,12 @@ app.get('/api/transactions', (req, res) => {
       user: null,
     });
   }
+  processInvestmentAutoDebits(user.id);
   const store = getUserData(user.id);
   const summary = calculateUserSummary(user.id);
   res.json({
     transactions: store.transactions,
+    customAccounts: store.customAccounts || [],
     summary,
     user,
   });
@@ -9434,6 +9636,9 @@ app.delete('/api/emis/:id', (req, res) => {
 // ---------------- Account & Wife Balances Endpoints ----------------
 app.get('/api/accounts/balances', (req, res) => {
   const user = getRequestUser(req);
+  if (user) {
+    processInvestmentAutoDebits(user.id);
+  }
   const data = calculateAccountsBalances(user.id);
   res.json(data);
 });
@@ -9474,6 +9679,88 @@ app.post('/api/accounts/balances', (req, res) => {
     }
   }
 
+  saveUserData(user.id, store);
+  const updatedData = calculateAccountsBalances(user.id);
+  res.json({ success: true, ...updatedData });
+});
+
+app.post('/api/accounts/custom', (req, res) => {
+  const user = getRequestUser(req);
+  const store = getUserData(user.id);
+  if (!store.customAccounts) store.customAccounts = [];
+
+  const {
+    id,
+    name,
+    shortName,
+    type,
+    badge,
+    color,
+    isUpiCapable,
+    creditLimit,
+    billingDay,
+    paymentDueDay,
+    openingBalance,
+  } = req.body;
+
+  const cleanShortName = String(shortName || id || '').trim();
+  if (!cleanShortName) {
+    return res.status(400).json({ error: 'Card / Account name is required' });
+  }
+
+  const accId = String(id || cleanShortName).trim();
+  const validTypes = ['rupay_card', 'credit_card', 'bank_account', 'cash'];
+  const accType = validTypes.includes(type) ? type : 'credit_card';
+  const numLimit = Number(creditLimit) > 0 ? Number(creditLimit) : (accType === 'credit_card' || accType === 'rupay_card' ? 100000 : undefined);
+
+  const newMeta = {
+    id: accId,
+    name: String(name || cleanShortName).trim(),
+    shortName: cleanShortName,
+    type: accType as 'rupay_card' | 'credit_card' | 'bank_account' | 'cash',
+    badge: String(badge || (accType === 'rupay_card' ? 'RuPay CC' : accType === 'credit_card' ? 'Credit Card' : 'Bank')).trim(),
+    color: String(color || '#6366f1'),
+    isUpiCapable: Boolean(isUpiCapable ?? (accType === 'rupay_card' || accType === 'bank_account')),
+    creditLimit: numLimit,
+    billingDay: Number(billingDay) > 0 ? Number(billingDay) : 15,
+    paymentDueDay: Number(paymentDueDay) > 0 ? Number(paymentDueDay) : 5,
+    isCustom: true,
+  };
+
+  const existingIdx = store.customAccounts.findIndex(a => a.id.toLowerCase() === accId.toLowerCase());
+  if (existingIdx >= 0) {
+    store.customAccounts[existingIdx] = newMeta;
+  } else {
+    store.customAccounts.push(newMeta);
+  }
+
+  if (numLimit && numLimit > 0) {
+    if (!store.cardCreditLimits) store.cardCreditLimits = {};
+    store.cardCreditLimits[accId] = numLimit;
+  }
+
+  if (openingBalance !== undefined && openingBalance !== '') {
+    const numBase = Number(openingBalance);
+    if (!isNaN(numBase) && numBase >= 0) {
+      if (!store.accountBaseBalances) store.accountBaseBalances = {};
+      if (!store.accountBalanceSetTimestamps) store.accountBalanceSetTimestamps = {};
+      store.accountBaseBalances[accId] = numBase;
+      store.accountBalanceSetTimestamps[accId] = new Date().toISOString();
+    }
+  }
+
+  saveUserData(user.id, store);
+  const updatedData = calculateAccountsBalances(user.id);
+  res.json({ success: true, account: newMeta, ...updatedData });
+});
+
+app.delete('/api/accounts/custom/:id', (req, res) => {
+  const user = getRequestUser(req);
+  const store = getUserData(user.id);
+  const targetId = decodeURIComponent(req.params.id || '');
+  if (Array.isArray(store.customAccounts)) {
+    store.customAccounts = store.customAccounts.filter(a => a.id !== targetId);
+  }
   saveUserData(user.id, store);
   const updatedData = calculateAccountsBalances(user.id);
   res.json({ success: true, ...updatedData });
@@ -9553,37 +9840,162 @@ app.delete('/api/savings-transfers/:id', (req, res) => {
 
 app.get('/api/investments', (req, res) => {
   const user = getRequestUser(req);
+  const autoResult = processInvestmentAutoDebits(user.id);
   const store = getUserData(user.id);
-  res.json({ investments: store.investments || [] });
+  res.json({
+    investments: store.investments || [],
+    autoDebitedCount: autoResult.processedCount,
+    autoDebitedItems: autoResult.processedItems,
+  });
+});
+
+app.post('/api/investments/process-auto-debits', (req, res) => {
+  const user = getRequestUser(req);
+  const autoResult = processInvestmentAutoDebits(user.id);
+  const store = getUserData(user.id);
+  res.json({
+    success: true,
+    investments: store.investments || [],
+    transactions: store.transactions || [],
+    summary: calculateUserSummary(user.id),
+    ...autoResult,
+  });
+});
+
+app.post('/api/investments/:id/pay-installment', (req, res) => {
+  const user = getRequestUser(req);
+  const store = getUserData(user.id);
+  if (!store.investments) store.investments = [];
+  const inv = store.investments.find(i => i.id === req.params.id);
+  if (!inv) {
+    return res.status(404).json({ error: 'Investment plan not found' });
+  }
+
+  const istNow = getAppDateTime();
+  const { date, account, amount } = req.body || {};
+  const payDate = date || istNow.date;
+  const payAcc = account || inv.account || 'IC Bank';
+  const payAmt = Math.abs(Number(amount) || Number(inv.monthlyAmount) || Number(inv.amount) || 0);
+  if (payAmt <= 0) {
+    return res.status(400).json({ error: 'Valid installment amount is required' });
+  }
+
+  const nowIso = new Date().toISOString();
+  const txId = `tx_inst_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+  const insuranceCat = (store.categories || []).find(c => c.name.toLowerCase().includes('insurance'))?.name;
+  const txCategory = inv.type === 'Insurance'
+    ? (insuranceCat || 'Bills & Utilities')
+    : 'Investments & Savings';
+
+  const debitTx: Transaction = {
+    id: txId,
+    userId: user.id,
+    type: 'expense',
+    amount: payAmt,
+    category: txCategory,
+    description: `${inv.type} Kisht Paid: ${inv.name}`,
+    date: payDate,
+    time: istNow.time,
+    paymentMethod: payAcc === 'Cash' ? 'Cash' : 'Bank Transfer',
+    account: payAcc,
+    source: 'wealth',
+    createdAt: nowIso,
+    tags: ['installment', inv.type.toLowerCase(), inv.id],
+    isInvestment: true,
+  };
+
+  if (!store.transactions) store.transactions = [];
+  store.transactions.unshift(debitTx);
+
+  inv.paidInstallments = (Number(inv.paidInstallments) || 0) + 1;
+  const freq = inv.installmentFrequency || 'monthly';
+  inv.lastAutoDebitMonth = freq === 'yearly' ? payDate.substring(0, 4) : payDate.substring(0, 7);
+  if (!inv.autoDebitHistory) inv.autoDebitHistory = [];
+  inv.autoDebitHistory.unshift({
+    id: `ad_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
+    date: payDate,
+    monthKey: inv.lastAutoDebitMonth,
+    amount: payAmt,
+    account: payAcc,
+    linkedTxId: txId,
+    createdAt: nowIso,
+  });
+
+  saveUserData(user.id, store);
+  res.json({
+    success: true,
+    investment: inv,
+    investments: store.investments,
+    transactions: store.transactions,
+    summary: calculateUserSummary(user.id),
+  });
 });
 
 app.post('/api/investments', (req, res) => {
   const user = getRequestUser(req);
   const store = getUserData(user.id);
   if (!store.investments) store.investments = [];
-  const { type, name, amount, account, date, maturityDate, interestRate, notes, monthlyAmount, paidInstallments, totalInstallments, currentValue, maturityAmount } = req.body;
+  const {
+    type,
+    name,
+    amount,
+    account,
+    date,
+    maturityDate,
+    interestRate,
+    notes,
+    monthlyAmount,
+    paidInstallments,
+    totalInstallments,
+    installmentFrequency,
+    currentValue,
+    maturityAmount,
+    autoDebitEnabled,
+    autoDebitDay,
+    markCurrentCyclePaid,
+  } = req.body;
   const numAmt = Math.abs(Number(amount)) || Math.abs(Number(monthlyAmount)) || 0;
+  const invType = type || 'RD';
+  const freq = installmentFrequency || 'monthly';
+  const istNow = getAppDateTime();
+  const currentCycleKey = freq === 'yearly' ? istNow.date.substring(0, 4) : istNow.date.substring(0, 7);
+
   const newInv: InvestmentRecord = {
     id: `inv_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
     userId: user.id,
-    type: type || 'RD',
+    type: invType,
     name: (name || 'Investment Plan').trim(),
     amount: numAmt,
-    monthlyAmount: monthlyAmount !== undefined ? Number(monthlyAmount) : (type === 'RD' ? numAmt : undefined),
+    monthlyAmount: monthlyAmount !== undefined ? Number(monthlyAmount) : ((invType === 'RD' || invType === 'Mutual Fund' || invType === 'Insurance') ? numAmt : undefined),
     paidInstallments: paidInstallments !== undefined ? Number(paidInstallments) : undefined,
     totalInstallments: totalInstallments !== undefined ? Number(totalInstallments) : undefined,
+    installmentFrequency: freq,
     account: account || 'IC Bank',
-    date: date || getAppDateTime().date,
+    date: date || istNow.date,
     maturityDate: maturityDate || undefined,
     interestRate: Number(interestRate) || undefined,
     currentValue: currentValue !== undefined ? Number(currentValue) : undefined,
     maturityAmount: maturityAmount !== undefined ? Number(maturityAmount) : undefined,
+    autoDebitEnabled: Boolean(autoDebitEnabled),
+    autoDebitDay: autoDebitDay !== undefined && autoDebitDay !== '' ? Math.min(31, Math.max(1, Number(autoDebitDay))) : undefined,
+    lastAutoDebitMonth: (Boolean(autoDebitEnabled) && markCurrentCyclePaid) ? currentCycleKey : undefined,
+    autoDebitHistory: [],
     notes: notes || '',
     createdAt: new Date().toISOString(),
   };
   store.investments.unshift(newInv);
   saveUserData(user.id, store);
-  res.json({ success: true, investment: newInv, investments: store.investments, summary: calculateUserSummary(user.id) });
+
+  if (newInv.autoDebitEnabled) {
+    processInvestmentAutoDebits(user.id);
+  }
+  const refreshedStore = getUserData(user.id);
+  res.json({
+    success: true,
+    investment: refreshedStore.investments?.find(i => i.id === newInv.id) || newInv,
+    investments: refreshedStore.investments || [],
+    summary: calculateUserSummary(user.id),
+  });
 });
 
 app.put('/api/investments/:id', (req, res) => {
@@ -9595,8 +10007,37 @@ app.put('/api/investments/:id', (req, res) => {
     return res.status(404).json({ error: 'Investment not found' });
   }
   const current = store.investments[idx];
-  const { type, name, amount, account, date, maturityDate, interestRate, notes, monthlyAmount, paidInstallments, totalInstallments, currentValue, maturityAmount } = req.body;
+  const {
+    type,
+    name,
+    amount,
+    account,
+    date,
+    maturityDate,
+    interestRate,
+    notes,
+    monthlyAmount,
+    paidInstallments,
+    totalInstallments,
+    installmentFrequency,
+    currentValue,
+    maturityAmount,
+    autoDebitEnabled,
+    autoDebitDay,
+    markCurrentCyclePaid,
+  } = req.body;
   const numAmt = amount !== undefined ? Math.abs(Number(amount)) : current.amount;
+  const freq = installmentFrequency || current.installmentFrequency || 'monthly';
+  const istNow = getAppDateTime();
+  const currentCycleKey = freq === 'yearly' ? istNow.date.substring(0, 4) : istNow.date.substring(0, 7);
+
+  let nextLastMonth = current.lastAutoDebitMonth;
+  if (markCurrentCyclePaid === true) {
+    nextLastMonth = currentCycleKey;
+  } else if (markCurrentCyclePaid === false && current.lastAutoDebitMonth === currentCycleKey && !(current.autoDebitHistory || []).some(h => h.monthKey === currentCycleKey)) {
+    nextLastMonth = undefined;
+  }
+
   store.investments[idx] = {
     ...current,
     type: type || current.type,
@@ -9605,16 +10046,30 @@ app.put('/api/investments/:id', (req, res) => {
     monthlyAmount: monthlyAmount !== undefined ? Number(monthlyAmount) : current.monthlyAmount,
     paidInstallments: paidInstallments !== undefined ? Number(paidInstallments) : current.paidInstallments,
     totalInstallments: totalInstallments !== undefined ? Number(totalInstallments) : current.totalInstallments,
+    installmentFrequency: freq,
     account: account || current.account,
     date: date || current.date,
     maturityDate: maturityDate !== undefined ? maturityDate : current.maturityDate,
     interestRate: interestRate !== undefined ? (interestRate === '' ? undefined : Number(interestRate)) : current.interestRate,
     currentValue: currentValue !== undefined ? Number(currentValue) : current.currentValue,
     maturityAmount: maturityAmount !== undefined ? Number(maturityAmount) : current.maturityAmount,
+    autoDebitEnabled: autoDebitEnabled !== undefined ? Boolean(autoDebitEnabled) : current.autoDebitEnabled,
+    autoDebitDay: autoDebitDay !== undefined ? (autoDebitDay === '' ? undefined : Math.min(31, Math.max(1, Number(autoDebitDay)))) : current.autoDebitDay,
+    lastAutoDebitMonth: nextLastMonth,
     notes: notes !== undefined ? notes : current.notes,
   };
   saveUserData(user.id, store);
-  res.json({ success: true, investment: store.investments[idx], investments: store.investments, summary: calculateUserSummary(user.id) });
+
+  if (store.investments[idx].autoDebitEnabled) {
+    processInvestmentAutoDebits(user.id);
+  }
+  const refreshedStore = getUserData(user.id);
+  res.json({
+    success: true,
+    investment: refreshedStore.investments?.find(i => i.id === req.params.id) || store.investments[idx],
+    investments: refreshedStore.investments || [],
+    summary: calculateUserSummary(user.id),
+  });
 });
 
 app.delete('/api/investments/:id', (req, res) => {
@@ -12907,6 +13362,125 @@ app.post('/api/udhaar', (req, res) => {
   res.json({ success: true, udhaar: newRecord, udhaars: store.udhaars, transactions: store.transactions, summary: calculateUserSummary(user.id) });
 });
 
+app.post('/api/udhaar/:id/settle', (req, res) => {
+  const user = getRequestUser(req);
+  if (!user) return res.status(401).json({ error: 'User session required' });
+  const store = getUserData(user.id);
+  const { id } = req.params;
+  const { amountSettled, settleAccount, settleDate, notes, recordAccountTx = true } = req.body || {};
+
+  if (!store.udhaars) store.udhaars = [];
+  const itemIndex = store.udhaars.findIndex(u => u.id === id);
+  if (itemIndex === -1) {
+    return res.status(404).json({ error: 'Udhaar record not found' });
+  }
+
+  const existing = store.udhaars[itemIndex];
+  const alreadySettled = Math.max(0, Number(existing.settledAmount) || 0);
+  const remainingBefore = Math.max(0, (Number(existing.amount) || 0) - alreadySettled);
+
+  if (remainingBefore <= 0) {
+    existing.status = 'settled';
+    saveUserData(user.id, store);
+    return res.json({ success: true, udhaar: existing, udhaars: store.udhaars, transactions: store.transactions, summary: calculateUserSummary(user.id) });
+  }
+
+  const requestedAmt = amountSettled !== undefined && amountSettled !== null && amountSettled !== ''
+    ? Math.max(0, Number(amountSettled) || 0)
+    : remainingBefore;
+  const nowSettled = Math.min(remainingBefore, requestedAmt);
+
+  if (nowSettled <= 0) {
+    return res.status(400).json({ error: 'Valid settlement amount is required' });
+  }
+
+  const chosenAcc = String(settleAccount || existing.account || 'AX Bank').trim();
+  const istNow = getAppDateTime();
+  const txDate = settleDate || istNow.date;
+  const nowIso = new Date().toISOString();
+
+  const newSettledTotal = Math.round((alreadySettled + nowSettled) * 100) / 100;
+  existing.settledAmount = newSettledTotal;
+  existing.settledInAccount = chosenAcc;
+  const isFullySettled = newSettledTotal >= existing.amount - 0.01;
+  existing.status = isFullySettled ? 'settled' : 'partial';
+  if (isFullySettled) {
+    existing.settledAt = nowIso;
+  }
+
+  let linkedTxId: string | undefined;
+  if (recordAccountTx !== false) {
+    linkedTxId = `tx_us_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+    const isCc = /\bcc\b|credit card|2005|0000|5733|6526|8210|5376/i.test(chosenAcc);
+    const payMethod: PaymentMethod = chosenAcc === 'Cash' ? 'Cash' : isCc ? 'Card' : 'Bank Transfer';
+
+    if (existing.type === 'lent') {
+      const recoveryTx: Transaction = {
+        id: linkedTxId,
+        userId: user.id,
+        type: 'income',
+        amount: nowSettled,
+        category: 'Udhaar Recovery',
+        description: `Udhaar wapas mila: ${existing.personName}${notes ? ` (${notes})` : isFullySettled ? '' : ' (Partial)'}`,
+        date: txDate,
+        time: istNow.time,
+        paymentMethod: payMethod,
+        account: chosenAcc,
+        source: 'manual',
+        createdAt: nowIso,
+        tags: ['udhaar', 'settled', existing.personName.toLowerCase()],
+        isUdhaarRecovery: true,
+        linkedUdhaarId: existing.id,
+        udhaarPersonName: existing.personName,
+      };
+      if (!store.transactions) store.transactions = [];
+      store.transactions.unshift(recoveryTx);
+    } else {
+      // 'borrowed' settled -> money paid out from chosen bank/cash account
+      const repayTx: Transaction = {
+        id: linkedTxId,
+        userId: user.id,
+        type: 'expense',
+        amount: nowSettled,
+        category: 'Udhaar Repaid',
+        description: `Udhaar chukaya: ${existing.personName}${notes ? ` (${notes})` : isFullySettled ? '' : ' (Partial)'}`,
+        date: txDate,
+        time: istNow.time,
+        paymentMethod: payMethod,
+        account: chosenAcc,
+        source: 'manual',
+        createdAt: nowIso,
+        tags: ['udhaar', 'udhaar-repaid', existing.personName.toLowerCase()],
+        isUdhaarRepaid: true,
+        linkedUdhaarId: existing.id,
+        udhaarPersonName: existing.personName,
+      };
+      if (!store.transactions) store.transactions = [];
+      store.transactions.unshift(repayTx);
+    }
+  }
+
+  if (!existing.settlementHistory) existing.settlementHistory = [];
+  existing.settlementHistory.unshift({
+    id: `us_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
+    amount: nowSettled,
+    account: chosenAcc,
+    date: txDate,
+    notes: notes ? String(notes).trim() : undefined,
+    linkedTxId,
+    createdAt: nowIso,
+  });
+
+  saveUserData(user.id, store);
+  res.json({
+    success: true,
+    udhaar: existing,
+    udhaars: store.udhaars,
+    transactions: store.transactions,
+    summary: calculateUserSummary(user.id),
+  });
+});
+
 app.put('/api/udhaar/:id', (req, res) => {
   const user = getRequestUser(req);
   if (!user) return res.status(401).json({ error: 'User session required' });
@@ -12922,45 +13496,89 @@ app.put('/api/udhaar/:id', (req, res) => {
 
   const existing = store.udhaars[itemIndex];
   if (updates.status === 'settled' && existing.status !== 'settled') {
-    existing.status = 'settled';
-    existing.settledAt = new Date().toISOString();
+    const alreadySettled = Math.max(0, Number(existing.settledAmount) || 0);
+    const remainingBefore = Math.max(0, (Number(existing.amount) || 0) - alreadySettled);
+    const amountNow = updates.amountSettled !== undefined ? Math.min(remainingBefore, Math.max(0, Number(updates.amountSettled) || 0)) : remainingBefore;
+    const settleAcc = String(updates.settleAccount || updates.account || existing.account || 'AX Bank');
+    const istNow = getAppDateTime();
+    const txDate = updates.settleDate || istNow.date;
+    const nowIso = new Date().toISOString();
 
-    // If lent money was settled (Wapas mil gaya):
-    // Credit Bank/Cash account without inflating personal salary income!
-    if (existing.type === 'lent') {
-      const settleAcc = updates.account || existing.account || 'AX Bank';
-      const recoveryTx: Transaction = {
-        id: `tx_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
-        userId: user.id,
-        type: 'income',
-        amount: existing.amount,
-        category: 'Udhaar Recovery',
-        description: `Udhaar wapas mila: ${existing.personName}`,
-        date: getAppDateTime().date,
-        time: getAppDateTime().time,
-        paymentMethod: (settleAcc && settleAcc.includes('CC')) ? 'Bank Transfer' : (settleAcc === 'Cash' ? 'Cash' : 'Bank Transfer'),
+    existing.settledAmount = alreadySettled + amountNow;
+    existing.settledInAccount = settleAcc;
+    existing.status = existing.settledAmount >= existing.amount - 0.01 ? 'settled' : 'partial';
+    if (existing.status === 'settled') existing.settledAt = nowIso;
+
+    if (amountNow > 0) {
+      const txId = `tx_us_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+      if (existing.type === 'lent') {
+        const recoveryTx: Transaction = {
+          id: txId,
+          userId: user.id,
+          type: 'income',
+          amount: amountNow,
+          category: 'Udhaar Recovery',
+          description: `Udhaar wapas mila: ${existing.personName}`,
+          date: txDate,
+          time: istNow.time,
+          paymentMethod: settleAcc === 'Cash' ? 'Cash' : 'Bank Transfer',
+          account: settleAcc,
+          source: 'manual',
+          createdAt: nowIso,
+          tags: ['udhaar', 'settled', existing.personName.toLowerCase()],
+          isUdhaarRecovery: true,
+          linkedUdhaarId: existing.id,
+          udhaarPersonName: existing.personName,
+        };
+        if (!store.transactions) store.transactions = [];
+        store.transactions.unshift(recoveryTx);
+      } else {
+        const repayTx: Transaction = {
+          id: txId,
+          userId: user.id,
+          type: 'expense',
+          amount: amountNow,
+          category: 'Udhaar Repaid',
+          description: `Udhaar chukaya: ${existing.personName}`,
+          date: txDate,
+          time: istNow.time,
+          paymentMethod: settleAcc === 'Cash' ? 'Cash' : 'Bank Transfer',
+          account: settleAcc,
+          source: 'manual',
+          createdAt: nowIso,
+          tags: ['udhaar', 'udhaar-repaid', existing.personName.toLowerCase()],
+          isUdhaarRepaid: true,
+          linkedUdhaarId: existing.id,
+          udhaarPersonName: existing.personName,
+        };
+        if (!store.transactions) store.transactions = [];
+        store.transactions.unshift(repayTx);
+      }
+      if (!existing.settlementHistory) existing.settlementHistory = [];
+      existing.settlementHistory.unshift({
+        id: `us_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
+        amount: amountNow,
         account: settleAcc,
-        source: 'manual',
-        createdAt: existing.settledAt,
-        tags: ['udhaar', 'settled', existing.personName.toLowerCase()],
-        isUdhaarRecovery: true,
-        linkedUdhaarId: existing.id,
-        udhaarPersonName: existing.personName,
-      };
-      if (!store.transactions) store.transactions = [];
-      store.transactions.unshift(recoveryTx);
+        date: txDate,
+        linkedTxId: txId,
+        createdAt: nowIso,
+      });
     }
   } else if (updates.status === 'pending') {
     existing.status = 'pending';
+    existing.settledAmount = 0;
+    existing.settledInAccount = undefined;
+    existing.settlementHistory = [];
     existing.settledAt = undefined;
-    // Remove any recovery transaction if reopened
+    // Remove any recovery or repayment transactions if reopened
     if (store.transactions) {
-      store.transactions = store.transactions.filter(t => !(t.linkedUdhaarId === existing.id && t.isUdhaarRecovery));
+      store.transactions = store.transactions.filter(t => !(t.linkedUdhaarId === existing.id && (t.isUdhaarRecovery || t.isUdhaarRepaid)));
     }
   }
 
   if (updates.personName) existing.personName = String(updates.personName).trim();
   if (updates.amount) existing.amount = Math.abs(Number(updates.amount));
+  if (updates.type === 'lent' || updates.type === 'borrowed') existing.type = updates.type;
   if (updates.description !== undefined) existing.description = updates.description;
   if (updates.date) existing.date = updates.date;
   if (updates.account !== undefined) existing.account = updates.account;
@@ -13317,6 +13935,29 @@ async function startServer() {
 
   // Start Telegram Direct Polling Worker after database hydration
   startTelegramPollingWorker();
+
+  // Start Investment / RD / Insurance Auto-Debit Scheduler (startup + hourly)
+  setTimeout(() => {
+    try {
+      const res = processInvestmentAutoDebits();
+      if (res.processedCount > 0) {
+        console.log(`🤖 [AutoDebit Startup] Processed ${res.processedCount} scheduled auto-debit(s).`);
+      }
+    } catch (err) {
+      console.error('AutoDebit startup check failed:', err);
+    }
+  }, 10000);
+
+  setInterval(() => {
+    try {
+      const res = processInvestmentAutoDebits();
+      if (res.processedCount > 0) {
+        console.log(`🤖 [AutoDebit Hourly] Processed ${res.processedCount} scheduled auto-debit(s).`);
+      }
+    } catch (err) {
+      console.error('AutoDebit hourly check failed:', err);
+    }
+  }, 60 * 60 * 1000);
 
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({

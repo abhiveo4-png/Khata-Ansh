@@ -23,7 +23,12 @@ export function calculateInvestmentMetrics(
   asOfDateStr?: string
 ): InvestmentMetrics {
   const type = inv.type || 'RD';
-  const isRecurring = type === 'RD' || type === 'Mutual Fund' || (inv.monthlyAmount !== undefined && inv.monthlyAmount > 0);
+  const isRecurring =
+    type === 'RD' ||
+    type === 'Mutual Fund' ||
+    type === 'Insurance' ||
+    (inv.monthlyAmount !== undefined && inv.monthlyAmount > 0) ||
+    Boolean(inv.autoDebitEnabled);
   const rate = Number(inv.interestRate) || 0;
   const rawAmt = Number(inv.monthlyAmount) || Number(inv.amount) || 0;
   const startDateStr = inv.date || new Date().toISOString().split('T')[0];
@@ -33,7 +38,7 @@ export function calculateInvestmentMetrics(
   if (isRecurring) {
     const monthlyAmt = rawAmt;
 
-    // 1. Calculate Total Tenure (Months)
+    // 1. Calculate Total Tenure (Installments / Months)
     let totalMonths = Number(inv.totalInstallments) || 0;
     if (!totalMonths && inv.maturityDate && inv.date) {
       const matDate = new Date(inv.maturityDate);
@@ -46,7 +51,7 @@ export function calculateInvestmentMetrics(
 
     // 2. Calculate Paid Installments till date
     let paidCount = Number(inv.paidInstallments);
-    if (paidCount === undefined || isNaN(paidCount) || paidCount <= 0) {
+    if (inv.paidInstallments === undefined || isNaN(paidCount) || paidCount < 0) {
       // Auto-compute months elapsed from startDate to asOfDate
       const startY = startDate.getFullYear();
       const startM = startDate.getMonth();
@@ -57,7 +62,6 @@ export function calculateInvestmentMetrics(
       const curD = asOfDate.getDate();
 
       let monthsElapsed = (curY - startY) * 12 + (curM - startM);
-      // If current day is >= installment due day, count this month's installment as paid
       if (curD >= startD) {
         monthsElapsed += 1;
       }
@@ -67,33 +71,35 @@ export function calculateInvestmentMetrics(
     const depositedPrincipal = paidCount * monthlyAmt;
 
     // 3. Accrued Interest (Quarterly Compounded Indian Banking Standard for RD)
-    // Formula: Each installment i has been earning interest for (paidCount - i + 1) months
     let accruedInterest = 0;
     if (rate > 0) {
+      const freqMultiplier = inv.installmentFrequency === 'yearly' ? 12 : inv.installmentFrequency === 'quarterly' ? 3 : 1;
       const quarterlyRate = (rate / 100) / 4;
       for (let i = 1; i <= paidCount; i++) {
-        const monthsHeld = paidCount - i + 1;
-        // Compounding factor for monthsHeld: (1 + r/4)^(monthsHeld / 3) - 1
+        const monthsHeld = (paidCount - i + 1) * freqMultiplier;
         const compFactor = Math.pow(1 + quarterlyRate, monthsHeld / 3) - 1;
         accruedInterest += monthlyAmt * compFactor;
       }
     }
     accruedInterest = Math.round(accruedInterest);
-    const currentValue = depositedPrincipal + accruedInterest;
+    const currentValue = (inv.currentValue !== undefined && Number(inv.currentValue) > 0)
+      ? Number(inv.currentValue)
+      : (depositedPrincipal + accruedInterest);
 
     // 4. Maturity Projection at end of tenure
     const maturityPrincipal = totalMonths * monthlyAmt;
     let maturityInterest = 0;
     if (rate > 0) {
+      const freqMultiplier = inv.installmentFrequency === 'yearly' ? 12 : inv.installmentFrequency === 'quarterly' ? 3 : 1;
       const quarterlyRate = (rate / 100) / 4;
       for (let i = 1; i <= totalMonths; i++) {
-        const monthsHeld = totalMonths - i + 1;
+        const monthsHeld = (totalMonths - i + 1) * freqMultiplier;
         const compFactor = Math.pow(1 + quarterlyRate, monthsHeld / 3) - 1;
         maturityInterest += monthlyAmt * compFactor;
       }
     }
     maturityInterest = Math.round(maturityInterest);
-    const maturityAmount = maturityPrincipal + maturityInterest;
+    const maturityAmount = Number(inv.maturityAmount) || (maturityPrincipal + maturityInterest);
     const progressPercent = Math.min(100, Math.round((paidCount / totalMonths) * 100));
 
     return {

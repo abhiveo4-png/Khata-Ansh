@@ -15,10 +15,19 @@ import {
   ChevronUp,
   Edit3,
   Pencil,
-  Layers
+  Layers,
+  RotateCcw,
+  Wallet
 } from 'lucide-react';
 import { UdhaarRecord, AccountId } from '../types';
-import { ALL_ACCOUNTS, ACCOUNTS_CONFIG } from '../utils/accounts';
+import { ALL_ACCOUNTS } from '../utils/accounts';
+
+export interface UdhaarSettlePayload {
+  amountSettled?: number;
+  settleAccount?: AccountId | string;
+  settleDate?: string;
+  notes?: string;
+}
 
 interface UdhaarKhataViewProps {
   records?: UdhaarRecord[];
@@ -26,8 +35,8 @@ interface UdhaarKhataViewProps {
   isPrivacyMode?: boolean;
   onAddRecord?: (record: Omit<UdhaarRecord, 'id' | 'createdAt'>) => Promise<void>;
   onAddUdhaar?: (record: Omit<UdhaarRecord, 'id' | 'createdAt'>) => Promise<void>;
-  onSettleRecord?: (id: string) => Promise<void>;
-  onSettleUdhaar?: (id: string) => Promise<void>;
+  onSettleRecord?: (id: string, payload?: UdhaarSettlePayload) => Promise<void>;
+  onSettleUdhaar?: (id: string, payload?: UdhaarSettlePayload) => Promise<void>;
   onDeleteRecord?: (id: string) => Promise<void>;
   onDeleteUdhaar?: (id: string) => Promise<void>;
   onUpdateRecord?: (id: string, updates: Partial<UdhaarRecord>) => Promise<void>;
@@ -73,6 +82,14 @@ export const UdhaarKhataView: React.FC<UdhaarKhataViewProps> = ({
   const [editAccount, setEditAccount] = useState<AccountId>('Cash');
   const [isSavingRecord, setIsSavingRecord] = useState(false);
 
+  // Settlement Modal State (Partial or Full + Choose Bank/Cash/Card Account)
+  const [settlingRecord, setSettlingRecord] = useState<UdhaarRecord | null>(null);
+  const [settleAmountInput, setSettleAmountInput] = useState('');
+  const [settleAccountInput, setSettleAccountInput] = useState<string>('AX Bank');
+  const [settleDateInput, setSettleDateInput] = useState(() => new Date().toISOString().split('T')[0]);
+  const [settleNotesInput, setSettleNotesInput] = useState('');
+  const [isSettlingRecord, setIsSettlingRecord] = useState(false);
+
   // Form State
   const [personName, setPersonName] = useState('');
   const [amount, setAmount] = useState('');
@@ -82,14 +99,19 @@ export const UdhaarKhataView: React.FC<UdhaarKhataViewProps> = ({
   const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // Calculations
+  const getRemainingAmount = (r: UdhaarRecord): number => {
+    if (!r || r.status === 'settled') return 0;
+    return Math.max(0, (Number(r.amount) || 0) - (Number(r.settledAmount) || 0));
+  };
+
+  // Calculations (using Remaining Amount after partial settlements)
   const pendingLent = safeRecords
     .filter((r) => r && r.type === 'lent' && r.status !== 'settled')
-    .reduce((sum, r) => sum + (Number(r.amount) || 0), 0);
+    .reduce((sum, r) => sum + getRemainingAmount(r), 0);
 
   const pendingBorrowed = safeRecords
     .filter((r) => r && r.type === 'borrowed' && r.status !== 'settled')
-    .reduce((sum, r) => sum + (Number(r.amount) || 0), 0);
+    .reduce((sum, r) => sum + getRemainingAmount(r), 0);
 
   const netBalance = pendingLent - pendingBorrowed;
 
@@ -133,13 +155,13 @@ export const UdhaarKhataView: React.FC<UdhaarKhataViewProps> = ({
           pendingCount: 0,
         };
       }
-      const amt = Number(r.amount) || 0;
+      const remAmt = getRemainingAmount(r);
       if (r.status !== 'settled') {
         map[key].pendingCount++;
         if (r.type === 'lent') {
-          map[key].totalLent += amt;
+          map[key].totalLent += remAmt;
         } else {
-          map[key].totalBorrowed += amt;
+          map[key].totalBorrowed += remAmt;
         }
       }
       map[key].netDue = map[key].totalLent - map[key].totalBorrowed;
@@ -153,6 +175,46 @@ export const UdhaarKhataView: React.FC<UdhaarKhataViewProps> = ({
 
   const togglePersonExpand = (key: string) => {
     setExpandedPeople(prev => ({ ...prev, [key]: !prev[key] }));
+  };
+
+  const handleOpenSettleModal = (item: UdhaarRecord) => {
+    const rem = getRemainingAmount(item);
+    setSettlingRecord(item);
+    setSettleAmountInput(String(rem || item.amount));
+    const preferredAcc = item.account && ALL_ACCOUNTS.some(a => a.id === item.account && (a.type === 'bank_account' || a.type === 'cash'))
+      ? item.account
+      : 'AX Bank';
+    setSettleAccountInput(preferredAcc);
+    setSettleDateInput(new Date().toISOString().split('T')[0]);
+    setSettleNotesInput('');
+  };
+
+  const handleConfirmSettle = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!settlingRecord || !handleSettle) return;
+    const rem = getRemainingAmount(settlingRecord);
+    const parsedAmt = parseFloat(settleAmountInput);
+    if (isNaN(parsedAmt) || parsedAmt <= 0) return;
+
+    setIsSettlingRecord(true);
+    try {
+      await handleSettle(settlingRecord.id, {
+        amountSettled: Math.min(rem, parsedAmt),
+        settleAccount: settleAccountInput || 'AX Bank',
+        settleDate: settleDateInput || new Date().toISOString().split('T')[0],
+        notes: settleNotesInput.trim() || undefined,
+      });
+      setSettlingRecord(null);
+    } catch (err) {
+      console.error('Error settling udhaar:', err);
+    } finally {
+      setIsSettlingRecord(false);
+    }
+  };
+
+  const handleReopenRecord = async (item: UdhaarRecord) => {
+    if (!handleUpdate) return;
+    await handleUpdate(item.id, { status: 'pending' });
   };
 
   const handleOpenEditRecord = (item: UdhaarRecord) => {
@@ -238,10 +300,13 @@ export const UdhaarKhataView: React.FC<UdhaarKhataViewProps> = ({
     if (sorted.length > 0) {
       detailsList = sorted
         .map((e) => {
-          const amtStr = `₹${(Number(e.amount) || 0).toLocaleString('en-IN')}`;
+          const rem = getRemainingAmount(e);
+          const settledAmt = Number(e.settledAmount) || 0;
+          const amtStr = `₹${rem.toLocaleString('en-IN')}`;
+          const partialNote = settledAmt > 0 ? ` (Kul ₹${(Number(e.amount) || 0).toLocaleString('en-IN')} me ₹${settledAmt.toLocaleString('en-IN')} mila)` : '';
           const descStr = e.description ? ` (${e.description})` : '';
           const typeNote = e.type === 'borrowed' ? ' [Liya/Adjust]' : '';
-          return `• ${e.date || 'N/A'}: ${amtStr}${descStr}${typeNote}`;
+          return `• ${e.date || 'N/A'}: ${amtStr}${partialNote}${descStr}${typeNote}`;
         })
         .join('\n');
     } else {
@@ -257,7 +322,8 @@ export const UdhaarKhataView: React.FC<UdhaarKhataViewProps> = ({
   };
 
   const handleShareWhatsAppSingle = (record: UdhaarRecord) => {
-    const amtStr = `₹${(Number(record.amount) || 0).toLocaleString('en-IN')}`;
+    const rem = record.status === 'settled' ? (Number(record.amount) || 0) : getRemainingAmount(record);
+    const amtStr = `₹${rem.toLocaleString('en-IN')}`;
     const descStr = record.description ? ` (${record.description})` : '';
     const dateStr = record.date || 'N/A';
 
@@ -568,92 +634,135 @@ export const UdhaarKhataView: React.FC<UdhaarKhataViewProps> = ({
                     {group.entries.map((item) => {
                       const itemIsLent = item.type === 'lent';
                       const itemIsSettled = item.status === 'settled';
+                      const settledAmt = Math.max(0, Number(item.settledAmount) || 0);
+                      const remainingAmt = getRemainingAmount(item);
+                      const isPartial = !itemIsSettled && settledAmt > 0;
+                      const pctSettled = item.amount > 0 ? Math.min(100, Math.round((settledAmt / item.amount) * 100)) : 0;
 
                       return (
                         <div
                           key={item.id}
-                          className={`rounded-xl p-3 border transition-all flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2.5 ${
+                          className={`rounded-xl p-3 border transition-all flex flex-col gap-2 ${
                             itemIsSettled
-                              ? 'bg-slate-900/30 border-slate-800/60 opacity-60'
+                              ? 'bg-slate-900/30 border-slate-800/60 opacity-70'
                               : itemIsLent
                               ? 'bg-[#0c192c] border-emerald-500/20'
                               : 'bg-[#22101e] border-rose-500/20'
                           }`}
                         >
-                          <div className="flex items-center space-x-3">
-                            <div className="text-left">
-                              <div className="flex items-center space-x-2">
-                                <span className={`text-xs font-bold font-mono ${itemIsSettled ? 'text-slate-400 line-through' : itemIsLent ? 'text-emerald-400' : 'text-rose-400'}`}>
-                                  {itemIsLent ? '+ ' : '- '}{formatAmount(item.amount)}
-                                </span>
-                                <span className={`text-[10px] px-1.5 py-0.2 rounded font-medium ${itemIsLent ? 'bg-emerald-950 text-emerald-300' : 'bg-rose-950 text-rose-300'}`}>
-                                  {itemIsLent ? 'Diya Tha' : 'Liya Tha'}
-                                </span>
-                                {itemIsSettled && (
-                                  <span className="text-[10px] px-1.5 py-0.2 rounded bg-slate-800 text-slate-400">
-                                    Settled
+                          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2.5">
+                            <div className="flex items-center space-x-3">
+                              <div className="text-left">
+                                <div className="flex items-center flex-wrap gap-1.5">
+                                  <span className={`text-xs font-bold font-mono ${itemIsSettled ? 'text-slate-400 line-through' : itemIsLent ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                    {itemIsLent ? '+ ' : '- '}{formatAmount(isPartial ? remainingAmt : item.amount)}
                                   </span>
-                                )}
+                                  {isPartial && (
+                                    <span className="text-[10px] font-mono text-slate-400">
+                                      (Kul {formatAmount(item.amount)})
+                                    </span>
+                                  )}
+                                  <span className={`text-[10px] px-1.5 py-0.2 rounded font-medium ${itemIsLent ? 'bg-emerald-950 text-emerald-300' : 'bg-rose-950 text-rose-300'}`}>
+                                    {itemIsLent ? 'Diya Tha' : 'Liya Tha'}
+                                  </span>
+                                  {isPartial && (
+                                    <span className="text-[10px] px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 font-semibold">
+                                      Partial: {formatAmount(settledAmt)} {itemIsLent ? 'Mila' : 'Chukaya'}
+                                    </span>
+                                  )}
+                                  {itemIsSettled && (
+                                    <span className="text-[10px] px-1.5 py-0.2 rounded bg-slate-800 text-slate-300">
+                                      Settled {item.settledInAccount ? `(${item.settledInAccount})` : ''}
+                                    </span>
+                                  )}
+                                </div>
+                                <p className="text-[11px] text-slate-400 flex flex-wrap items-center gap-1.5 mt-1">
+                                  <Calendar className="w-3 h-3 text-indigo-400" />
+                                  <span className="font-medium text-slate-300">{item.date}</span>
+                                  {item.time && <span>• {item.time}</span>}
+                                  {item.account && (
+                                    <span className="text-[10px] px-1.5 py-0.5 rounded font-mono font-medium bg-slate-800/90 text-indigo-300 border border-indigo-500/20">
+                                      💳 {item.account}
+                                    </span>
+                                  )}
+                                  {item.description && <span className="text-slate-400 italic">({item.description})</span>}
+                                </p>
                               </div>
-                              <p className="text-[11px] text-slate-400 flex flex-wrap items-center gap-1.5 mt-1">
-                                <Calendar className="w-3 h-3 text-indigo-400" />
-                                <span className="font-medium text-slate-300">{item.date}</span>
-                                {item.time && <span>• {item.time}</span>}
-                                {item.account && (
-                                  <span className="text-[10px] px-1.5 py-0.5 rounded font-mono font-medium bg-slate-800/90 text-indigo-300 border border-indigo-500/20">
-                                    💳 {item.account}
-                                  </span>
-                                )}
-                                {item.description && <span className="text-slate-400 italic">({item.description})</span>}
-                              </p>
+                            </div>
+
+                            {/* Individual Entry Actions */}
+                            <div className="flex items-center flex-wrap gap-1.5 self-end sm:self-center">
+                              {!itemIsSettled && itemIsLent && (
+                                <button
+                                  onClick={() => handleShareWhatsAppSingle(item)}
+                                  className="px-2 py-1 rounded-lg bg-emerald-950/70 hover:bg-emerald-900 text-emerald-400 border border-emerald-500/30 text-[11px] font-medium flex items-center space-x-1 cursor-pointer transition-colors"
+                                  title="WhatsApp par reminder bhejein"
+                                >
+                                  <MessageCircle className="w-3 h-3" />
+                                  <span>Remind</span>
+                                </button>
+                              )}
+
+                              <button
+                                onClick={() => handleOpenEditRecord(item)}
+                                className="px-2.5 py-1 rounded-lg bg-indigo-500/15 hover:bg-indigo-500/25 text-indigo-300 border border-indigo-500/30 text-[11px] font-medium flex items-center space-x-1 cursor-pointer transition-colors shadow-sm"
+                                title="Raqam, naam ya date badlein"
+                              >
+                                <Pencil className="w-3 h-3 text-indigo-400" />
+                                <span>Edit</span>
+                              </button>
+
+                              {!itemIsSettled && handleSettle && (
+                                <button
+                                  onClick={() => handleOpenSettleModal(item)}
+                                  className="px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] font-medium flex items-center space-x-1 cursor-pointer transition-all shadow-sm active:scale-95"
+                                  title="Partial ya full amount settle karein aur account chunein"
+                                >
+                                  <CheckCircle2 className="w-3 h-3" />
+                                  <span>{isPartial ? 'Baki Settle' : 'Settle'}</span>
+                                </button>
+                              )}
+
+                              {(itemIsSettled || isPartial) && handleUpdate && (
+                                <button
+                                  onClick={() => handleReopenRecord(item)}
+                                  className="px-2 py-1 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/30 text-[11px] font-medium flex items-center space-x-1 cursor-pointer transition-colors"
+                                  title="Reset & Reopen full amount"
+                                >
+                                  <RotateCcw className="w-3 h-3" />
+                                  <span>Reopen</span>
+                                </button>
+                              )}
+
+                              {handleDelete && (
+                                <button
+                                  onClick={() => handleDelete(item.id)}
+                                  className="p-1 text-slate-500 hover:text-rose-400 rounded-lg hover:bg-rose-500/10 transition-colors cursor-pointer"
+                                  title="Delete"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              )}
                             </div>
                           </div>
 
-                          {/* Individual Entry Actions */}
-                          <div className="flex items-center space-x-2 self-end sm:self-center">
-                            {/* WhatsApp Remind Button */}
-                            {!itemIsSettled && itemIsLent && (
-                              <button
-                                onClick={() => handleShareWhatsAppSingle(item)}
-                                className="px-2 py-1 rounded-lg bg-emerald-950/70 hover:bg-emerald-900 text-emerald-400 border border-emerald-500/30 text-[11px] font-medium flex items-center space-x-1 cursor-pointer transition-colors"
-                                title="WhatsApp par reminder bhejein"
-                              >
-                                <MessageCircle className="w-3 h-3" />
-                                <span>Remind</span>
-                              </button>
-                            )}
-
-                            {/* Edit / Badlein Button */}
-                            <button
-                              onClick={() => handleOpenEditRecord(item)}
-                              className="px-2.5 py-1 rounded-lg bg-indigo-500/15 hover:bg-indigo-500/25 text-indigo-300 border border-indigo-500/30 text-[11px] font-medium flex items-center space-x-1 cursor-pointer transition-colors shadow-sm"
-                              title="Raqam, naam ya date badlein"
-                            >
-                              <Pencil className="w-3 h-3 text-indigo-400" />
-                              <span>Edit</span>
-                            </button>
-
-                            {!itemIsSettled && (
-                              <button
-                                onClick={() => handleSettle && handleSettle(item.id)}
-                                className="px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] font-medium flex items-center space-x-1 cursor-pointer transition-all shadow-sm active:scale-95"
-                                title="Settle karein"
-                              >
-                                <CheckCircle2 className="w-3 h-3" />
-                                <span>Settle</span>
-                              </button>
-                            )}
-
-                            {handleDelete && (
-                              <button
-                                onClick={() => handleDelete(item.id)}
-                                className="p-1 text-slate-500 hover:text-rose-400 rounded-lg hover:bg-rose-500/10 transition-colors cursor-pointer"
-                                title="Delete"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                              </button>
-                            )}
-                          </div>
+                          {/* Partial Settlement Progress & History */}
+                          {isPartial && (
+                            <div className="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                              <div className="h-full bg-amber-400 rounded-full transition-all" style={{ width: `${pctSettled}%` }} />
+                            </div>
+                          )}
+                          {Array.isArray(item.settlementHistory) && item.settlementHistory.length > 0 && (
+                            <div className="text-[10px] text-slate-400 bg-slate-900/60 border border-white/[0.05] rounded-lg px-2.5 py-1.5 space-y-0.5">
+                              <span className="font-semibold text-slate-300 block">Settlement History:</span>
+                              {item.settlementHistory.map((sh) => (
+                                <div key={sh.id} className="flex items-center justify-between font-mono">
+                                  <span>• {sh.date} • {sh.account}{sh.notes ? ` (${sh.notes})` : ''}</span>
+                                  <span className="text-emerald-400 font-bold">₹{(Number(sh.amount) || 0).toLocaleString('en-IN')}</span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
                         </div>
                       );
                     })}
@@ -669,6 +778,10 @@ export const UdhaarKhataView: React.FC<UdhaarKhataViewProps> = ({
           {filteredRecords.map((item) => {
             const isLent = item.type === 'lent';
             const isSettled = item.status === 'settled';
+            const settledAmt = Math.max(0, Number(item.settledAmount) || 0);
+            const remainingAmt = getRemainingAmount(item);
+            const isPartial = !isSettled && settledAmt > 0;
+            const pctSettled = item.amount > 0 ? Math.min(100, Math.round((settledAmt / item.amount) * 100)) : 0;
 
             return (
               <div
@@ -696,11 +809,16 @@ export const UdhaarKhataView: React.FC<UdhaarKhataViewProps> = ({
                         {item.personName.charAt(0).toUpperCase()}
                       </div>
                       <div>
-                        <h4 className="font-semibold text-sm text-white flex items-center gap-1.5">
+                        <h4 className="font-semibold text-sm text-white flex items-center flex-wrap gap-1.5">
                           {item.personName}
                           {isSettled && (
                             <span className="text-[10px] font-medium px-1.5 py-0.2 rounded bg-slate-800 text-slate-300">
-                              Settled
+                              Settled {item.settledInAccount ? `• ${item.settledInAccount}` : ''}
+                            </span>
+                          )}
+                          {isPartial && (
+                            <span className="text-[10px] font-semibold px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                              Partial ({pctSettled}%)
                             </span>
                           )}
                         </h4>
@@ -727,29 +845,52 @@ export const UdhaarKhataView: React.FC<UdhaarKhataViewProps> = ({
                             : 'text-rose-400'
                         }`}
                       >
-                        {isLent ? '+' : '-'} {formatAmount(item.amount)}
+                        {isLent ? '+' : '-'} {formatAmount(isPartial ? remainingAmt : item.amount)}
                       </p>
-                      <span
-                        className={`text-[10px] font-semibold uppercase tracking-wider ${
-                          isLent ? 'text-emerald-400/80' : 'text-rose-400/80'
-                        }`}
-                      >
-                        {isLent ? 'Lena Hai' : 'Dena Hai'}
-                      </span>
+                      {isPartial ? (
+                        <span className="text-[10px] text-amber-300 font-mono block">
+                          Mila: {formatAmount(settledAmt)} / {formatAmount(item.amount)}
+                        </span>
+                      ) : (
+                        <span
+                          className={`text-[10px] font-semibold uppercase tracking-wider ${
+                            isLent ? 'text-emerald-400/80' : 'text-rose-400/80'
+                          }`}
+                        >
+                          {isLent ? 'Lena Hai' : 'Dena Hai'}
+                        </span>
+                      )}
                     </div>
                   </div>
+
+                  {isPartial && (
+                    <div className="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden mt-2.5">
+                      <div className="h-full bg-amber-400 rounded-full transition-all" style={{ width: `${pctSettled}%` }} />
+                    </div>
+                  )}
 
                   {item.description && (
                     <p className="text-xs text-slate-300 mt-2.5 bg-slate-950/60 p-2 rounded-xl border border-slate-800/60">
                       📝 {item.description}
                     </p>
                   )}
+
+                  {Array.isArray(item.settlementHistory) && item.settlementHistory.length > 0 && (
+                    <div className="mt-2 text-[10px] text-slate-400 bg-slate-950/60 border border-slate-800/80 rounded-xl p-2 space-y-0.5">
+                      <span className="font-semibold text-slate-300 block">Settlement History:</span>
+                      {item.settlementHistory.map((sh) => (
+                        <div key={sh.id} className="flex items-center justify-between font-mono">
+                          <span>• {sh.date} • {sh.account}{sh.notes ? ` (${sh.notes})` : ''}</span>
+                          <span className="text-emerald-400 font-bold">₹{(Number(sh.amount) || 0).toLocaleString('en-IN')}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
 
                 {/* Actions Footer */}
                 <div className="flex items-center justify-between gap-2 mt-4 pt-3 border-t border-slate-800/80 text-xs">
-                  <div className="flex items-center space-x-2">
-                    {/* Edit / Badlein Button */}
+                  <div className="flex items-center flex-wrap gap-1.5">
                     <button
                       onClick={() => handleOpenEditRecord(item)}
                       className="px-2.5 py-1 rounded-lg bg-indigo-500/15 hover:bg-indigo-500/25 text-indigo-300 border border-indigo-500/30 flex items-center space-x-1 cursor-pointer transition-colors shadow-sm"
@@ -771,11 +912,21 @@ export const UdhaarKhataView: React.FC<UdhaarKhataViewProps> = ({
                     )}
                     {!isSettled && handleSettle && (
                       <button
-                        onClick={() => handleSettle(item.id)}
+                        onClick={() => handleOpenSettleModal(item)}
                         className="px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-medium flex items-center space-x-1 cursor-pointer transition-all active:scale-95 shadow-sm"
                       >
                         <CheckCircle2 className="w-3.5 h-3.5" />
-                        <span>{isLent ? 'Wapas Mil Gaya' : 'Chuka Diya'}</span>
+                        <span>{isPartial ? 'Baki Settle' : isLent ? 'Wapas Mil Gaya' : 'Chuka Diya'}</span>
+                      </button>
+                    )}
+                    {(isSettled || isPartial) && handleUpdate && (
+                      <button
+                        onClick={() => handleReopenRecord(item)}
+                        className="px-2 py-1 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/30 flex items-center space-x-1 cursor-pointer transition-colors text-[11px]"
+                        title="Reopen & Reset settlements"
+                      >
+                        <RotateCcw className="w-3 h-3" />
+                        <span>Reopen</span>
                       </button>
                     )}
                   </div>
@@ -1099,6 +1250,154 @@ export const UdhaarKhataView: React.FC<UdhaarKhataViewProps> = ({
                   className="px-4 py-2 rounded-xl bg-gradient-to-r from-indigo-600 to-indigo-500 hover:from-indigo-500 hover:to-indigo-400 text-white text-xs font-bold transition-all cursor-pointer shadow-md shadow-indigo-600/30 disabled:opacity-50 active:scale-95"
                 >
                   {isSubmitting ? 'Saving...' : 'Save Udhaar'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* 💰 Settle Udhaar Modal (Partial/Full Amount + Select Bank/Cash/Card Account) */}
+      {settlingRecord && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md p-4 animate-in fade-in"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setSettlingRecord(null);
+          }}
+        >
+          <div className="w-full max-w-md rounded-2xl bg-slate-950/95 border border-indigo-500/40 p-6 shadow-2xl text-slate-100 backdrop-blur-2xl">
+            <h3 className="text-base font-bold text-white flex items-center gap-2">
+              <CheckCircle2 className="w-5 h-5 text-emerald-400" />
+              <span>
+                {settlingRecord.type === 'lent' ? 'Udhaar Wapas Aaya (Settle)' : 'Udhaar Chukaya (Pay Back)'}
+              </span>
+            </h3>
+            <p className="text-xs text-slate-400 mt-1">
+              {settlingRecord.personName} • Kul ₹{(Number(settlingRecord.amount) || 0).toLocaleString('en-IN')} me se ab{' '}
+              <strong className="text-amber-300">₹{getRemainingAmount(settlingRecord).toLocaleString('en-IN')} baki</strong> hai.
+            </p>
+
+            <form onSubmit={handleConfirmSettle} className="mt-4 space-y-4">
+              {/* Amount to Settle + Quick Percentage Chips */}
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-xs font-medium text-slate-300">
+                    Kitni Raqam Settle Karni Hai (₹) *
+                  </label>
+                  <span className="text-[10px] font-mono text-amber-300">
+                    Max Baki: ₹{getRemainingAmount(settlingRecord).toLocaleString('en-IN')}
+                  </span>
+                </div>
+                <input
+                  type="number"
+                  required
+                  min="1"
+                  max={getRemainingAmount(settlingRecord)}
+                  step="any"
+                  value={settleAmountInput}
+                  onChange={(e) => setSettleAmountInput(e.target.value)}
+                  className="w-full px-3 py-2 glass-input rounded-xl text-sm font-bold text-white font-mono focus:outline-none focus:border-emerald-400"
+                  autoFocus
+                />
+                <div className="grid grid-cols-3 gap-2 mt-2">
+                  {[
+                    { label: '25%', pct: 0.25 },
+                    { label: '50% (Aadha)', pct: 0.5 },
+                    { label: 'Full Baki', pct: 1 },
+                  ].map((chip) => {
+                    const rem = getRemainingAmount(settlingRecord);
+                    const val = chip.pct === 1 ? rem : Math.max(1, Math.round(rem * chip.pct));
+                    return (
+                      <button
+                        key={chip.label}
+                        type="button"
+                        onClick={() => setSettleAmountInput(String(val))}
+                        className="py-1.5 px-2 rounded-lg bg-white/[0.05] hover:bg-indigo-600/30 border border-white/[0.08] hover:border-indigo-400/50 text-[11px] font-mono text-slate-200 cursor-pointer transition-colors"
+                      >
+                        {chip.label} (₹{val.toLocaleString('en-IN')})
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Account Selection (Bank / Cash / Card) */}
+              <div>
+                <label className="block text-xs font-medium text-slate-300 mb-1 flex items-center gap-1.5">
+                  <Wallet className="w-3.5 h-3.5 text-cyan-400" />
+                  {settlingRecord.type === 'lent'
+                    ? 'Kis Bank / Cash Account Me Aaya? *'
+                    : 'Kis Bank / Cash / Card Se Chukaya? *'}
+                </label>
+                <select
+                  value={settleAccountInput}
+                  onChange={(e) => setSettleAccountInput(e.target.value)}
+                  className="w-full px-3 py-2.5 glass-input rounded-xl text-xs text-white focus:outline-none focus:border-cyan-400 bg-slate-900 cursor-pointer font-mono"
+                >
+                  <optgroup label="Bank Accounts & Cash" className="bg-slate-950 text-emerald-300">
+                    {ALL_ACCOUNTS.filter(a => a.type === 'bank_account' || a.type === 'cash').map((acc) => (
+                      <option key={acc.id} value={acc.id} className="bg-slate-900 text-white">
+                        {acc.badge}: {acc.name}
+                      </option>
+                    ))}
+                  </optgroup>
+                  <optgroup label="Credit & RuPay Cards" className="bg-slate-950 text-sky-300">
+                    {ALL_ACCOUNTS.filter(a => a.type === 'credit_card' || a.type === 'rupay_card').map((acc) => (
+                      <option key={acc.id} value={acc.id} className="bg-slate-900 text-white">
+                        {acc.badge}: {acc.name}
+                      </option>
+                    ))}
+                  </optgroup>
+                </select>
+                <p className="text-[10px] text-slate-400 mt-1">
+                  {settlingRecord.type === 'lent'
+                    ? 'Chuna gaya Bank/Cash balance automatically badh jayega.'
+                    : 'Chune gaye account se payment deduct record ho jayega.'}
+                </p>
+              </div>
+
+              {/* Date & Notes */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-slate-300 mb-1">
+                    Settlement Tareeq
+                  </label>
+                  <input
+                    type="date"
+                    value={settleDateInput}
+                    onChange={(e) => setSettleDateInput(e.target.value)}
+                    className="w-full px-3 py-2 glass-input rounded-xl text-xs text-white font-mono focus:outline-none focus:border-indigo-400"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-slate-300 mb-1">
+                    Note (Optional)
+                  </label>
+                  <input
+                    type="text"
+                    value={settleNotesInput}
+                    onChange={(e) => setSettleNotesInput(e.target.value)}
+                    placeholder="e.g. GPay / Cash"
+                    className="w-full px-3 py-2 glass-input rounded-xl text-xs text-white focus:outline-none focus:border-indigo-400"
+                  />
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end space-x-2 pt-2 border-t border-white/[0.08]">
+                <button
+                  type="button"
+                  onClick={() => setSettlingRecord(null)}
+                  className="px-4 py-2 rounded-xl border border-white/[0.1] bg-white/[0.05] text-slate-300 text-xs font-medium hover:bg-white/[0.1] cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSettlingRecord}
+                  className="px-4 py-2 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-bold transition-all cursor-pointer shadow-md disabled:opacity-50"
+                >
+                  {isSettlingRecord ? 'Settling...' : '✅ Confirm & Settle'}
                 </button>
               </div>
             </form>
