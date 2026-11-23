@@ -243,12 +243,13 @@ export default function App() {
       transactions?: Transaction[];
       summary?: FinancialSummary;
       customAccounts?: AccountMeta[];
+      cardBillingStartDays?: Record<string, number>;
       cardBillingDays?: Record<string, number>;
       cardPaymentDueDays?: Record<string, number>;
     }>('/api/transactions');
     
-    if (data?.customAccounts || data?.cardBillingDays || data?.cardPaymentDueDays) {
-      syncCustomAccounts(data.customAccounts, data.cardBillingDays, data.cardPaymentDueDays);
+    if (data?.customAccounts || data?.cardBillingDays || data?.cardPaymentDueDays || data?.cardBillingStartDays) {
+      syncCustomAccounts(data.customAccounts, data.cardBillingDays, data.cardPaymentDueDays, data.cardBillingStartDays);
     }
     if (data?.transactions) {
       setTransactions(data.transactions);

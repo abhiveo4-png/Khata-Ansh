@@ -22,6 +22,7 @@ import { FinancialSummary, Transaction, UserRole, CategoryBudget, CategoryDef, U
 import { CREDIT_CARDS, isCreditCardAccount, isExcludedWifeCardUdhaar } from '../utils/accounts';
 import {
   calculateMonthlyCardReserves,
+  getNextMonthKey,
   isCcPaymentCreditTx,
   isCcPaymentDebitTx,
 } from '../utils/billingCycle';
@@ -64,9 +65,15 @@ export const OverviewCards: React.FC<OverviewCardsProps> = ({
   const utc = now.getTime() + (now.getTimezoneOffset() * 60000);
   const istNow = new Date(utc + (3600000 * 5.5));
   const currentIstMonth = `${istNow.getFullYear()}-${String(istNow.getMonth() + 1).padStart(2, '0')}`;
+  const nextIstMonth = getNextMonthKey(currentIstMonth);
 
   const activeMonth = selectedMonth || currentIstMonth;
   const isAllTime = activeMonth === 'all';
+  const nextMonthOfActive = !isAllTime ? getNextMonthKey(activeMonth) : null;
+
+  const dropdownMonths = Array.from(new Set([nextIstMonth, currentIstMonth, ...availableMonths]))
+    .filter((m) => /^\d{4}-\d{2}$/.test(m))
+    .sort((a, b) => b.localeCompare(a));
 
   // Format month name label (e.g. '2026-10' -> 'October 2026')
   const formatMonthName = (mStr: string) => {
@@ -262,9 +269,12 @@ export const OverviewCards: React.FC<OverviewCardsProps> = ({
     }
   }
 
-  // 3C. Bill-Cycle-Based Card Reserve Calculation (for selected month)
+  // 3C. Bill-Cycle-Based Card Reserve Calculation (for selected month & next month preview)
   const monthlyCardReserves = !isAllTime
     ? calculateMonthlyCardReserves(transactions, activeMonth)
+    : null;
+  const nextMonthCardReserves = nextMonthOfActive
+    ? calculateMonthlyCardReserves(transactions, nextMonthOfActive)
     : null;
 
   // 4. Core Seedha Hisaab Totals
@@ -352,9 +362,9 @@ export const OverviewCards: React.FC<OverviewCardsProps> = ({
   // Month navigation handlers
   const handlePrevMonth = () => {
     if (!onSelectMonth || isAllTime) return;
-    const currentIndex = availableMonths.indexOf(activeMonth);
-    if (currentIndex >= 0 && currentIndex < availableMonths.length - 1) {
-      onSelectMonth(availableMonths[currentIndex + 1]);
+    const currentIndex = dropdownMonths.indexOf(activeMonth);
+    if (currentIndex >= 0 && currentIndex < dropdownMonths.length - 1) {
+      onSelectMonth(dropdownMonths[currentIndex + 1]);
     } else {
       const [y, m] = activeMonth.split('-').map(Number);
       const prevDate = new Date(y, m - 2, 1);
@@ -364,19 +374,20 @@ export const OverviewCards: React.FC<OverviewCardsProps> = ({
   };
 
   const handleNextMonth = () => {
-    if (!onSelectMonth || isAllTime) return;
-    const currentIndex = availableMonths.indexOf(activeMonth);
+    if (!onSelectMonth || isAllTime || activeMonth >= nextIstMonth) return;
+    const currentIndex = dropdownMonths.indexOf(activeMonth);
     if (currentIndex > 0) {
-      onSelectMonth(availableMonths[currentIndex - 1]);
+      onSelectMonth(dropdownMonths[currentIndex - 1]);
     } else {
-      const [y, m] = activeMonth.split('-').map(Number);
-      const nextDate = new Date(y, m, 1);
-      const nextMonthStr = `${nextDate.getFullYear()}-${String(nextDate.getMonth() + 1).padStart(2, '0')}`;
-      onSelectMonth(nextMonthStr);
+      const nextMonthStr = getNextMonthKey(activeMonth);
+      if (nextMonthStr <= nextIstMonth) {
+        onSelectMonth(nextMonthStr);
+      }
     }
   };
 
   const isCurrentMonth = activeMonth === currentIstMonth;
+  const isNextMonthView = activeMonth === nextIstMonth;
 
   return (
     <div className="space-y-3.5">
@@ -401,9 +412,14 @@ export const OverviewCards: React.FC<OverviewCardsProps> = ({
               aria-label="Mahina chunein"
               className="appearance-none bg-slate-800 border border-indigo-500/30 text-white text-xs sm:text-sm font-bold py-1.5 sm:py-2 pl-8 sm:pl-9 pr-8 rounded-xl cursor-pointer hover:border-indigo-400 focus:outline-none transition-all shadow-inner"
             >
-              {availableMonths.map((m) => (
+              {dropdownMonths.map((m) => (
                 <option key={m} value={m} className="bg-slate-900 text-white">
-                  📅 {formatMonthName(m)} {m === currentIstMonth ? '• (Current Live)' : ''}
+                  📅 {formatMonthName(m)}{' '}
+                  {m === currentIstMonth
+                    ? '• (Current Live)'
+                    : m === nextIstMonth
+                    ? '• (Next Month Reserve)'
+                    : ''}
                 </option>
               ))}
               <option value="all" className="bg-slate-900 text-cyan-300">
@@ -417,9 +433,9 @@ export const OverviewCards: React.FC<OverviewCardsProps> = ({
           <button
             type="button"
             onClick={handleNextMonth}
-            disabled={isAllTime || isCurrentMonth}
+            disabled={isAllTime || activeMonth >= nextIstMonth}
             className="p-1.5 sm:p-2 rounded-xl bg-white/[0.05] hover:bg-white/[0.1] text-slate-300 disabled:opacity-30 disabled:cursor-not-allowed transition-all cursor-pointer border border-white/[0.05]"
-            title="Agla Mahina"
+            title="Agla Mahina (Next Month Reserve Dekhein)"
           >
             <ChevronRight className="w-4 h-4" />
           </button>
@@ -450,14 +466,21 @@ export const OverviewCards: React.FC<OverviewCardsProps> = ({
                   Live Current Month
                 </span>
               ) : (
-                <button
-                  type="button"
-                  onClick={() => onSelectMonth?.(currentIstMonth)}
-                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl bg-indigo-500/20 hover:bg-indigo-500/30 border border-indigo-500/40 text-indigo-300 text-[11px] font-medium cursor-pointer transition-all"
-                >
-                  <Sparkles className="w-3 h-3 text-indigo-400" />
-                  Jump to Current Month
-                </button>
+                <>
+                  {isNextMonthView && (
+                    <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl bg-amber-500/15 border border-amber-500/35 text-amber-300 text-[11px] font-semibold">
+                      ⏭️ Next Month Card Reserve View
+                    </span>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => onSelectMonth?.(currentIstMonth)}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl bg-indigo-500/20 hover:bg-indigo-500/30 border border-indigo-500/40 text-indigo-300 text-[11px] font-medium cursor-pointer transition-all"
+                  >
+                    <Sparkles className="w-3 h-3 text-indigo-400" />
+                    Jump to Current Month
+                  </button>
+                </>
               )}
 
               <button
@@ -822,16 +845,18 @@ export const OverviewCards: React.FC<OverviewCardsProps> = ({
 
             {/* Step 4: Bill-Cycle Card Reserve (To set aside for CC bills due in activeMonth) */}
             <div className="bg-amber-950/25 border border-amber-500/35 rounded-xl p-3 flex flex-col justify-between">
-              <div className="text-[11px] font-bold uppercase tracking-wider text-amber-400 flex items-center justify-between gap-1">
-                <span>4. Card Reserve 💳</span>
-                <span className="text-[9px] bg-amber-500/20 text-amber-200 px-1.5 py-0.5 rounded whitespace-nowrap">
-                  {!isAllTime ? 'Bill Cycle' : 'Alag Rakhein'}
-                </span>
+              <div>
+                <div className="text-[11px] font-bold uppercase tracking-wider text-amber-400 flex items-center justify-between gap-1">
+                  <span>4. Card Reserve 💳</span>
+                  <span className="text-[9px] bg-amber-500/20 text-amber-200 px-1.5 py-0.5 rounded whitespace-nowrap">
+                    {!isAllTime ? 'Due This Month' : 'Alag Rakhein'}
+                  </span>
+                </div>
+                <div className="text-lg sm:text-xl font-extrabold font-mono text-amber-300 my-1">
+                  ₹{displayAmount(cardReserveAmount)}
+                </div>
               </div>
-              <div className="text-lg sm:text-xl font-extrabold font-mono text-amber-300 my-1">
-                ₹{displayAmount(cardReserveAmount)}
-              </div>
-              <div className="text-[10px] text-amber-200/90 space-y-1 border-t border-amber-500/20 pt-1.5 max-h-28 overflow-y-auto pr-0.5">
+              <div className="text-[10px] text-amber-200/90 space-y-1 border-t border-amber-500/20 pt-1.5 max-h-36 overflow-y-auto pr-0.5">
                 {!isAllTime && monthlyCardReserves ? (
                   monthlyCardReserves.items.length > 0 ? (
                     monthlyCardReserves.items.map((item) => (
@@ -856,7 +881,7 @@ export const OverviewCards: React.FC<OverviewCardsProps> = ({
                       </div>
                     ))
                   ) : (
-                    <div className="text-slate-400">Is cycle me koi Card bill pending nahi</div>
+                    <div className="text-slate-400">Is mahine due koi Card bill pending nahi</div>
                   )
                 ) : cardBreakdownEntries.length > 0 ? (
                   cardBreakdownEntries.map(([cardName, amt]) => (
@@ -867,6 +892,40 @@ export const OverviewCards: React.FC<OverviewCardsProps> = ({
                   ))
                 ) : (
                   <div className="text-slate-400">Koi Card kharcha nahi</div>
+                )}
+
+                {/* Next Month Card Reserve Preview (Spends whose cycle Due Date falls in Next Month) */}
+                {!isAllTime && nextMonthOfActive && nextMonthCardReserves && nextMonthCardReserves.totalPendingReserve > 0 && (
+                  <div className="mt-1.5 pt-1.5 border-t border-indigo-400/25">
+                    <button
+                      type="button"
+                      onClick={() => onSelectMonth?.(nextMonthOfActive)}
+                      className="w-full text-left bg-indigo-950/60 hover:bg-indigo-900/60 border border-indigo-400/35 rounded-lg p-1.5 transition-colors cursor-pointer"
+                      title={`${formatMonthName(nextMonthOfActive)} ka Card Reserve view kholne ke liye click karein`}
+                    >
+                      <div className="flex items-center justify-between gap-1 text-[9.5px] font-bold text-indigo-200">
+                        <span>⏭️ Next Month ({formatMonthName(nextMonthOfActive).split(' ')[0]})</span>
+                        <span className="font-mono text-cyan-300">
+                          ₹{displayAmount(nextMonthCardReserves.totalPendingReserve)} ↗
+                        </span>
+                      </div>
+                      <div className="mt-1 space-y-0.5">
+                        {nextMonthCardReserves.items
+                          .filter((ni) => ni.pendingReserve > 0)
+                          .slice(0, 3)
+                          .map((ni) => (
+                            <div key={ni.cardId} className="flex items-center justify-between text-[9px] text-indigo-200/80 gap-1">
+                              <span className="truncate">
+                                {ni.shortName} ({ni.cycle.cycleLabel} · Due {ni.cycle.dueLabel})
+                              </span>
+                              <span className="font-mono font-semibold text-cyan-200 shrink-0">
+                                ₹{displayAmount(ni.pendingReserve)}
+                              </span>
+                            </div>
+                          ))}
+                      </div>
+                    </button>
+                  </div>
                 )}
               </div>
             </div>

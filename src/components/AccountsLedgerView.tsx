@@ -35,7 +35,12 @@ import {
   syncCustomAccounts,
   isWifeOwnedAccount,
 } from '../utils/accounts';
-import { calculateMonthlyCardReserves, getCardBillCycleForPaymentMonth } from '../utils/billingCycle';
+import {
+  calculateMonthlyCardReserves,
+  getCardBillCycleForPaymentMonth,
+  getDefaultBillingStartDay,
+  getNextMonthKey,
+} from '../utils/billingCycle';
 import { safeFetchJson } from '../utils/api';
 import { DEFAULT_CATEGORIES } from '../utils/categories';
 import { 
@@ -129,6 +134,7 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
   const [editBaseBalances, setEditBaseBalances] = useState<Record<string, string>>({});
   const [initialEditBaseBalances, setInitialEditBaseBalances] = useState<Record<string, string>>({});
   const [editCardLimits, setEditCardLimits] = useState<Record<string, string>>({});
+  const [editCardBillingStartDays, setEditCardBillingStartDays] = useState<Record<string, string>>({});
   const [editCardBillingDays, setEditCardBillingDays] = useState<Record<string, string>>({});
   const [editCardDueDays, setEditCardDueDays] = useState<Record<string, string>>({});
   const [editWifeBalance, setEditWifeBalance] = useState('');
@@ -140,6 +146,7 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
   const [singleBaseInput, setSingleBaseInput] = useState('');
   const [singleOriginalBase, setSingleOriginalBase] = useState('');
   const [singleLimitInput, setSingleLimitInput] = useState('');
+  const [singleStartDayInput, setSingleStartDayInput] = useState('');
   const [singleBillingDayInput, setSingleBillingDayInput] = useState('');
   const [singleDueDayInput, setSingleDueDayInput] = useState('');
   const [isSavingSingleAccount, setIsSavingSingleAccount] = useState(false);
@@ -151,6 +158,7 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
   const [newCardFullName, setNewCardFullName] = useState('');
   const [newCardLimit, setNewCardLimit] = useState('150000');
   const [newCardOpeningBalance, setNewCardOpeningBalance] = useState('0');
+  const [newCardBillingStartDay, setNewCardBillingStartDay] = useState('16');
   const [newCardBillingDay, setNewCardBillingDay] = useState('15');
   const [newCardDueDay, setNewCardDueDay] = useState('5');
   const [newCardColor, setNewCardColor] = useState('#ec4899');
@@ -160,21 +168,33 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
   const fetchBalances = async () => {
     const { data } = await safeFetchJson<AccountBalancesData>('/api/accounts/balances');
     if (data) {
-      if (data.customAccounts || data.cardBillingDays || data.cardPaymentDueDays) {
-        syncCustomAccounts(data.customAccounts, data.cardBillingDays, data.cardPaymentDueDays);
+      if (data.customAccounts || data.cardBillingDays || data.cardPaymentDueDays || data.cardBillingStartDays) {
+        syncCustomAccounts(
+          data.customAccounts,
+          data.cardBillingDays,
+          data.cardPaymentDueDays,
+          data.cardBillingStartDays
+        );
       }
       setBalancesData(data);
       const initialMap: Record<string, string> = {};
       const initialLimits: Record<string, string> = {};
+      const initialStartDays: Record<string, string> = {};
       const initialBillingDays: Record<string, string> = {};
       const initialDueDays: Record<string, string> = {};
       for (const acc of ALL_ACCOUNTS) {
         initialMap[acc.id] = String(data.accountBaseBalances?.[acc.id] ?? '');
         if (acc.type === 'credit_card' || acc.type === 'rupay_card') {
+          const endDayVal =
+            data.cardBillingDays?.[acc.id] ?? data.accounts?.[acc.id]?.billingDay ?? acc.billingDay ?? 15;
+          const startDayVal =
+            data.cardBillingStartDays?.[acc.id] ??
+            data.accounts?.[acc.id]?.billingStartDay ??
+            acc.billingStartDay ??
+            getDefaultBillingStartDay(endDayVal);
           initialLimits[acc.id] = String(data.cardCreditLimits?.[acc.id] || acc.creditLimit || 100000);
-          initialBillingDays[acc.id] = String(
-            data.cardBillingDays?.[acc.id] ?? data.accounts?.[acc.id]?.billingDay ?? acc.billingDay ?? 15
-          );
+          initialStartDays[acc.id] = String(startDayVal);
+          initialBillingDays[acc.id] = String(endDayVal);
           initialDueDays[acc.id] = String(
             data.cardPaymentDueDays?.[acc.id] ?? data.accounts?.[acc.id]?.paymentDueDay ?? acc.paymentDueDay ?? 5
           );
@@ -183,6 +203,7 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
       setEditBaseBalances(initialMap);
       setInitialEditBaseBalances(initialMap);
       setEditCardLimits(initialLimits);
+      setEditCardBillingStartDays(initialStartDays);
       setEditCardBillingDays(initialBillingDays);
       setEditCardDueDays(initialDueDays);
       const wifeVal = String(data.wifeBaseBalance ?? '');
@@ -216,6 +237,7 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
           isUpiCapable: newCardType === 'rupay_card' || newCardType === 'bank_account',
           creditLimit: parseFloat(newCardLimit) || 100000,
           openingBalance: parseFloat(newCardOpeningBalance) || 0,
+          billingStartDay: parseInt(newCardBillingStartDay, 10) || getDefaultBillingStartDay(parseInt(newCardBillingDay, 10) || 15),
           billingDay: parseInt(newCardBillingDay, 10) || 15,
           paymentDueDay: parseInt(newCardDueDay, 10) || 5,
           isWifeAccount: newCardIsWifeAccount,
@@ -223,8 +245,13 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
       });
 
       if (data) {
-        if (data.customAccounts || data.cardBillingDays || data.cardPaymentDueDays) {
-          syncCustomAccounts(data.customAccounts, data.cardBillingDays, data.cardPaymentDueDays);
+        if (data.customAccounts || data.cardBillingDays || data.cardPaymentDueDays || data.cardBillingStartDays) {
+          syncCustomAccounts(
+            data.customAccounts,
+            data.cardBillingDays,
+            data.cardPaymentDueDays,
+            data.cardBillingStartDays
+          );
         }
         setBalancesData(data);
         setSelectedAccountId(cleanShort);
@@ -255,8 +282,13 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
         method: 'DELETE',
       });
       if (data) {
-        if (data.customAccounts || data.cardBillingDays || data.cardPaymentDueDays) {
-          syncCustomAccounts(data.customAccounts, data.cardBillingDays, data.cardPaymentDueDays);
+        if (data.customAccounts || data.cardBillingDays || data.cardPaymentDueDays || data.cardBillingStartDays) {
+          syncCustomAccounts(
+            data.customAccounts,
+            data.cardBillingDays,
+            data.cardPaymentDueDays,
+            data.cardBillingStartDays
+          );
         }
         setBalancesData(data);
         if (selectedAccountId === cardId) {
@@ -285,6 +317,9 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
   }, [transactions]);
 
   const displayWifeBalance = React.useMemo(() => {
+    if (balancesData?.wifeSavings?.currentBalance !== undefined) {
+      return balancesData.wifeSavings.currentBalance;
+    }
     const base = Number(balancesData?.wifeBaseBalance ?? balancesData?.wifeSavings?.baseBalance) || 0;
     const serverTransferred = Number(balancesData?.wifeSavings?.totalTransferred) || 0;
     const effectiveTransferred = Math.max(serverTransferred, liveWifeTransferred);
@@ -295,14 +330,23 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
     setEditingSingleAccount(acc);
     const liveInfo = balancesData?.accounts?.[acc.id];
     const isCard = acc.type === 'credit_card' || acc.type === 'rupay_card';
-    const currentBase = balancesData?.accountBaseBalances?.[acc.id] ?? liveInfo?.baseBalance ?? 0;
+    const currentBase =
+      acc.id === 'Wife Account'
+        ? (balancesData?.wifeBaseBalance ?? balancesData?.wifeSavings?.baseBalance ?? liveInfo?.baseBalance ?? 0)
+        : (balancesData?.accountBaseBalances?.[acc.id] ?? liveInfo?.baseBalance ?? 0);
     const currentLimit = balancesData?.cardCreditLimits?.[acc.id] ?? liveInfo?.creditLimit ?? acc.creditLimit ?? 100000;
     const currentBillingDay = balancesData?.cardBillingDays?.[acc.id] ?? liveInfo?.billingDay ?? acc.billingDay ?? 15;
+    const currentStartDay =
+      balancesData?.cardBillingStartDays?.[acc.id] ??
+      liveInfo?.billingStartDay ??
+      acc.billingStartDay ??
+      getDefaultBillingStartDay(currentBillingDay);
     const currentDueDay = balancesData?.cardPaymentDueDays?.[acc.id] ?? liveInfo?.paymentDueDay ?? acc.paymentDueDay ?? 5;
     const baseStr = String(currentBase);
     setSingleBaseInput(baseStr);
     setSingleOriginalBase(baseStr);
     setSingleLimitInput(isCard ? String(currentLimit) : '');
+    setSingleStartDayInput(isCard ? String(currentStartDay) : '');
     setSingleBillingDayInput(isCard ? String(currentBillingDay) : '');
     setSingleDueDayInput(isCard ? String(currentDueDay) : '');
   };
@@ -322,13 +366,21 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
 
       const bodyPayload: Record<string, any> = {};
       if (baseChanged || hasNeverSetBase) {
-        bodyPayload.accountBaseBalances = { [editingSingleAccount.id]: baseVal };
+        if (editingSingleAccount.id === 'Wife Account') {
+          bodyPayload.wifeBaseBalance = baseVal;
+        } else {
+          bodyPayload.accountBaseBalances = { [editingSingleAccount.id]: baseVal };
+        }
       }
 
       if (isCard) {
         const limVal = parseFloat(singleLimitInput);
         if (!isNaN(limVal) && limVal > 0) {
           bodyPayload.cardCreditLimits = { [editingSingleAccount.id]: limVal };
+        }
+        const startNum = Math.round(Number(singleStartDayInput));
+        if (!isNaN(startNum) && startNum >= 1 && startNum <= 31) {
+          bodyPayload.cardBillingStartDays = { [editingSingleAccount.id]: startNum };
         }
         const billNum = Math.round(Number(singleBillingDayInput));
         if (!isNaN(billNum) && billNum >= 1 && billNum <= 31) {
@@ -346,7 +398,12 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
         body: JSON.stringify(bodyPayload),
       });
       if (data) {
-        syncCustomAccounts(data.customAccounts, data.cardBillingDays, data.cardPaymentDueDays);
+        syncCustomAccounts(
+          data.customAccounts,
+          data.cardBillingDays,
+          data.cardPaymentDueDays,
+          data.cardBillingStartDays
+        );
         setBalancesData(data);
         if (bodyPayload.accountBaseBalances) {
           setEditBaseBalances(prev => ({ ...prev, [editingSingleAccount.id]: String(baseVal) }));
@@ -355,6 +412,9 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
         if (isCard && bodyPayload.cardCreditLimits?.[editingSingleAccount.id]) {
           setEditCardLimits(prev => ({ ...prev, [editingSingleAccount.id]: String(bodyPayload.cardCreditLimits[editingSingleAccount.id]) }));
         }
+        if (isCard && bodyPayload.cardBillingStartDays?.[editingSingleAccount.id]) {
+          setEditCardBillingStartDays(prev => ({ ...prev, [editingSingleAccount.id]: String(bodyPayload.cardBillingStartDays[editingSingleAccount.id]) }));
+        }
         if (isCard && bodyPayload.cardBillingDays?.[editingSingleAccount.id]) {
           setEditCardBillingDays(prev => ({ ...prev, [editingSingleAccount.id]: String(bodyPayload.cardBillingDays[editingSingleAccount.id]) }));
         }
@@ -362,7 +422,7 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
           setEditCardDueDays(prev => ({ ...prev, [editingSingleAccount.id]: String(bodyPayload.cardPaymentDueDays[editingSingleAccount.id]) }));
         }
       }
-      setToastMessage(`✅ ${editingSingleAccount.shortName} ka ${isCard ? 'Limit, Bill Cycle & Due' : 'Base Balance'} update ho gaya!`);
+      setToastMessage(`✅ ${editingSingleAccount.shortName} ka ${isCard ? 'Limit, Start/End Cycle & Due' : 'Base Balance'} update ho gaya!`);
       setTimeout(() => setToastMessage(null), 3500);
       setEditingSingleAccount(null);
       if (onRefreshTransactions) await onRefreshTransactions();
@@ -392,6 +452,13 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
         const lim = parseFloat(String(v || ''));
         if (!isNaN(lim) && lim > 0) payloadLimits[k] = lim;
       }
+      const payloadStartDays: Record<string, number> = {};
+      for (const [k, v] of Object.entries(editCardBillingStartDays)) {
+        const dayNum = Math.round(Number(v));
+        if (!isNaN(dayNum) && dayNum >= 1 && dayNum <= 31) {
+          payloadStartDays[k] = dayNum;
+        }
+      }
       const payloadBillingDays: Record<string, number> = {};
       for (const [k, v] of Object.entries(editCardBillingDays)) {
         const dayNum = Math.round(Number(v));
@@ -409,6 +476,7 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
 
       const bodyPayload: Record<string, any> = {
         cardCreditLimits: payloadLimits,
+        cardBillingStartDays: payloadStartDays,
         cardBillingDays: payloadBillingDays,
         cardPaymentDueDays: payloadDueDays,
       };
@@ -425,7 +493,12 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
         body: JSON.stringify(bodyPayload),
       });
       if (data) {
-        syncCustomAccounts(data.customAccounts, data.cardBillingDays, data.cardPaymentDueDays);
+        syncCustomAccounts(
+          data.customAccounts,
+          data.cardBillingDays,
+          data.cardPaymentDueDays,
+          data.cardBillingStartDays
+        );
         setBalancesData(data);
         setInitialEditBaseBalances({ ...editBaseBalances });
         setInitialEditWifeBalance(editWifeBalance);
@@ -724,10 +797,17 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
   const totalMonthlyEmiAmount = cardEmis.reduce((sum, e) => sum + (e.monthlyAmount || 0), 0);
   const totalCardObligation = currentMonthExpense + totalMonthlyEmiAmount;
 
-  // Bill-cycle reserve summary for active month & settlement modal
+  // Bill-cycle reserve summary for active month, next month & settlement modal
+  const nextCycleMonth = React.useMemo(() => getNextMonthKey(defaultCycleMonth), [defaultCycleMonth]);
+
   const activeCycleReserves = React.useMemo(
     () => calculateMonthlyCardReserves(transactions, defaultCycleMonth),
-    [transactions, defaultCycleMonth]
+    [transactions, defaultCycleMonth, balancesData]
+  );
+
+  const nextMonthCycleReserves = React.useMemo(
+    () => calculateMonthlyCardReserves(transactions, nextCycleMonth),
+    [transactions, nextCycleMonth, balancesData]
   );
 
   const selectedCardCycleInfo = React.useMemo(() => {
@@ -735,12 +815,16 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
     const found = activeCycleReserves.items.find((i) => i.cardId === selectedMeta.id);
     if (found) return found;
     const bDay = balancesData?.cardBillingDays?.[selectedMeta.id] ?? selectedMeta.billingDay ?? 15;
+    const sDay =
+      balancesData?.cardBillingStartDays?.[selectedMeta.id] ??
+      selectedMeta.billingStartDay ??
+      getDefaultBillingStartDay(bDay);
     const dDay = balancesData?.cardPaymentDueDays?.[selectedMeta.id] ?? selectedMeta.paymentDueDay ?? 5;
     return {
       cardId: selectedMeta.id,
       shortName: selectedMeta.shortName,
       isWifeCard: Boolean(selectedMeta.isWifeAccount),
-      cycle: getCardBillCycleForPaymentMonth(defaultCycleMonth, bDay, dDay),
+      cycle: getCardBillCycleForPaymentMonth(defaultCycleMonth, bDay, dDay, sDay),
       cycleSpends: 0,
       cycleRefunds: 0,
       cycleBillAmount: 0,
@@ -752,18 +836,48 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
     };
   }, [activeCycleReserves, selectedMeta, balancesData, defaultCycleMonth]);
 
+  const selectedCardNextCycleInfo = React.useMemo(() => {
+    if (!selectedMeta || (selectedMeta.type !== 'credit_card' && selectedMeta.type !== 'rupay_card')) return null;
+    const found = nextMonthCycleReserves.items.find((i) => i.cardId === selectedMeta.id);
+    if (found) return found;
+    const bDay = balancesData?.cardBillingDays?.[selectedMeta.id] ?? selectedMeta.billingDay ?? 15;
+    const sDay =
+      balancesData?.cardBillingStartDays?.[selectedMeta.id] ??
+      selectedMeta.billingStartDay ??
+      getDefaultBillingStartDay(bDay);
+    const dDay = balancesData?.cardPaymentDueDays?.[selectedMeta.id] ?? selectedMeta.paymentDueDay ?? 5;
+    return {
+      cardId: selectedMeta.id,
+      shortName: selectedMeta.shortName,
+      isWifeCard: Boolean(selectedMeta.isWifeAccount),
+      cycle: getCardBillCycleForPaymentMonth(nextCycleMonth, bDay, dDay, sDay),
+      cycleSpends: 0,
+      cycleRefunds: 0,
+      cycleBillAmount: 0,
+      paidFromCurrentIncome: 0,
+      paidFromPreviousSavings: 0,
+      totalSettled: 0,
+      pendingReserve: 0,
+      excludedWifeUdhaar: 0,
+    };
+  }, [nextMonthCycleReserves, selectedMeta, balancesData, nextCycleMonth]);
+
   const modalCardCycleInfo = React.useMemo(() => {
     const res = calculateMonthlyCardReserves(transactions, billCycleMonth);
     const found = res.items.find((i) => i.cardId === billTargetCard);
     if (found) return found;
     const meta = ACCOUNTS_CONFIG[billTargetCard];
     const bDay = balancesData?.cardBillingDays?.[billTargetCard] ?? meta?.billingDay ?? 15;
+    const sDay =
+      balancesData?.cardBillingStartDays?.[billTargetCard] ??
+      meta?.billingStartDay ??
+      getDefaultBillingStartDay(bDay);
     const dDay = balancesData?.cardPaymentDueDays?.[billTargetCard] ?? meta?.paymentDueDay ?? 5;
     return {
       cardId: billTargetCard,
       shortName: meta?.shortName || billTargetCard,
       isWifeCard: Boolean(meta?.isWifeAccount),
-      cycle: getCardBillCycleForPaymentMonth(billCycleMonth, bDay, dDay),
+      cycle: getCardBillCycleForPaymentMonth(billCycleMonth, bDay, dDay, sDay),
       cycleSpends: 0,
       cycleRefunds: 0,
       cycleBillAmount: 0,
@@ -908,7 +1022,9 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
                     : 'bg-slate-950/40 text-slate-300 border-white/[0.06] hover:bg-white/[0.06] hover:text-white'
                 }`}
               >
-                {isRuPay ? (
+                {acc.id === 'Wife Account' ? (
+                  <HeartHandshake className="w-3.5 h-3.5 text-pink-400" />
+                ) : isRuPay ? (
                   <Zap className="w-3.5 h-3.5 text-amber-400" />
                 ) : isCC ? (
                   <CreditCard className="w-3.5 h-3.5 text-sky-400" />
@@ -918,18 +1034,22 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
                   <Wallet className="w-3.5 h-3.5 text-rose-400" />
                 )}
                 <span>{acc.shortName}</span>
-                {isWifeOwnedAccount(acc.id) && (
+                {isWifeOwnedAccount(acc.id) && acc.id !== 'Wife Account' && (
                   <span className="text-[9px] font-bold px-1.5 py-0.2 rounded-md bg-pink-500/20 text-pink-300 border border-pink-500/30">
                     👩 Wife
                   </span>
                 )}
                 {accBalInfo && (
                   <span className={`text-[10px] font-mono px-1.5 py-0.2 rounded-md ${
-                    isBank || acc.type === 'cash'
+                    acc.id === 'Wife Account'
+                      ? 'bg-pink-500/20 text-pink-300'
+                      : isBank || acc.type === 'cash'
                       ? 'bg-emerald-500/20 text-emerald-300'
                       : 'bg-sky-500/20 text-sky-300'
                   }`}>
-                    {isBank || acc.type === 'cash'
+                    {acc.id === 'Wife Account'
+                      ? `₹${Math.round((displayWifeBalance || accBalInfo.currentBalance || 0) / 1000)}k`
+                      : isBank || acc.type === 'cash'
                       ? `₹${Math.round(accBalInfo.currentBalance / 1000)}k`
                       : `₹${Math.round((accBalInfo.availableLimit || 0) / 1000)}k avl`}
                   </span>
@@ -1016,8 +1136,16 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
           </div>
         </div>
 
-        {/* Stat 4: Wife's Savings Reserve */}
-        <div className="bg-gradient-to-br from-pink-950/40 via-slate-900/80 to-purple-950/40 border border-pink-500/30 rounded-2xl p-4 relative overflow-hidden">
+        {/* Stat 4: Wife's Savings Reserve (Single unified Wife's Savings A/c) */}
+        <div
+          onClick={() => setSelectedAccountId('Wife Account')}
+          className={`bg-gradient-to-br from-pink-950/40 via-slate-900/80 to-purple-950/40 border rounded-2xl p-4 relative overflow-hidden cursor-pointer transition-all ${
+            selectedAccountId === 'Wife Account'
+              ? 'border-pink-400 ring-1 ring-pink-400/50 shadow-lg shadow-pink-950/40'
+              : 'border-pink-500/30 hover:border-pink-400/60'
+          }`}
+          title="Wife's Savings A/c ledger dekhne ke liye click karein"
+        >
           <div className="flex items-center justify-between text-xs text-pink-300 font-medium">
             <span className="flex items-center gap-1.5">
               <HeartHandshake className="w-4 h-4 text-pink-400" />
@@ -1031,9 +1159,17 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
             {isFamily || isPrivacyMode ? '••••••' : `₹${(displayWifeBalance || balancesData?.wifeSavings?.currentBalance || 0).toLocaleString('en-IN')}`}
           </div>
           <div className="text-[11px] text-slate-400 mt-1 flex items-center justify-between">
-            <span>Base + Transfers</span>
+            <span>Base + Transfers · Click Ledger</span>
             <button
-              onClick={() => setIsBalancesModalOpen(true)}
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                if (ACCOUNTS_CONFIG['Wife Account']) {
+                  handleOpenSingleAccountModal(ACCOUNTS_CONFIG['Wife Account']);
+                } else {
+                  setIsBalancesModalOpen(true);
+                }
+              }}
               className="text-pink-400 hover:text-pink-300 text-[10px] font-semibold underline cursor-pointer"
             >
               Update
@@ -1067,14 +1203,25 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
                   {selectedMeta.type.replace('_', ' ').toUpperCase()}
                 </span>
                 {(selectedMeta.type === 'credit_card' || selectedMeta.type === 'rupay_card') ? (
-                  <>
-                    <span>
-                      · Bill Cycle: <strong className="text-slate-200">{balancesData?.cardBillingDays?.[selectedMeta.id] ?? balancesData?.accounts?.[selectedMeta.id]?.billingDay ?? selectedMeta.billingDay ?? 15}th</strong>
-                    </span>
-                    <span>
-                      · Due: <strong className="text-amber-300">{balancesData?.cardPaymentDueDays?.[selectedMeta.id] ?? balancesData?.accounts?.[selectedMeta.id]?.paymentDueDay ?? selectedMeta.paymentDueDay ?? 5}th</strong>
-                    </span>
-                  </>
+                  (() => {
+                    const endD = balancesData?.cardBillingDays?.[selectedMeta.id] ?? balancesData?.accounts?.[selectedMeta.id]?.billingDay ?? selectedMeta.billingDay ?? 15;
+                    const startD =
+                      balancesData?.cardBillingStartDays?.[selectedMeta.id] ??
+                      balancesData?.accounts?.[selectedMeta.id]?.billingStartDay ??
+                      selectedMeta.billingStartDay ??
+                      getDefaultBillingStartDay(endD);
+                    const dueD = balancesData?.cardPaymentDueDays?.[selectedMeta.id] ?? balancesData?.accounts?.[selectedMeta.id]?.paymentDueDay ?? selectedMeta.paymentDueDay ?? 5;
+                    return (
+                      <>
+                        <span>
+                          · Cycle: <strong className="text-emerald-300">{startD}th</strong>–<strong className="text-slate-200">{endD}th</strong>
+                        </span>
+                        <span>
+                          · Due: <strong className="text-amber-300">{dueD}th</strong>
+                        </span>
+                      </>
+                    );
+                  })()
                 ) : (
                   <span>· {selectedMeta.badge}</span>
                 )}
@@ -1169,6 +1316,14 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
                           </span>
                         )}
                       </div>
+                      {selectedCardNextCycleInfo && selectedCardNextCycleInfo.pendingReserve > 0 && (
+                        <div className="text-[10px] text-cyan-300 font-mono pt-1 mt-1 border-t border-white/10">
+                          ⏭️ Next Month ({nextCycleMonth}): ₹{selectedCardNextCycleInfo.pendingReserve.toLocaleString('en-IN')}{' '}
+                          <span className="text-slate-400">
+                            ({selectedCardNextCycleInfo.cycle.cycleLabel} · Due {selectedCardNextCycleInfo.cycle.dueLabel})
+                          </span>
+                        </div>
+                      )}
                     </>
                   ) : (
                     `Spends + EMIs: ₹${totalCardObligation.toLocaleString('en-IN')}`
@@ -1248,9 +1403,9 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
             </div>
           </div>
 
-          {/* Individual Cards & Banks Quick Grid with Per-Account Set Base/Limit Buttons */}
+          {/* Individual Cards & Banks Quick Grid with Per-Account Set Base/Limit Buttons (Wife's Savings already shown in Heart card above) */}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-            {ALL_ACCOUNTS.map((acc) => {
+            {ALL_ACCOUNTS.filter((acc) => acc.id !== 'Wife Account').map((acc) => {
               const isCard = acc.type === 'credit_card' || acc.type === 'rupay_card';
               const accInfo = balancesData?.accounts?.[acc.id];
               const cardLimit = balancesData?.cardCreditLimits?.[acc.id] || accInfo?.creditLimit || acc.creditLimit || 100000;
@@ -1258,6 +1413,11 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
               const cardDue = accInfo?.currentOutstanding ?? 0;
               const avlLimit = accInfo?.availableLimit ?? Math.max(0, cardLimit - cardDue);
               const cardBillDay = balancesData?.cardBillingDays?.[acc.id] ?? accInfo?.billingDay ?? acc.billingDay ?? 15;
+              const cardStartDay =
+                balancesData?.cardBillingStartDays?.[acc.id] ??
+                accInfo?.billingStartDay ??
+                acc.billingStartDay ??
+                getDefaultBillingStartDay(cardBillDay);
               const cardPayDueDay = balancesData?.cardPaymentDueDays?.[acc.id] ?? accInfo?.paymentDueDay ?? acc.paymentDueDay ?? 5;
 
               return (
@@ -1322,7 +1482,7 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
                         <span className="text-rose-400">Due: ₹{cardDue.toLocaleString('en-IN')}</span>
                       </div>
                       <div className="flex justify-between text-[10px] pt-0.5 text-amber-300/80">
-                        <span>📅 Bill: {cardBillDay}th</span>
+                        <span>📅 {cardStartDay}th–{cardBillDay}th</span>
                         <span>⏰ Due: {cardPayDueDay}th</span>
                       </div>
                     </div>
@@ -2476,7 +2636,7 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
                     <span className="text-[10px] text-slate-400">Current Starting Balance</span>
                   </div>
 
-                  {BANK_ACCOUNTS.concat(ALL_ACCOUNTS.filter(a => a.type === 'cash')).map((acc) => (
+                  {BANK_ACCOUNTS.filter((a) => a.id !== 'Wife Account').concat(ALL_ACCOUNTS.filter(a => a.type === 'cash')).map((acc) => (
                     <div key={acc.id} className="p-3 bg-slate-950/70 border border-slate-800 rounded-xl space-y-1.5">
                       <div className="flex items-center justify-between">
                         <label className="text-slate-300 font-semibold font-sans flex items-center gap-1.5">
@@ -2561,7 +2721,20 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
                       const currentLimitVal = parseFloat(editCardLimits[card.id] || String(balancesData?.cardCreditLimits?.[card.id] || card.creditLimit || 100000)) || (card.creditLimit || 100000);
                       const calculatedAvl = Math.max(0, currentLimitVal - currentDueVal);
                       const currentBillDay = editCardBillingDays[card.id] ?? String(balancesData?.cardBillingDays?.[card.id] ?? card.billingDay ?? 15);
+                      const currentStartDay =
+                        editCardBillingStartDays[card.id] ??
+                        String(
+                          balancesData?.cardBillingStartDays?.[card.id] ??
+                            card.billingStartDay ??
+                            getDefaultBillingStartDay(Number(currentBillDay) || 15)
+                        );
                       const currentPayDueDay = editCardDueDays[card.id] ?? String(balancesData?.cardPaymentDueDays?.[card.id] ?? card.paymentDueDay ?? 5);
+                      const bulkCurPreview = getCardBillCycleForPaymentMonth(
+                        defaultCycleMonth,
+                        Number(currentBillDay) || 15,
+                        Number(currentPayDueDay) || 5,
+                        Number(currentStartDay) || undefined
+                      );
 
                       return (
                         <div key={card.id} className="p-3.5 bg-slate-950/70 border border-slate-800 rounded-xl space-y-2.5">
@@ -2611,10 +2784,26 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
                             </div>
                           </div>
 
-                          <div className="grid grid-cols-2 gap-3 pt-1">
+                          <div className="grid grid-cols-3 gap-2 pt-1">
                             <div>
-                              <label className="text-[11px] text-amber-300 font-medium block mb-1">
-                                📅 Bill Cycle Tarikh (1-31)
+                              <label className="text-[10px] text-emerald-300 font-medium block mb-1">
+                                🟢 Start Date (1-31)
+                              </label>
+                              <input
+                                type="number"
+                                min={1}
+                                max={31}
+                                placeholder={String(card.billingStartDay || 16)}
+                                value={currentStartDay}
+                                onChange={(e) =>
+                                  setEditCardBillingStartDays({ ...editCardBillingStartDays, [card.id]: e.target.value })
+                                }
+                                className="w-full bg-slate-900 border border-slate-700 rounded-xl px-2.5 py-1.5 text-white font-mono text-xs focus:border-emerald-500 focus:outline-hidden"
+                              />
+                            </div>
+                            <div>
+                              <label className="text-[10px] text-amber-300 font-medium block mb-1">
+                                🔴 End Date (1-31)
                               </label>
                               <input
                                 type="number"
@@ -2623,12 +2812,12 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
                                 placeholder={String(card.billingDay || 15)}
                                 value={currentBillDay}
                                 onChange={(e) => setEditCardBillingDays({ ...editCardBillingDays, [card.id]: e.target.value })}
-                                className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-1.5 text-white font-mono text-xs focus:border-amber-500 focus:outline-hidden"
+                                className="w-full bg-slate-900 border border-slate-700 rounded-xl px-2.5 py-1.5 text-white font-mono text-xs focus:border-amber-500 focus:outline-hidden"
                               />
                             </div>
                             <div>
-                              <label className="text-[11px] text-indigo-300 font-medium block mb-1">
-                                ⏰ Payment Due Tarikh (1-31)
+                              <label className="text-[10px] text-indigo-300 font-medium block mb-1">
+                                ⏰ Due Date (1-31)
                               </label>
                               <input
                                 type="number"
@@ -2637,9 +2826,12 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
                                 placeholder={String(card.paymentDueDay || 5)}
                                 value={currentPayDueDay}
                                 onChange={(e) => setEditCardDueDays({ ...editCardDueDays, [card.id]: e.target.value })}
-                                className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-1.5 text-white font-mono text-xs focus:border-indigo-500 focus:outline-hidden"
+                                className="w-full bg-slate-900 border border-slate-700 rounded-xl px-2.5 py-1.5 text-white font-mono text-xs focus:border-indigo-500 focus:outline-hidden"
                               />
                             </div>
+                          </div>
+                          <div className="text-[10px] text-slate-400 font-sans">
+                            📌 {defaultCycleMonth} Reserve: <strong className="text-amber-300 font-mono">{bulkCurPreview.cycleLabel}</strong> → Due <strong className="text-indigo-300 font-mono">{bulkCurPreview.dueLabel}</strong>
                           </div>
                         </div>
                       );
@@ -2812,37 +3004,80 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
                 </div>
               </div>
 
-              {/* Billing Day & Due Day for Cards */}
-              {(newCardType === 'credit_card' || newCardType === 'rupay_card') && (
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-slate-300 font-semibold mb-1">
-                      📅 Statement Billing Tarikh (1-31)
-                    </label>
-                    <input
-                      type="number"
-                      min={1}
-                      max={31}
-                      value={newCardBillingDay}
-                      onChange={(e) => setNewCardBillingDay(e.target.value)}
-                      className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white font-mono"
-                    />
+              {/* Start Date, End Date & Due Date for Cards */}
+              {(newCardType === 'credit_card' || newCardType === 'rupay_card') && (() => {
+                const newCurPreview = getCardBillCycleForPaymentMonth(
+                  defaultCycleMonth,
+                  Number(newCardBillingDay) || 15,
+                  Number(newCardDueDay) || 5,
+                  Number(newCardBillingStartDay) || undefined
+                );
+                const newNextPreview = getCardBillCycleForPaymentMonth(
+                  nextCycleMonth,
+                  Number(newCardBillingDay) || 15,
+                  Number(newCardDueDay) || 5,
+                  Number(newCardBillingStartDay) || undefined
+                );
+                return (
+                  <div className="space-y-2.5">
+                    <div className="grid grid-cols-3 gap-2.5">
+                      <div>
+                        <label className="block text-emerald-300 font-semibold mb-1 text-[11px]">
+                          🟢 Start Date (1-31)
+                        </label>
+                        <input
+                          type="number"
+                          min={1}
+                          max={31}
+                          value={newCardBillingStartDay}
+                          onChange={(e) => setNewCardBillingStartDay(e.target.value)}
+                          className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white font-mono focus:border-emerald-500 focus:outline-hidden"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-amber-300 font-semibold mb-1 text-[11px]">
+                          🔴 End Date (1-31)
+                        </label>
+                        <input
+                          type="number"
+                          min={1}
+                          max={31}
+                          value={newCardBillingDay}
+                          onChange={(e) => setNewCardBillingDay(e.target.value)}
+                          className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white font-mono focus:border-amber-500 focus:outline-hidden"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-indigo-300 font-semibold mb-1 text-[11px]">
+                          ⏰ Due Date (1-31)
+                        </label>
+                        <input
+                          type="number"
+                          min={1}
+                          max={31}
+                          value={newCardDueDay}
+                          onChange={(e) => setNewCardDueDay(e.target.value)}
+                          className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white font-mono focus:border-indigo-500 focus:outline-hidden"
+                        />
+                      </div>
+                    </div>
+                    <div className="bg-slate-950/80 border border-indigo-500/25 rounded-xl p-2.5 space-y-1 text-[10.5px]">
+                      <div className="flex items-center justify-between text-amber-200">
+                        <span>📌 Current Month ({defaultCycleMonth}) Reserve:</span>
+                        <span className="font-mono font-bold">
+                          {newCurPreview.cycleLabel} → Due {newCurPreview.dueLabel}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between text-cyan-200">
+                        <span>⏭️ Next Month ({nextCycleMonth}) Reserve:</span>
+                        <span className="font-mono font-bold">
+                          {newNextPreview.cycleLabel} → Due {newNextPreview.dueLabel}
+                        </span>
+                      </div>
+                    </div>
                   </div>
-                  <div>
-                    <label className="block text-slate-300 font-semibold mb-1">
-                      ⏰ Bill Due Tarikh (1-31)
-                    </label>
-                    <input
-                      type="number"
-                      min={1}
-                      max={31}
-                      value={newCardDueDay}
-                      onChange={(e) => setNewCardDueDay(e.target.value)}
-                      className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white font-mono"
-                    />
-                  </div>
-                </div>
-              )}
+                );
+              })()}
 
               {/* Wife's Card / Account Toggle */}
               <label className="flex items-start gap-2.5 p-3 rounded-xl bg-pink-950/30 border border-pink-500/30 cursor-pointer">
@@ -2955,7 +3190,9 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
             <div className="p-4 sm:p-5 border-b border-slate-800 flex items-center justify-between bg-slate-900/95">
               <div>
                 <h3 className="text-base font-bold text-white flex items-center gap-2">
-                  {(editingSingleAccount.type === 'credit_card' || editingSingleAccount.type === 'rupay_card')
+                  {editingSingleAccount.id === 'Wife Account'
+                    ? <HeartHandshake className="w-4 h-4 text-pink-400" />
+                    : (editingSingleAccount.type === 'credit_card' || editingSingleAccount.type === 'rupay_card')
                     ? <CreditCard className="w-4 h-4 text-sky-400" />
                     : <Building2 className="w-4 h-4 text-emerald-400" />}
                   <span>{editingSingleAccount.shortName}</span>
@@ -3010,45 +3247,98 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
                     </p>
                   </div>
 
-                  <div className="grid grid-cols-2 gap-3 pt-1">
-                    <div>
-                      <label className="block text-amber-300 font-semibold mb-1">
-                        📅 Bill Cycle Tarikh (1–31)
-                      </label>
-                      <input
-                        type="number"
-                        min={1}
-                        max={31}
-                        required
-                        value={singleBillingDayInput}
-                        onChange={(e) => setSingleBillingDayInput(e.target.value)}
-                        className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white font-mono text-sm focus:border-amber-500 focus:outline-hidden"
-                      />
-                      <span className="text-[10px] text-slate-400 mt-1 block">
-                        Bill generate hone ki tarikh
-                      </span>
-                    </div>
-                    <div>
-                      <label className="block text-indigo-300 font-semibold mb-1">
-                        ⏰ Payment Due Tarikh (1–31)
-                      </label>
-                      <input
-                        type="number"
-                        min={1}
-                        max={31}
-                        required
-                        value={singleDueDayInput}
-                        onChange={(e) => setSingleDueDayInput(e.target.value)}
-                        className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white font-mono text-sm focus:border-indigo-500 focus:outline-hidden"
-                      />
-                      <span className="text-[10px] text-slate-400 mt-1 block">
-                        Last payment due tarikh
-                      </span>
-                    </div>
-                  </div>
-                  <p className="text-[10px] text-slate-400 bg-slate-950/70 border border-slate-800 rounded-lg px-2.5 py-2">
-                    💡 Sirf Bill Cycle ya Limit badalne par aapka running due / transactions reset nahi honge. Statement export bhi naye bill cycle ke hisab se chalega.
-                  </p>
+                  {(() => {
+                    const singleCurPreview = getCardBillCycleForPaymentMonth(
+                      defaultCycleMonth,
+                      Number(singleBillingDayInput) || 15,
+                      Number(singleDueDayInput) || 5,
+                      Number(singleStartDayInput) || undefined
+                    );
+                    const singleNextPreview = getCardBillCycleForPaymentMonth(
+                      nextCycleMonth,
+                      Number(singleBillingDayInput) || 15,
+                      Number(singleDueDayInput) || 5,
+                      Number(singleStartDayInput) || undefined
+                    );
+                    return (
+                      <>
+                        <div className="grid grid-cols-3 gap-2.5 pt-1">
+                          <div>
+                            <label className="block text-emerald-300 font-semibold mb-1 text-[11px]">
+                              🟢 Start Date (1–31)
+                            </label>
+                            <input
+                              type="number"
+                              min={1}
+                              max={31}
+                              required
+                              value={singleStartDayInput}
+                              onChange={(e) => setSingleStartDayInput(e.target.value)}
+                              className="w-full bg-slate-950 border border-slate-700 rounded-xl px-2.5 py-2 text-white font-mono text-sm focus:border-emerald-500 focus:outline-hidden"
+                            />
+                            <span className="text-[9.5px] text-slate-400 mt-1 block">
+                              Cycle shuru tarikh
+                            </span>
+                          </div>
+                          <div>
+                            <label className="block text-amber-300 font-semibold mb-1 text-[11px]">
+                              🔴 End Date (1–31)
+                            </label>
+                            <input
+                              type="number"
+                              min={1}
+                              max={31}
+                              required
+                              value={singleBillingDayInput}
+                              onChange={(e) => setSingleBillingDayInput(e.target.value)}
+                              className="w-full bg-slate-950 border border-slate-700 rounded-xl px-2.5 py-2 text-white font-mono text-sm focus:border-amber-500 focus:outline-hidden"
+                            />
+                            <span className="text-[9.5px] text-slate-400 mt-1 block">
+                              Bill close tarikh
+                            </span>
+                          </div>
+                          <div>
+                            <label className="block text-indigo-300 font-semibold mb-1 text-[11px]">
+                              ⏰ Due Date (1–31)
+                            </label>
+                            <input
+                              type="number"
+                              min={1}
+                              max={31}
+                              required
+                              value={singleDueDayInput}
+                              onChange={(e) => setSingleDueDayInput(e.target.value)}
+                              className="w-full bg-slate-950 border border-slate-700 rounded-xl px-2.5 py-2 text-white font-mono text-sm focus:border-indigo-500 focus:outline-hidden"
+                            />
+                            <span className="text-[9.5px] text-slate-400 mt-1 block">
+                              Payment due tarikh
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="bg-slate-950/90 border border-indigo-500/30 rounded-xl p-3 space-y-1.5 text-[10.5px]">
+                          <div className="text-[10px] font-bold uppercase tracking-wider text-indigo-300">
+                            Live Card Reserve Routing Preview
+                          </div>
+                          <div className="flex items-center justify-between gap-2 text-amber-200">
+                            <span>📌 Current ({defaultCycleMonth}) Reserve:</span>
+                            <span className="font-mono font-bold text-right">
+                              {singleCurPreview.cycleLabel} → Due {singleCurPreview.dueLabel}
+                            </span>
+                          </div>
+                          <div className="flex items-center justify-between gap-2 text-cyan-200">
+                            <span>⏭️ Next ({nextCycleMonth}) Reserve:</span>
+                            <span className="font-mono font-bold text-right">
+                              {singleNextPreview.cycleLabel} → Due {singleNextPreview.dueLabel}
+                            </span>
+                          </div>
+                          <p className="text-[9.5px] text-slate-400 pt-1 border-t border-white/[0.06]">
+                            💡 Start se End ke beech ke transactions jinka Due Date current month me aata hai wo Current Card Reserve me jayenge, baaki Next Month Reserve me.
+                          </p>
+                        </div>
+                      </>
+                    );
+                  })()}
                 </>
               ) : (
                 <div>

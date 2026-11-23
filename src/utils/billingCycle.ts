@@ -9,11 +9,13 @@ import {
 
 export interface CardBillCycleWindow {
   paymentMonth: string; // YYYY-MM (the month in which this bill payment is due)
-  startDate: string; // YYYY-MM-DD (inclusive)
+  startDate: string; // YYYY-MM-DD
   endDate: string; // YYYY-MM-DD (inclusive)
   dueDate: string; // YYYY-MM-DD
+  billingStartDay: number;
   billingDay: number;
   paymentDueDay: number;
+  exclusiveStart?: boolean; // true only when startDay === endDay to avoid double-counting boundary day
   cycleLabel: string; // e.g. "13 Oct – 12 Nov"
   dueLabel: string; // e.g. "30 Nov"
 }
@@ -69,51 +71,76 @@ function shiftMonth(year: number, month1Based: number, deltaMonths: number): { y
   return { year: d.getFullYear(), month: d.getMonth() + 1 };
 }
 
+export function getNextMonthKey(monthKey: string): string {
+  const [yRaw, mRaw] = monthKey.split('-').map(Number);
+  const now = new Date();
+  const year = !isNaN(yRaw) && yRaw > 2000 ? yRaw : now.getFullYear();
+  const month = !isNaN(mRaw) && mRaw >= 1 && mRaw <= 12 ? mRaw : now.getMonth() + 1;
+  const next = shiftMonth(year, month, 1);
+  return `${next.year}-${pad2(next.month)}`;
+}
+
+export function getDefaultBillingStartDay(billingEndDay?: number): number {
+  const endDay = Math.min(31, Math.max(1, Math.round(Number(billingEndDay) || 15)));
+  return endDay >= 31 ? 1 : endDay + 1;
+}
+
 /**
- * Computes the statement billing cycle window whose payment is due in `paymentMonth` (YYYY-MM).
+ * Computes the statement billing cycle window (Start Date, End Date, Due Date)
+ * whose payment is DUE in `paymentMonth` (YYYY-MM).
  *
- * Example 1 (billingDay = 12, paymentDueDay = 30, paymentMonth = '2026-11'):
- *   paymentDueDay (30) > billingDay (12) => bill closes in the SAME month (12 Nov 2026),
- *   covers 13 Oct 2026 to 12 Nov 2026, due 30 Nov 2026.
- *
- * Example 2 (billingDay = 18, paymentDueDay = 7, paymentMonth = '2026-11'):
- *   paymentDueDay (7) <= billingDay (18) => bill closed in the PREVIOUS month (18 Oct 2026),
- *   covers 19 Sep 2026 to 18 Oct 2026, due 07 Nov 2026.
+ * Rules:
+ * 1. Due Date determines the reserve month:
+ *    - If paymentDueDay > billingEndDay (e.g. End 12, Due 30): bill closes in the SAME month as Due Date.
+ *    - If paymentDueDay <= billingEndDay (e.g. End 18, Due 7): bill closed in the PREVIOUS month before Due Date.
+ * 2. Start Date vs End Date determines the cycle start month:
+ *    - If billingStartDay < billingEndDay (e.g. Start 1, End 25): cycle starts in the SAME month as End Date.
+ *    - If billingStartDay >= billingEndDay (e.g. Start 13, End 12 or Start 12, End 12): cycle starts in the PREVIOUS month.
  */
 export function getCardBillCycleForPaymentMonth(
   paymentMonth: string,
   billingDayInput?: number,
-  paymentDueDayInput?: number
+  paymentDueDayInput?: number,
+  billingStartDayInput?: number
 ): CardBillCycleWindow {
   const billingDay = Math.min(31, Math.max(1, Math.round(Number(billingDayInput) || 15)));
   const paymentDueDay = Math.min(31, Math.max(1, Math.round(Number(paymentDueDayInput) || 5)));
+  const rawStart = Number(billingStartDayInput);
+  const billingStartDay =
+    !isNaN(rawStart) && rawStart >= 1 && rawStart <= 31
+      ? Math.round(rawStart)
+      : getDefaultBillingStartDay(billingDay);
 
   const [yRaw, mRaw] = paymentMonth.split('-').map(Number);
   const now = new Date();
   const year = !isNaN(yRaw) && yRaw > 2000 ? yRaw : now.getFullYear();
   const month = !isNaN(mRaw) && mRaw >= 1 && mRaw <= 12 ? mRaw : now.getMonth() + 1;
 
-  // Statement end month: same month if due date is after billing date; previous month otherwise
+  // Statement end month: same month if due date is strictly after end date; previous month otherwise
   const endYM = paymentDueDay > billingDay ? { year, month } : shiftMonth(year, month, -1);
-  const prevEndYM = shiftMonth(endYM.year, endYM.month, -1);
+  // Statement start month: same month if startDay < endDay; previous month if startDay >= endDay
+  const startYM = billingStartDay < billingDay ? endYM : shiftMonth(endYM.year, endYM.month, -1);
 
+  const clampedStartDay = Math.min(billingStartDay, daysInMonth(startYM.year, startYM.month));
   const clampedEndDay = Math.min(billingDay, daysInMonth(endYM.year, endYM.month));
-  const clampedPrevEndDay = Math.min(billingDay, daysInMonth(prevEndYM.year, prevEndYM.month));
   const clampedDueDay = Math.min(paymentDueDay, daysInMonth(year, month));
 
-  // Cycle starts the day after previous statement closed (no double-counting across consecutive months)
-  const startDateObj = new Date(prevEndYM.year, prevEndYM.month - 1, clampedPrevEndDay + 1);
-  const startDate = formatYmd(startDateObj.getFullYear(), startDateObj.getMonth() + 1, startDateObj.getDate());
+  const startDate = formatYmd(startYM.year, startYM.month, clampedStartDay);
   const endDate = formatYmd(endYM.year, endYM.month, clampedEndDay);
   const dueDate = formatYmd(year, month, clampedDueDay);
+
+  // If user enters Start === End (e.g. Start 12, End 12), use (startDate, endDate] so the 12th is never double-counted across consecutive months
+  const exclusiveStart = billingStartDay === billingDay;
 
   return {
     paymentMonth: `${year}-${pad2(month)}`,
     startDate,
     endDate,
     dueDate,
+    billingStartDay,
     billingDay,
     paymentDueDay,
+    exclusiveStart,
     cycleLabel: `${formatShortDate(startDate)} – ${formatShortDate(endDate)}`,
     dueLabel: formatShortDate(dueDate),
   };
@@ -205,7 +232,8 @@ export function calculateMonthlyCardReserves(
     const cycle = getCardBillCycleForPaymentMonth(
       paymentMonth,
       meta?.billingDay ?? 15,
-      meta?.paymentDueDay ?? 5
+      meta?.paymentDueDay ?? 5,
+      meta?.billingStartDay
     );
 
     let cycleSpends = 0;
@@ -237,10 +265,11 @@ export function calculateMonthlyCardReserves(
         continue;
       }
 
-      // 2. Check card spends / merchant refunds strictly inside [cycle.startDate, cycle.endDate]
+      // 2. Check card spends / merchant refunds inside this cycle's Start Date -> End Date
       const txAcc = (tx.account || '').trim();
       if (txAcc !== cardId) continue;
-      if (tx.date < cycle.startDate || tx.date > cycle.endDate) continue;
+      const beforeStart = cycle.exclusiveStart ? tx.date <= cycle.startDate : tx.date < cycle.startDate;
+      if (beforeStart || tx.date > cycle.endDate) continue;
 
       if (tx.type === 'expense') {
         if (isExcludedWifeCardUdhaar(tx)) {

@@ -23,6 +23,7 @@ export interface AccountMeta {
   color: string;
   isUpiCapable?: boolean;
   creditLimit?: number;
+  billingStartDay?: number;
   billingDay?: number;
   paymentDueDay?: number;
   isCustom?: boolean;
@@ -182,6 +183,7 @@ export interface AccountBalanceInfo {
   creditLimit?: number;
   availableLimit?: number;
   currentOutstanding?: number;
+  billingStartDay?: number;
   billingDay?: number;
   paymentDueDay?: number;
   isWifeAccount?: boolean;
@@ -193,6 +195,7 @@ export interface AccountBalancesData {
   wifeBaseBalance: number;
   wifeBalanceSetTimestamp?: string;
   cardCreditLimits?: Record<string, number>;
+  cardBillingStartDays?: Record<string, number>;
   cardBillingDays?: Record<string, number>;
   cardPaymentDueDays?: Record<string, number>;
   customAccounts?: AccountMeta[];

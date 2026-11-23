@@ -10,6 +10,7 @@ export const DEFAULT_ACCOUNTS_CONFIG: Record<string, AccountMeta> = {
     color: '#f97316', // Orange
     isUpiCapable: true,
     creditLimit: 120000,
+    billingStartDay: 19,
     billingDay: 18,
     paymentDueDay: 7,
   },
@@ -21,6 +22,7 @@ export const DEFAULT_ACCOUNTS_CONFIG: Record<string, AccountMeta> = {
     badge: 'SBI CC',
     color: '#0284c7', // Sky Blue
     creditLimit: 150000,
+    billingStartDay: 13,
     billingDay: 12,
     paymentDueDay: 2,
   },
@@ -32,6 +34,7 @@ export const DEFAULT_ACCOUNTS_CONFIG: Record<string, AccountMeta> = {
     badge: 'SBI CC',
     color: '#2563eb', // Blue
     creditLimit: 100000,
+    billingStartDay: 25,
     billingDay: 24,
     paymentDueDay: 14,
   },
@@ -43,6 +46,7 @@ export const DEFAULT_ACCOUNTS_CONFIG: Record<string, AccountMeta> = {
     badge: 'Axis CC',
     color: '#9333ea', // Purple
     creditLimit: 180000,
+    billingStartDay: 16,
     billingDay: 15,
     paymentDueDay: 5,
   },
@@ -54,6 +58,7 @@ export const DEFAULT_ACCOUNTS_CONFIG: Record<string, AccountMeta> = {
     badge: 'Axis CC',
     color: '#a855f7', // Violet
     creditLimit: 90000,
+    billingStartDay: 21,
     billingDay: 20,
     paymentDueDay: 10,
   },
@@ -65,6 +70,7 @@ export const DEFAULT_ACCOUNTS_CONFIG: Record<string, AccountMeta> = {
     badge: 'ICICI CC',
     color: '#e11d48', // Rose / Red
     creditLimit: 150000,
+    billingStartDay: 21,
     billingDay: 20,
     paymentDueDay: 10,
   },
@@ -76,6 +82,7 @@ export const DEFAULT_ACCOUNTS_CONFIG: Record<string, AccountMeta> = {
     badge: 'Wife CC',
     color: '#ec4899', // Pink
     creditLimit: 100000,
+    billingStartDay: 16,
     billingDay: 15,
     paymentDueDay: 5,
     isWifeAccount: true,
@@ -100,10 +107,10 @@ export const DEFAULT_ACCOUNTS_CONFIG: Record<string, AccountMeta> = {
   },
   'Wife Account': {
     id: 'Wife Account',
-    name: "Wife's Bank / Savings Account",
-    shortName: 'Wife Account',
+    name: "Wife's Savings A/c",
+    shortName: "Wife's Savings",
     type: 'bank_account',
-    badge: 'Wife Bank',
+    badge: 'Wife Savings',
     color: '#db2777', // Deep Pink
     isUpiCapable: true,
     isWifeAccount: true,
@@ -122,6 +129,7 @@ const CUSTOM_ACCOUNTS_STORAGE_KEY = 'hisab_custom_accounts_v1';
 const ACCOUNT_CYCLES_STORAGE_KEY = 'hisab_account_cycle_overrides_v1';
 
 interface AccountCycleOverrides {
+  billingStartDays: Record<string, number>;
   billingDays: Record<string, number>;
   paymentDueDays: Record<string, number>;
 }
@@ -138,6 +146,7 @@ function loadSavedCycleOverrides(): AccountCycleOverrides {
       if (raw) {
         const parsed = JSON.parse(raw);
         return {
+          billingStartDays: parsed?.billingStartDays && typeof parsed.billingStartDays === 'object' ? parsed.billingStartDays : {},
           billingDays: parsed?.billingDays && typeof parsed.billingDays === 'object' ? parsed.billingDays : {},
           paymentDueDays: parsed?.paymentDueDays && typeof parsed.paymentDueDays === 'object' ? parsed.paymentDueDays : {},
         };
@@ -146,13 +155,14 @@ function loadSavedCycleOverrides(): AccountCycleOverrides {
   } catch {
     // ignore storage errors
   }
-  return { billingDays: {}, paymentDueDays: {} };
+  return { billingStartDays: {}, billingDays: {}, paymentDueDays: {} };
 }
 
 function rebuildAccountExports(
   customList: AccountMeta[],
   cardBillingDays?: Record<string, number>,
-  cardPaymentDueDays?: Record<string, number>
+  cardPaymentDueDays?: Record<string, number>,
+  cardBillingStartDays?: Record<string, number>
 ) {
   // Clear existing keys in ACCOUNTS_CONFIG
   for (const key of Object.keys(ACCOUNTS_CONFIG)) {
@@ -170,7 +180,7 @@ function rebuildAccountExports(
       }
     }
   }
-  // Apply billingDay / paymentDueDay overrides
+  // Apply billingDay / paymentDueDay / billingStartDay overrides
   if (cardBillingDays && typeof cardBillingDays === 'object') {
     for (const [accId, dayVal] of Object.entries(cardBillingDays)) {
       const day = Math.round(Number(dayVal));
@@ -184,6 +194,14 @@ function rebuildAccountExports(
       const day = Math.round(Number(dayVal));
       if (ACCOUNTS_CONFIG[accId] && !isNaN(day) && day >= 1 && day <= 31) {
         ACCOUNTS_CONFIG[accId] = { ...ACCOUNTS_CONFIG[accId], paymentDueDay: day };
+      }
+    }
+  }
+  if (cardBillingStartDays && typeof cardBillingStartDays === 'object') {
+    for (const [accId, dayVal] of Object.entries(cardBillingStartDays)) {
+      const day = Math.round(Number(dayVal));
+      if (ACCOUNTS_CONFIG[accId] && !isNaN(day) && day >= 1 && day <= 31) {
+        ACCOUNTS_CONFIG[accId] = { ...ACCOUNTS_CONFIG[accId], billingStartDay: day };
       }
     }
   }
@@ -218,10 +236,14 @@ export function loadSavedCustomAccounts(): AccountMeta[] {
 export function syncCustomAccounts(
   customList?: AccountMeta[],
   cardBillingDays?: Record<string, number>,
-  cardPaymentDueDays?: Record<string, number>
+  cardPaymentDueDays?: Record<string, number>,
+  cardBillingStartDays?: Record<string, number>
 ) {
   const safeList = Array.isArray(customList) ? customList : loadSavedCustomAccounts();
   const savedCycles = loadSavedCycleOverrides();
+  const effectiveBillingStartDays = cardBillingStartDays && typeof cardBillingStartDays === 'object'
+    ? cardBillingStartDays
+    : savedCycles.billingStartDays;
   const effectiveBillingDays = cardBillingDays && typeof cardBillingDays === 'object'
     ? cardBillingDays
     : savedCycles.billingDays;
@@ -234,22 +256,31 @@ export function syncCustomAccounts(
       if (Array.isArray(customList)) {
         window.localStorage.setItem(CUSTOM_ACCOUNTS_STORAGE_KEY, JSON.stringify(safeList));
       }
-      if (cardBillingDays || cardPaymentDueDays) {
+      if (cardBillingDays || cardPaymentDueDays || cardBillingStartDays) {
         window.localStorage.setItem(
           ACCOUNT_CYCLES_STORAGE_KEY,
-          JSON.stringify({ billingDays: effectiveBillingDays, paymentDueDays: effectiveDueDays })
+          JSON.stringify({
+            billingStartDays: effectiveBillingStartDays,
+            billingDays: effectiveBillingDays,
+            paymentDueDays: effectiveDueDays,
+          })
         );
       }
     }
   } catch {
     // ignore storage errors
   }
-  rebuildAccountExports(safeList, effectiveBillingDays, effectiveDueDays);
+  rebuildAccountExports(safeList, effectiveBillingDays, effectiveDueDays, effectiveBillingStartDays);
 }
 
 // Initialize on module load from localStorage if available
 const initialCycles = loadSavedCycleOverrides();
-rebuildAccountExports(loadSavedCustomAccounts(), initialCycles.billingDays, initialCycles.paymentDueDays);
+rebuildAccountExports(
+  loadSavedCustomAccounts(),
+  initialCycles.billingDays,
+  initialCycles.paymentDueDays,
+  initialCycles.billingStartDays
+);
 
 /**
  * Helper: Check whether an account ID is a Credit / RuPay card

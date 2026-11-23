@@ -17,7 +17,8 @@ import {
   Pencil,
   Layers,
   RotateCcw,
-  Wallet
+  Wallet,
+  Download
 } from 'lucide-react';
 import { UdhaarRecord, AccountId } from '../types';
 import { ALL_ACCOUNTS, isWifeCardAccount, isWifeOwnedAccount } from '../utils/accounts';
@@ -72,6 +73,7 @@ export const UdhaarKhataView: React.FC<UdhaarKhataViewProps> = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [expandedPeople, setExpandedPeople] = useState<Record<string, boolean>>({});
+  const [csvToast, setCsvToast] = useState<string | null>(null);
 
   // Full Record Editing Modal State (Amount, Person Name, Date, Type, Description)
   const [editingRecord, setEditingRecord] = useState<UdhaarRecord | null>(null);
@@ -348,8 +350,125 @@ export const UdhaarKhataView: React.FC<UdhaarKhataViewProps> = ({
     return `₹${val.toLocaleString('en-IN')}`;
   };
 
+  // CSV cell sanitizer (RFC 4180 + neutralizes spreadsheet formula injection)
+  const escapeCsvCell = (value: unknown): string => {
+    if (value === null || value === undefined) return '';
+    if (typeof value === 'number') {
+      return Number.isFinite(value) ? String(value) : '';
+    }
+    let str = String(value).replace(/\r\n|\r|\n/g, ' ').trim();
+    if (/^[=+\-@\t]/.test(str)) {
+      str = `'${str}`;
+    }
+    if (/[",]/.test(str)) {
+      return `"${str.replace(/"/g, '""')}"`;
+    }
+    return str;
+  };
+
+  const handleDownloadUdhaarCsv = (
+    targetRecords: UdhaarRecord[],
+    labelSuffix: string = 'All'
+  ) => {
+    if (!targetRecords || targetRecords.length === 0) {
+      setCsvToast('⚠️ Download karne ke liye koi Udhaar record nahi hai.');
+      setTimeout(() => setCsvToast(null), 3000);
+      return;
+    }
+
+    const sorted = [...targetRecords].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+    const headers = [
+      'Date',
+      'Time',
+      'Person Name',
+      'Type',
+      'Original Amount (INR)',
+      'Settled Amount (INR)',
+      'Pending Amount (INR)',
+      'Status',
+      'Source Account',
+      'Settled Account',
+      'Settled Date',
+      'Description',
+      'Settlement History',
+    ];
+
+    let totalLentPending = 0;
+    let totalBorrowedPending = 0;
+    let totalSettledSum = 0;
+
+    const rows = sorted.map((r) => {
+      const origAmt = Number(r.amount) || 0;
+      const settledAmt = r.status === 'settled' ? origAmt : Math.min(origAmt, Math.max(0, Number(r.settledAmount) || 0));
+      const pendingAmt = getRemainingAmount(r);
+      const statusLabel = r.status === 'settled' ? 'Settled' : settledAmt > 0 ? 'Partial' : 'Pending';
+      const typeLabel = r.type === 'lent' ? 'Lena Hai (Lent)' : 'Dena Hai (Borrowed)';
+
+      if (r.status !== 'settled') {
+        if (r.type === 'lent') totalLentPending += pendingAmt;
+        else totalBorrowedPending += pendingAmt;
+      }
+      totalSettledSum += settledAmt;
+
+      const historyText = Array.isArray(r.settlementHistory) && r.settlementHistory.length > 0
+        ? r.settlementHistory
+            .map((sh) => `${sh.date || ''}: Rs.${Number(sh.amount) || 0} via ${sh.account || ''}${sh.notes ? ` (${sh.notes})` : ''}`)
+            .join(' | ')
+        : '';
+
+      return [
+        r.date || '',
+        r.time || '',
+        r.personName || '',
+        typeLabel,
+        origAmt,
+        settledAmt,
+        pendingAmt,
+        statusLabel,
+        r.account || '',
+        r.settledInAccount || '',
+        r.settledAt ? String(r.settledAt).split('T')[0] : '',
+        r.description || '',
+        historyText,
+      ].map(escapeCsvCell).join(',');
+    });
+
+    const summaryRows = [
+      '',
+      ['SUMMARY', `Scope: ${labelSuffix}`, `Total Records: ${sorted.length}`].map(escapeCsvCell).join(','),
+      ['Total Lena Hai (Pending)', '', '', '', '', '', totalLentPending].map(escapeCsvCell).join(','),
+      ['Total Dena Hai (Pending)', '', '', '', '', '', totalBorrowedPending].map(escapeCsvCell).join(','),
+      ['Net Udhaar Position (Lena - Dena)', '', '', '', '', '', totalLentPending - totalBorrowedPending].map(escapeCsvCell).join(','),
+      ['Total Settled Amount', '', '', '', '', totalSettledSum].map(escapeCsvCell).join(','),
+    ];
+
+    const csvContent = '\uFEFF' + [headers.map(escapeCsvCell).join(','), ...rows, ...summaryRows].join('\r\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const todayStr = new Date().toISOString().split('T')[0];
+    const safeSlug = labelSuffix.replace(/[^a-zA-Z0-9_-]+/g, '_').replace(/^_+|_+$/g, '') || 'All';
+    const fileName = `Udhaar_Statement_${safeSlug}_${todayStr}.csv`;
+
+    const link = document.createElement('a');
+    link.href = url;
+    link.setAttribute('download', fileName);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+
+    setCsvToast(`✅ Udhaar CSV downloaded: ${fileName} (${sorted.length} entries)`);
+    setTimeout(() => setCsvToast(null), 4000);
+  };
+
   return (
     <div className="space-y-6">
+      {csvToast && (
+        <div className="fixed top-5 right-5 z-50 bg-emerald-950 border border-emerald-500/50 text-emerald-200 px-4 py-3 rounded-xl shadow-2xl flex items-center gap-2 text-xs font-semibold animate-in slide-in-from-top-3">
+          <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+          <span>{csvToast}</span>
+        </div>
+      )}
       
       {/* Top Banner / Hero Summary with Glassy Aesthetics */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
@@ -418,13 +537,41 @@ export const UdhaarKhataView: React.FC<UdhaarKhataViewProps> = ({
             Telegram par sidhe bhejein: <code className="bg-black/40 px-1.5 py-0.5 rounded text-indigo-300 border border-white/[0.06]">2000 diya Jiju ko</code> ya <code className="bg-black/40 px-1.5 py-0.5 rounded text-indigo-300 border border-white/[0.06]">date change Jiju 14 Sep</code>
           </span>
         </div>
-        <button
-          onClick={() => setIsAddModalOpen(true)}
-          className="w-full sm:w-auto px-4 py-2 bg-gradient-to-r from-indigo-600 to-indigo-500 hover:from-indigo-500 hover:to-indigo-400 text-white font-semibold rounded-xl flex items-center justify-center space-x-1.5 cursor-pointer shadow-md shadow-indigo-600/30 transition-all shrink-0 active:scale-95"
-        >
-          <Plus className="w-3.5 h-3.5" />
-          <span>Naya Udhaar Likhein</span>
-        </button>
+        <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto justify-end shrink-0">
+          <button
+            type="button"
+            onClick={() => handleDownloadUdhaarCsv(safeRecords, 'All')}
+            disabled={safeRecords.length === 0}
+            className="flex-1 sm:flex-initial px-3.5 py-2 bg-emerald-600/20 hover:bg-emerald-600/35 text-emerald-300 border border-emerald-500/40 font-semibold rounded-xl flex items-center justify-center space-x-1.5 cursor-pointer transition-all active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed"
+            title="Pura Udhaar Khata Statement CSV me download karein"
+          >
+            <Download className="w-3.5 h-3.5" />
+            <span>CSV Statement</span>
+          </button>
+          {(filter !== 'all' || searchQuery.trim() !== '') && filteredRecords.length > 0 && filteredRecords.length !== safeRecords.length && (
+            <button
+              type="button"
+              onClick={() =>
+                handleDownloadUdhaarCsv(
+                  filteredRecords,
+                  searchQuery.trim() ? searchQuery.trim() : filter
+                )
+              }
+              className="flex-1 sm:flex-initial px-3 py-2 bg-cyan-600/20 hover:bg-cyan-600/35 text-cyan-300 border border-cyan-500/40 font-semibold rounded-xl flex items-center justify-center space-x-1.5 cursor-pointer transition-all active:scale-95"
+              title="Sirf current filtered records CSV me download karein"
+            >
+              <Download className="w-3.5 h-3.5" />
+              <span>Filtered ({filteredRecords.length})</span>
+            </button>
+          )}
+          <button
+            onClick={() => setIsAddModalOpen(true)}
+            className="flex-1 sm:flex-initial px-4 py-2 bg-gradient-to-r from-indigo-600 to-indigo-500 hover:from-indigo-500 hover:to-indigo-400 text-white font-semibold rounded-xl flex items-center justify-center space-x-1.5 cursor-pointer shadow-md shadow-indigo-600/30 transition-all active:scale-95"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            <span>Naya Udhaar Likhein</span>
+          </button>
+        </div>
       </div>
 
       {/* Controls Bar: View Switcher, Filter Pills & Search */}
@@ -609,6 +756,14 @@ export const UdhaarKhataView: React.FC<UdhaarKhataViewProps> = ({
                     </div>
 
                     <div className="flex items-center space-x-1.5">
+                      <button
+                        type="button"
+                        onClick={() => handleDownloadUdhaarCsv(group.entries, group.displayName)}
+                        className="p-2 rounded-xl bg-cyan-950/70 hover:bg-cyan-900 text-cyan-300 border border-cyan-500/30 cursor-pointer transition-colors"
+                        title={`${group.displayName} ka Udhaar Statement CSV download karein`}
+                      >
+                        <Download className="w-4 h-4" />
+                      </button>
                       {group.pendingCount > 0 && isLena && (
                         <button
                           onClick={() => handleShareWhatsApp(group.displayName, group.netDue, group.entries)}

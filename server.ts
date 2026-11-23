@@ -759,6 +759,7 @@ interface UserDataStore {
   wifeBaseBalance?: number;
   wifeBalanceSetTimestamp?: string;
   cardCreditLimits?: Record<string, number>;
+  cardBillingStartDays?: Record<string, number>;
   cardBillingDays?: Record<string, number>;
   cardPaymentDueDays?: Record<string, number>;
   customAccounts?: Array<{
@@ -770,6 +771,7 @@ interface UserDataStore {
     color: string;
     isUpiCapable?: boolean;
     creditLimit?: number;
+    billingStartDay?: number;
     billingDay?: number;
     paymentDueDay?: number;
     isWifeAccount?: boolean;
@@ -3083,6 +3085,7 @@ const ACCOUNTS_META: Record<string, {
   badge: string;
   color: string;
   creditLimit?: number;
+  billingStartDay?: number;
   billingDay?: number;
   paymentDueDay?: number;
   isWifeAccount?: boolean;
@@ -3095,6 +3098,7 @@ const ACCOUNTS_META: Record<string, {
     badge: 'RuPay CC',
     color: '#f97316',
     creditLimit: 120000,
+    billingStartDay: 19,
     billingDay: 18,
     paymentDueDay: 7,
   },
@@ -3106,6 +3110,7 @@ const ACCOUNTS_META: Record<string, {
     badge: 'SBI CC',
     color: '#0284c7',
     creditLimit: 150000,
+    billingStartDay: 13,
     billingDay: 12,
     paymentDueDay: 2,
   },
@@ -3117,6 +3122,7 @@ const ACCOUNTS_META: Record<string, {
     badge: 'SBI CC',
     color: '#2563eb',
     creditLimit: 100000,
+    billingStartDay: 25,
     billingDay: 24,
     paymentDueDay: 14,
   },
@@ -3128,6 +3134,7 @@ const ACCOUNTS_META: Record<string, {
     badge: 'Axis CC',
     color: '#9333ea',
     creditLimit: 180000,
+    billingStartDay: 16,
     billingDay: 15,
     paymentDueDay: 5,
   },
@@ -3139,6 +3146,7 @@ const ACCOUNTS_META: Record<string, {
     badge: 'Axis CC',
     color: '#a855f7',
     creditLimit: 90000,
+    billingStartDay: 21,
     billingDay: 20,
     paymentDueDay: 10,
   },
@@ -3150,6 +3158,7 @@ const ACCOUNTS_META: Record<string, {
     badge: 'ICICI CC',
     color: '#e11d48',
     creditLimit: 150000,
+    billingStartDay: 21,
     billingDay: 20,
     paymentDueDay: 10,
   },
@@ -3161,6 +3170,7 @@ const ACCOUNTS_META: Record<string, {
     badge: 'Wife CC',
     color: '#ec4899',
     creditLimit: 100000,
+    billingStartDay: 16,
     billingDay: 15,
     paymentDueDay: 5,
     isWifeAccount: true,
@@ -3183,10 +3193,10 @@ const ACCOUNTS_META: Record<string, {
   },
   'Wife Account': {
     id: 'Wife Account',
-    name: "Wife's Bank / Savings Account",
-    shortName: 'Wife Account',
+    name: "Wife's Savings A/c",
+    shortName: "Wife's Savings",
     type: 'bank_account',
-    badge: 'Wife Bank',
+    badge: 'Wife Savings',
     color: '#db2777',
     isWifeAccount: true,
   },
@@ -3205,6 +3215,7 @@ export function calculateAccountsBalances(userId: string) {
   const baseBalances = store.accountBaseBalances || {};
   const baseTimestamps = store.accountBalanceSetTimestamps || {};
   const cardLimits = store.cardCreditLimits || {};
+  const cardBillingStartDays = store.cardBillingStartDays || {};
   const cardBillingDays = store.cardBillingDays || {};
   const cardPaymentDueDays = store.cardPaymentDueDays || {};
   const wifeBase = Number(store.wifeBaseBalance) || 0;
@@ -3227,6 +3238,7 @@ export function calculateAccountsBalances(userId: string) {
     badge: string;
     color: string;
     creditLimit?: number;
+    billingStartDay?: number;
     billingDay?: number;
     paymentDueDay?: number;
     isWifeAccount?: boolean;
@@ -3306,6 +3318,9 @@ export function calculateAccountsBalances(userId: string) {
       const creditLimit = (customLimit && customLimit > 0) ? customLimit : (meta.creditLimit || 100000);
       const overrideBilling = Math.round(Number(cardBillingDays[accId]));
       const billingDay = (!isNaN(overrideBilling) && overrideBilling >= 1 && overrideBilling <= 31) ? overrideBilling : meta.billingDay;
+      const overrideStart = Math.round(Number(cardBillingStartDays[accId]));
+      const fallbackStart = billingDay ? (billingDay >= 31 ? 1 : billingDay + 1) : 16;
+      const billingStartDay = (!isNaN(overrideStart) && overrideStart >= 1 && overrideStart <= 31) ? overrideStart : (meta.billingStartDay ?? fallbackStart);
       const overrideDue = Math.round(Number(cardPaymentDueDays[accId]));
       const paymentDueDay = (!isNaN(overrideDue) && overrideDue >= 1 && overrideDue <= 31) ? overrideDue : meta.paymentDueDay;
       const currentOutstanding = Math.round((Math.max(0, base + debits - credits) + Number.EPSILON) * 100) / 100;
@@ -3325,6 +3340,7 @@ export function calculateAccountsBalances(userId: string) {
         creditLimit,
         availableLimit,
         currentOutstanding,
+        billingStartDay,
         billingDay,
         paymentDueDay,
         isWifeAccount: Boolean(meta.isWifeAccount),
@@ -3349,7 +3365,10 @@ export function calculateAccountsBalances(userId: string) {
         isWifeAccount: Boolean(meta.isWifeAccount),
       };
 
-      totalBankCashBalance += currentBalance;
+      // Wife's Savings A/c is tracked in its dedicated Heart card (wifeSavings), not double-counted into ICICI + Axis + Cash
+      if (accId !== 'Wife Account') {
+        totalBankCashBalance += currentBalance;
+      }
     }
   }
 
@@ -3357,8 +3376,14 @@ export function calculateAccountsBalances(userId: string) {
   totalCardAvailableLimit = Math.round((totalCardAvailableLimit + Number.EPSILON) * 100) / 100;
   totalCardOutstanding = Math.round((totalCardOutstanding + Number.EPSILON) * 100) / 100;
 
-  // Calculate Wife Savings Balance:
-  const wifeBaseTimeMs = wifeBaseTimestamp ? new Date(wifeBaseTimestamp).getTime() : 0;
+  // Unified Wife's Savings A/c Balance (single source of truth combining Base + Transfers + direct Wife Account tx credits/debits)
+  const effectiveWifeBase =
+    store.wifeBaseBalance !== undefined
+      ? (Number(store.wifeBaseBalance) || 0)
+      : (Number(baseBalances['Wife Account']) || 0);
+  const effectiveWifeTimestamp = wifeBaseTimestamp || baseTimestamps['Wife Account'];
+  const wifeBaseTimeMs = effectiveWifeTimestamp ? new Date(effectiveWifeTimestamp).getTime() : 0;
+
   let totalTransferred = 0;
   for (const s of savingsTransfers) {
     const sTimeMs = s.createdAt ? new Date(s.createdAt).getTime() : (s.date ? new Date(s.date).getTime() : 0);
@@ -3383,7 +3408,38 @@ export function calculateAccountsBalances(userId: string) {
     }
   }
 
-  const wifeCurrentBalance = wifeBase + totalTransferred;
+  let directWifeCredits = 0;
+  let directWifeDebits = 0;
+  for (const t of txs) {
+    if ((t.account || '') !== 'Wife Account') continue;
+    const isTransferEntry = Boolean(
+      t.isSavingsTransfer || t.isWifeTransfer || t.category === 'Wife Transfer' || t.category?.toLowerCase() === 'wife transfer'
+    );
+    if (isTransferEntry) continue;
+    const tTimeMs = t.createdAt ? new Date(t.createdAt).getTime() : (t.date ? new Date(t.date).getTime() : 0);
+    if (wifeBaseTimeMs > 0 && tTimeMs > 0 && tTimeMs < wifeBaseTimeMs) {
+      continue;
+    }
+    const amt = Number(t.amount) || 0;
+    if (t.type === 'income') {
+      directWifeCredits += amt;
+    } else {
+      directWifeDebits += amt;
+    }
+  }
+
+  const wifeCurrentBalance =
+    Math.round((effectiveWifeBase + totalTransferred + directWifeCredits - directWifeDebits + Number.EPSILON) * 100) / 100;
+
+  if (accounts['Wife Account']) {
+    accounts['Wife Account'] = {
+      ...accounts['Wife Account'],
+      baseBalance: effectiveWifeBase,
+      credits: Math.round((totalTransferred + directWifeCredits + Number.EPSILON) * 100) / 100,
+      debits: Math.round((directWifeDebits + Number.EPSILON) * 100) / 100,
+      currentBalance: wifeCurrentBalance,
+    };
+  }
 
   if (needsSave) {
     saveUserData(userId, store);
@@ -3392,9 +3448,10 @@ export function calculateAccountsBalances(userId: string) {
   return {
     accountBaseBalances: baseBalances,
     accountBalanceSetTimestamps: store.accountBalanceSetTimestamps || {},
-    wifeBaseBalance: wifeBase,
-    wifeBalanceSetTimestamp: store.wifeBalanceSetTimestamp,
+    wifeBaseBalance: effectiveWifeBase,
+    wifeBalanceSetTimestamp: effectiveWifeTimestamp,
     cardCreditLimits: cardLimits,
+    cardBillingStartDays,
     cardBillingDays,
     cardPaymentDueDays,
     customAccounts: store.customAccounts || [],
@@ -3403,7 +3460,7 @@ export function calculateAccountsBalances(userId: string) {
     totalCardAvailableLimit,
     totalCardOutstanding,
     wifeSavings: {
-      baseBalance: wifeBase,
+      baseBalance: effectiveWifeBase,
       totalTransferred,
       currentBalance: wifeCurrentBalance,
     },
@@ -9175,6 +9232,7 @@ app.get('/api/transactions', (req, res) => {
   res.json({
     transactions: store.transactions,
     customAccounts: store.customAccounts || [],
+    cardBillingStartDays: store.cardBillingStartDays || {},
     cardBillingDays: store.cardBillingDays || {},
     cardPaymentDueDays: store.cardPaymentDueDays || {},
     summary,
@@ -9729,8 +9787,9 @@ app.get('/api/accounts/balances', (req, res) => {
 
 app.post('/api/accounts/balances', (req, res) => {
   const user = getRequestUser(req);
+  if (!user) return res.status(401).json({ error: 'User session required' });
   const store = getUserData(user.id);
-  const { accountBaseBalances, wifeBaseBalance, cardCreditLimits, cardBillingDays, cardPaymentDueDays } = req.body;
+  const { accountBaseBalances, wifeBaseBalance, cardCreditLimits, cardBillingStartDays, cardBillingDays, cardPaymentDueDays } = req.body;
   const nowIso = new Date().toISOString();
 
   if (accountBaseBalances && typeof accountBaseBalances === 'object') {
@@ -9739,8 +9798,13 @@ app.post('/api/accounts/balances', (req, res) => {
     for (const [acc, val] of Object.entries(accountBaseBalances)) {
       const num = Number(val);
       if (!isNaN(num)) {
-        store.accountBaseBalances[acc] = Math.max(0, num);
+        const cleanVal = Math.max(0, num);
+        store.accountBaseBalances[acc] = cleanVal;
         store.accountBalanceSetTimestamps[acc] = nowIso;
+        if (acc === 'Wife Account') {
+          store.wifeBaseBalance = cleanVal;
+          store.wifeBalanceSetTimestamp = nowIso;
+        }
       }
     }
   }
@@ -9751,6 +9815,20 @@ app.post('/api/accounts/balances', (req, res) => {
       const num = Number(lim);
       if (!isNaN(num) && num > 0) {
         store.cardCreditLimits[cardId] = num;
+      }
+    }
+  }
+
+  if (cardBillingStartDays && typeof cardBillingStartDays === 'object') {
+    if (!store.cardBillingStartDays) store.cardBillingStartDays = {};
+    for (const [cardId, dayVal] of Object.entries(cardBillingStartDays)) {
+      const num = Math.round(Number(dayVal));
+      if (!isNaN(num) && num >= 1 && num <= 31) {
+        store.cardBillingStartDays[cardId] = num;
+        if (Array.isArray(store.customAccounts)) {
+          const cAcc = store.customAccounts.find(a => a.id === cardId);
+          if (cAcc) cAcc.billingStartDay = num;
+        }
       }
     }
   }
@@ -9786,8 +9864,13 @@ app.post('/api/accounts/balances', (req, res) => {
   if (wifeBaseBalance !== undefined) {
     const num = Number(wifeBaseBalance);
     if (!isNaN(num)) {
-      store.wifeBaseBalance = Math.max(0, num);
+      const cleanVal = Math.max(0, num);
+      store.wifeBaseBalance = cleanVal;
       store.wifeBalanceSetTimestamp = nowIso;
+      if (!store.accountBaseBalances) store.accountBaseBalances = {};
+      if (!store.accountBalanceSetTimestamps) store.accountBalanceSetTimestamps = {};
+      store.accountBaseBalances['Wife Account'] = cleanVal;
+      store.accountBalanceSetTimestamps['Wife Account'] = nowIso;
     }
   }
 
@@ -9798,6 +9881,7 @@ app.post('/api/accounts/balances', (req, res) => {
 
 app.post('/api/accounts/custom', (req, res) => {
   const user = getRequestUser(req);
+  if (!user) return res.status(401).json({ error: 'User session required' });
   const store = getUserData(user.id);
   if (!store.customAccounts) store.customAccounts = [];
 
@@ -9810,6 +9894,7 @@ app.post('/api/accounts/custom', (req, res) => {
     color,
     isUpiCapable,
     creditLimit,
+    billingStartDay,
     billingDay,
     paymentDueDay,
     isWifeAccount,
@@ -9826,6 +9911,10 @@ app.post('/api/accounts/custom', (req, res) => {
   const accType = validTypes.includes(type) ? type : 'credit_card';
   const numLimit = Number(creditLimit) > 0 ? Number(creditLimit) : (accType === 'credit_card' || accType === 'rupay_card' ? 100000 : undefined);
   const clampedBillingDay = Math.min(31, Math.max(1, Math.round(Number(billingDay) || 15)));
+  const rawStart = Number(billingStartDay);
+  const clampedBillingStartDay = !isNaN(rawStart) && rawStart >= 1 && rawStart <= 31
+    ? Math.round(rawStart)
+    : (clampedBillingDay >= 31 ? 1 : clampedBillingDay + 1);
   const clampedPaymentDueDay = Math.min(31, Math.max(1, Math.round(Number(paymentDueDay) || 5)));
 
   const newMeta = {
@@ -9837,6 +9926,7 @@ app.post('/api/accounts/custom', (req, res) => {
     color: String(color || '#6366f1'),
     isUpiCapable: Boolean(isUpiCapable ?? (accType === 'rupay_card' || accType === 'bank_account')),
     creditLimit: numLimit,
+    billingStartDay: clampedBillingStartDay,
     billingDay: clampedBillingDay,
     paymentDueDay: clampedPaymentDueDay,
     isWifeAccount: Boolean(isWifeAccount),
@@ -9851,8 +9941,10 @@ app.post('/api/accounts/custom', (req, res) => {
   }
 
   if (accType === 'credit_card' || accType === 'rupay_card') {
+    if (!store.cardBillingStartDays) store.cardBillingStartDays = {};
     if (!store.cardBillingDays) store.cardBillingDays = {};
     if (!store.cardPaymentDueDays) store.cardPaymentDueDays = {};
+    store.cardBillingStartDays[accId] = clampedBillingStartDay;
     store.cardBillingDays[accId] = clampedBillingDay;
     store.cardPaymentDueDays[accId] = clampedPaymentDueDay;
   }

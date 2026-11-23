@@ -372,7 +372,10 @@ export const WealthKhataHub: React.FC<WealthKhataHubProps> = ({
     return total;
   }, [savingsTransfers, transactions]);
 
-  const wifeCurrentLiveBalance = wifeBaseBalance + totalSavingsTransferred;
+  const wifeCurrentLiveBalance =
+    balancesData?.wifeSavings?.currentBalance !== undefined
+      ? balancesData.wifeSavings.currentBalance
+      : wifeBaseBalance + totalSavingsTransferred;
 
   const getRemainingUdhaar = (u: UdhaarRecord) =>
     Math.max(0, (Number(u.amount) || 0) - (Number(u.settledAmount) || 0));
