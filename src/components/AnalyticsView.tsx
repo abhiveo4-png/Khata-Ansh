@@ -75,6 +75,10 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({ transactions }) =>
       if (!map[d]) {
         map[d] = { date: d, income: 0, expense: 0 };
       }
+      const isCcPaymentCredit = Boolean(
+        tx.isCardPaymentCredit ||
+        (tx.type === 'income' && (tx.isCcPayment || tx.category === 'CC Payment Credit'))
+      );
       const isRimInflow = Boolean(
         tx.isReimbursementInflow ||
         (tx.type === 'income' && (tx.isReimbursement || tx.category === 'Reimbursement' || tx.category === 'Reimbursement Received'))
@@ -87,10 +91,10 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({ transactions }) =>
         (tx.tags && tx.tags.includes('udhaar-lent'))
       );
       if (tx.type === 'income') {
-        if (!isRimInflow) {
+        if (!isRimInflow && !isCcPaymentCredit) {
           map[d].income += tx.amount;
         }
-      } else if (!isUdhaarLent) {
+      } else if (!isUdhaarLent && !tx.isCcPayment && tx.category !== 'CC Payment') {
         map[d].expense += tx.amount;
       }
     });

@@ -26,6 +26,7 @@ export interface AccountMeta {
   billingDay?: number;
   paymentDueDay?: number;
   isCustom?: boolean;
+  isWifeAccount?: boolean;
 }
 
 export interface LinkedMember {
@@ -100,6 +101,12 @@ export interface Transaction {
   isSavingsTransfer?: boolean;
   isWifeTransfer?: boolean;
   isCcPayment?: boolean;
+  isCardPaymentCredit?: boolean;
+  targetCardAccount?: AccountId | string;
+  sourceAccount?: AccountId | string;
+  ccPaymentFundingSource?: 'current_income' | 'previous_savings';
+  ccSettlementMode?: 'full' | 'partial';
+  ccSettlementCycleMonth?: string;
   isInvestment?: boolean;
   isUdhaarLent?: boolean;
   isUdhaarRecovery?: boolean;
@@ -175,6 +182,9 @@ export interface AccountBalanceInfo {
   creditLimit?: number;
   availableLimit?: number;
   currentOutstanding?: number;
+  billingDay?: number;
+  paymentDueDay?: number;
+  isWifeAccount?: boolean;
 }
 
 export interface AccountBalancesData {
@@ -183,6 +193,8 @@ export interface AccountBalancesData {
   wifeBaseBalance: number;
   wifeBalanceSetTimestamp?: string;
   cardCreditLimits?: Record<string, number>;
+  cardBillingDays?: Record<string, number>;
+  cardPaymentDueDays?: Record<string, number>;
   customAccounts?: AccountMeta[];
   accounts: Record<string, AccountBalanceInfo>;
   totalBankCashBalance: number;

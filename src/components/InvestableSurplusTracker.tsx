@@ -67,6 +67,17 @@ export const InvestableSurplusTracker: React.FC<InvestableSurplusTrackerProps> =
     }> = [];
 
     sorted.forEach((tx) => {
+      const isCcCredit = Boolean(
+        tx.isCardPaymentCredit ||
+        (tx.type === 'income' && (tx.isCcPayment || tx.category === 'CC Payment Credit'))
+      );
+      const accLower = String(tx.account || '').toLowerCase();
+      const isWifeCardUdhaar = Boolean(
+        tx.type === 'expense' &&
+        (tx.isUdhaarLent || tx.category === 'Udhaar Given') &&
+        (tx.account === 'AX CC 2904' || accLower.includes('2904'))
+      );
+      if (isCcCredit || isWifeCardUdhaar) return;
       if (tx.type === 'income') {
         runningIncome += tx.amount;
       } else {

@@ -27,7 +27,15 @@ import {
   RefreshCw
 } from 'lucide-react';
 import { Transaction, AccountId, CardEmi, UserRole, CategoryDef, AccountBalancesData, AccountMeta } from '../types';
-import { ACCOUNTS_CONFIG, ALL_ACCOUNTS, CREDIT_CARDS, BANK_ACCOUNTS, syncCustomAccounts } from '../utils/accounts';
+import {
+  ACCOUNTS_CONFIG,
+  ALL_ACCOUNTS,
+  CREDIT_CARDS,
+  BANK_ACCOUNTS,
+  syncCustomAccounts,
+  isWifeOwnedAccount,
+} from '../utils/accounts';
+import { calculateMonthlyCardReserves, getCardBillCycleForPaymentMonth } from '../utils/billingCycle';
 import { safeFetchJson } from '../utils/api';
 import { DEFAULT_CATEGORIES } from '../utils/categories';
 import { 
@@ -82,10 +90,26 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
   const [emiCardAccount, setEmiCardAccount] = useState<AccountId>('ICICI CC 0000');
   const [isSubmittingTx, setIsSubmittingTx] = useState(false);
 
+  const defaultCycleMonth = React.useMemo(() => {
+    if (selectedMonth && selectedMonth !== 'all' && /^\d{4}-\d{2}$/.test(selectedMonth)) {
+      return selectedMonth;
+    }
+    const now = new Date();
+    const utc = now.getTime() + now.getTimezoneOffset() * 60000;
+    const ist = new Date(utc + 3600000 * 5.5);
+    return `${ist.getFullYear()}-${String(ist.getMonth() + 1).padStart(2, '0')}`;
+  }, [selectedMonth]);
+
   const [isRecordBillPaymentOpen, setIsRecordBillPaymentOpen] = useState(false);
+  const [billTargetCard, setBillTargetCard] = useState<AccountId>('ICICI CC 0000');
   const [billAmount, setBillAmount] = useState('');
   const [billFromAccount, setBillFromAccount] = useState<AccountId>('AX Bank');
+  const [billFundingSource, setBillFundingSource] = useState<'current_income' | 'previous_savings'>('current_income');
+  const [billSettlementMode, setBillSettlementMode] = useState<'full' | 'partial'>('full');
+  const [billCycleMonth, setBillCycleMonth] = useState<string>(defaultCycleMonth);
+  const [billNotes, setBillNotes] = useState('');
   const [billDate, setBillDate] = useState(new Date().toISOString().split('T')[0]);
+  const [isSettlingCard, setIsSettlingCard] = useState(false);
 
   // Statement Export Modal & State
   const [isStatementModalOpen, setIsStatementModalOpen] = useState(false);
@@ -103,14 +127,21 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
   const [balancesData, setBalancesData] = useState<AccountBalancesData | null>(null);
   const [isBalancesModalOpen, setIsBalancesModalOpen] = useState(false);
   const [editBaseBalances, setEditBaseBalances] = useState<Record<string, string>>({});
+  const [initialEditBaseBalances, setInitialEditBaseBalances] = useState<Record<string, string>>({});
   const [editCardLimits, setEditCardLimits] = useState<Record<string, string>>({});
+  const [editCardBillingDays, setEditCardBillingDays] = useState<Record<string, string>>({});
+  const [editCardDueDays, setEditCardDueDays] = useState<Record<string, string>>({});
   const [editWifeBalance, setEditWifeBalance] = useState('');
+  const [initialEditWifeBalance, setInitialEditWifeBalance] = useState('');
   const [isSavingBalances, setIsSavingBalances] = useState(false);
 
   // Individual Account / Card Limit & Balance Modal State
   const [editingSingleAccount, setEditingSingleAccount] = useState<AccountMeta | null>(null);
   const [singleBaseInput, setSingleBaseInput] = useState('');
+  const [singleOriginalBase, setSingleOriginalBase] = useState('');
   const [singleLimitInput, setSingleLimitInput] = useState('');
+  const [singleBillingDayInput, setSingleBillingDayInput] = useState('');
+  const [singleDueDayInput, setSingleDueDayInput] = useState('');
   const [isSavingSingleAccount, setIsSavingSingleAccount] = useState(false);
 
   // Add New Card / Account Modal State
@@ -123,26 +154,40 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
   const [newCardBillingDay, setNewCardBillingDay] = useState('15');
   const [newCardDueDay, setNewCardDueDay] = useState('5');
   const [newCardColor, setNewCardColor] = useState('#ec4899');
+  const [newCardIsWifeAccount, setNewCardIsWifeAccount] = useState(false);
   const [isSavingNewCard, setIsSavingNewCard] = useState(false);
 
   const fetchBalances = async () => {
     const { data } = await safeFetchJson<AccountBalancesData>('/api/accounts/balances');
     if (data) {
-      if (data.customAccounts) {
-        syncCustomAccounts(data.customAccounts);
+      if (data.customAccounts || data.cardBillingDays || data.cardPaymentDueDays) {
+        syncCustomAccounts(data.customAccounts, data.cardBillingDays, data.cardPaymentDueDays);
       }
       setBalancesData(data);
       const initialMap: Record<string, string> = {};
       const initialLimits: Record<string, string> = {};
+      const initialBillingDays: Record<string, string> = {};
+      const initialDueDays: Record<string, string> = {};
       for (const acc of ALL_ACCOUNTS) {
         initialMap[acc.id] = String(data.accountBaseBalances?.[acc.id] ?? '');
         if (acc.type === 'credit_card' || acc.type === 'rupay_card') {
           initialLimits[acc.id] = String(data.cardCreditLimits?.[acc.id] || acc.creditLimit || 100000);
+          initialBillingDays[acc.id] = String(
+            data.cardBillingDays?.[acc.id] ?? data.accounts?.[acc.id]?.billingDay ?? acc.billingDay ?? 15
+          );
+          initialDueDays[acc.id] = String(
+            data.cardPaymentDueDays?.[acc.id] ?? data.accounts?.[acc.id]?.paymentDueDay ?? acc.paymentDueDay ?? 5
+          );
         }
       }
       setEditBaseBalances(initialMap);
+      setInitialEditBaseBalances(initialMap);
       setEditCardLimits(initialLimits);
-      setEditWifeBalance(String(data.wifeBaseBalance ?? ''));
+      setEditCardBillingDays(initialBillingDays);
+      setEditCardDueDays(initialDueDays);
+      const wifeVal = String(data.wifeBaseBalance ?? '');
+      setEditWifeBalance(wifeVal);
+      setInitialEditWifeBalance(wifeVal);
     }
   };
 
@@ -173,18 +218,20 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
           openingBalance: parseFloat(newCardOpeningBalance) || 0,
           billingDay: parseInt(newCardBillingDay, 10) || 15,
           paymentDueDay: parseInt(newCardDueDay, 10) || 5,
+          isWifeAccount: newCardIsWifeAccount,
         }),
       });
 
       if (data) {
-        if (data.customAccounts) {
-          syncCustomAccounts(data.customAccounts);
+        if (data.customAccounts || data.cardBillingDays || data.cardPaymentDueDays) {
+          syncCustomAccounts(data.customAccounts, data.cardBillingDays, data.cardPaymentDueDays);
         }
         setBalancesData(data);
         setSelectedAccountId(cleanShort);
         setNewCardShortName('');
         setNewCardFullName('');
         setNewCardOpeningBalance('0');
+        setNewCardIsWifeAccount(false);
         setIsAddCardModalOpen(false);
         setToastMessage(`✅ Naya Card "${cleanShort}" successfully add ho gaya!`);
         setTimeout(() => setToastMessage(null), 3500);
@@ -208,8 +255,8 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
         method: 'DELETE',
       });
       if (data) {
-        if (data.customAccounts) {
-          syncCustomAccounts(data.customAccounts);
+        if (data.customAccounts || data.cardBillingDays || data.cardPaymentDueDays) {
+          syncCustomAccounts(data.customAccounts, data.cardBillingDays, data.cardPaymentDueDays);
         }
         setBalancesData(data);
         if (selectedAccountId === cardId) {
@@ -250,8 +297,14 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
     const isCard = acc.type === 'credit_card' || acc.type === 'rupay_card';
     const currentBase = balancesData?.accountBaseBalances?.[acc.id] ?? liveInfo?.baseBalance ?? 0;
     const currentLimit = balancesData?.cardCreditLimits?.[acc.id] ?? liveInfo?.creditLimit ?? acc.creditLimit ?? 100000;
-    setSingleBaseInput(String(currentBase));
+    const currentBillingDay = balancesData?.cardBillingDays?.[acc.id] ?? liveInfo?.billingDay ?? acc.billingDay ?? 15;
+    const currentDueDay = balancesData?.cardPaymentDueDays?.[acc.id] ?? liveInfo?.paymentDueDay ?? acc.paymentDueDay ?? 5;
+    const baseStr = String(currentBase);
+    setSingleBaseInput(baseStr);
+    setSingleOriginalBase(baseStr);
     setSingleLimitInput(isCard ? String(currentLimit) : '');
+    setSingleBillingDayInput(isCard ? String(currentBillingDay) : '');
+    setSingleDueDayInput(isCard ? String(currentDueDay) : '');
   };
 
   const handleSaveSingleAccount = async (e: React.FormEvent) => {
@@ -261,13 +314,29 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
     try {
       const isCard = editingSingleAccount.type === 'credit_card' || editingSingleAccount.type === 'rupay_card';
       const baseVal = parseFloat(singleBaseInput) || 0;
-      const bodyPayload: Record<string, any> = {
-        accountBaseBalances: { [editingSingleAccount.id]: baseVal },
-      };
+      const origBaseVal = parseFloat(singleOriginalBase) || 0;
+      const baseChanged =
+        singleBaseInput.trim() !== singleOriginalBase.trim() &&
+        baseVal !== origBaseVal;
+      const hasNeverSetBase = balancesData?.accountBaseBalances?.[editingSingleAccount.id] === undefined && baseVal > 0;
+
+      const bodyPayload: Record<string, any> = {};
+      if (baseChanged || hasNeverSetBase) {
+        bodyPayload.accountBaseBalances = { [editingSingleAccount.id]: baseVal };
+      }
+
       if (isCard) {
         const limVal = parseFloat(singleLimitInput);
         if (!isNaN(limVal) && limVal > 0) {
           bodyPayload.cardCreditLimits = { [editingSingleAccount.id]: limVal };
+        }
+        const billNum = Math.round(Number(singleBillingDayInput));
+        if (!isNaN(billNum) && billNum >= 1 && billNum <= 31) {
+          bodyPayload.cardBillingDays = { [editingSingleAccount.id]: billNum };
+        }
+        const dueNum = Math.round(Number(singleDueDayInput));
+        if (!isNaN(dueNum) && dueNum >= 1 && dueNum <= 31) {
+          bodyPayload.cardPaymentDueDays = { [editingSingleAccount.id]: dueNum };
         }
       }
 
@@ -277,13 +346,23 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
         body: JSON.stringify(bodyPayload),
       });
       if (data) {
+        syncCustomAccounts(data.customAccounts, data.cardBillingDays, data.cardPaymentDueDays);
         setBalancesData(data);
-        setEditBaseBalances(prev => ({ ...prev, [editingSingleAccount.id]: String(baseVal) }));
+        if (bodyPayload.accountBaseBalances) {
+          setEditBaseBalances(prev => ({ ...prev, [editingSingleAccount.id]: String(baseVal) }));
+          setInitialEditBaseBalances(prev => ({ ...prev, [editingSingleAccount.id]: String(baseVal) }));
+        }
         if (isCard && bodyPayload.cardCreditLimits?.[editingSingleAccount.id]) {
           setEditCardLimits(prev => ({ ...prev, [editingSingleAccount.id]: String(bodyPayload.cardCreditLimits[editingSingleAccount.id]) }));
         }
+        if (isCard && bodyPayload.cardBillingDays?.[editingSingleAccount.id]) {
+          setEditCardBillingDays(prev => ({ ...prev, [editingSingleAccount.id]: String(bodyPayload.cardBillingDays[editingSingleAccount.id]) }));
+        }
+        if (isCard && bodyPayload.cardPaymentDueDays?.[editingSingleAccount.id]) {
+          setEditCardDueDays(prev => ({ ...prev, [editingSingleAccount.id]: String(bodyPayload.cardPaymentDueDays[editingSingleAccount.id]) }));
+        }
       }
-      setToastMessage(`✅ ${editingSingleAccount.shortName} ka ${isCard ? 'Limit & Due' : 'Base Balance'} update ho gaya!`);
+      setToastMessage(`✅ ${editingSingleAccount.shortName} ka ${isCard ? 'Limit, Bill Cycle & Due' : 'Base Balance'} update ho gaya!`);
       setTimeout(() => setToastMessage(null), 3500);
       setEditingSingleAccount(null);
       if (onRefreshTransactions) await onRefreshTransactions();
@@ -302,27 +381,57 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
     try {
       const payloadBalances: Record<string, number> = {};
       for (const [k, v] of Object.entries(editBaseBalances)) {
-        payloadBalances[k] = parseFloat(String(v || '')) || 0;
+        const strVal = String(v || '').trim();
+        const initVal = String(initialEditBaseBalances[k] || '').trim();
+        if (strVal !== initVal) {
+          payloadBalances[k] = parseFloat(strVal) || 0;
+        }
       }
       const payloadLimits: Record<string, number> = {};
       for (const [k, v] of Object.entries(editCardLimits)) {
         const lim = parseFloat(String(v || ''));
         if (!isNaN(lim) && lim > 0) payloadLimits[k] = lim;
       }
+      const payloadBillingDays: Record<string, number> = {};
+      for (const [k, v] of Object.entries(editCardBillingDays)) {
+        const dayNum = Math.round(Number(v));
+        if (!isNaN(dayNum) && dayNum >= 1 && dayNum <= 31) {
+          payloadBillingDays[k] = dayNum;
+        }
+      }
+      const payloadDueDays: Record<string, number> = {};
+      for (const [k, v] of Object.entries(editCardDueDays)) {
+        const dayNum = Math.round(Number(v));
+        if (!isNaN(dayNum) && dayNum >= 1 && dayNum <= 31) {
+          payloadDueDays[k] = dayNum;
+        }
+      }
+
+      const bodyPayload: Record<string, any> = {
+        cardCreditLimits: payloadLimits,
+        cardBillingDays: payloadBillingDays,
+        cardPaymentDueDays: payloadDueDays,
+      };
+      if (Object.keys(payloadBalances).length > 0) {
+        bodyPayload.accountBaseBalances = payloadBalances;
+      }
+      if (editWifeBalance.trim() !== initialEditWifeBalance.trim()) {
+        bodyPayload.wifeBaseBalance = parseFloat(editWifeBalance) || 0;
+      }
+
       const { data } = await safeFetchJson<AccountBalancesData>('/api/accounts/balances', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          accountBaseBalances: payloadBalances,
-          wifeBaseBalance: parseFloat(editWifeBalance) || 0,
-          cardCreditLimits: payloadLimits,
-        }),
+        body: JSON.stringify(bodyPayload),
       });
       if (data) {
+        syncCustomAccounts(data.customAccounts, data.cardBillingDays, data.cardPaymentDueDays);
         setBalancesData(data);
+        setInitialEditBaseBalances({ ...editBaseBalances });
+        setInitialEditWifeBalance(editWifeBalance);
       }
       setIsBalancesModalOpen(false);
-      setToastMessage('✅ Balances & Card Limits successfully save ho gaye!');
+      setToastMessage('✅ Balances, Limits & Bill Cycles successfully save ho gaye!');
       setTimeout(() => setToastMessage(null), 3500);
       if (onRefreshTransactions) await onRefreshTransactions();
     } catch (err) {
@@ -457,33 +566,99 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
     }
   };
 
+  const openCardSettleModal = (preferredCardId?: string) => {
+    const resolvedCard =
+      preferredCardId ||
+      (selectedAccountId !== 'all' &&
+      (ACCOUNTS_CONFIG[selectedAccountId]?.type === 'credit_card' ||
+        ACCOUNTS_CONFIG[selectedAccountId]?.type === 'rupay_card')
+        ? selectedAccountId
+        : CREDIT_CARDS[0]?.id || 'ICICI CC 0000');
+
+    setBillTargetCard(resolvedCard);
+    setBillCycleMonth(defaultCycleMonth);
+    setBillFundingSource('current_income');
+    setBillNotes('');
+    setBillDate(new Date().toISOString().split('T')[0]);
+
+    const cycleReserves = calculateMonthlyCardReserves(transactions, defaultCycleMonth);
+    const cardReserveItem = cycleReserves.items.find((i) => i.cardId === resolvedCard);
+    const liveOutstanding = balancesData?.accounts?.[resolvedCard]?.currentOutstanding ?? 0;
+    const suggestedAmt =
+      cardReserveItem && cardReserveItem.pendingReserve > 0
+        ? cardReserveItem.pendingReserve
+        : liveOutstanding > 0
+        ? liveOutstanding
+        : 0;
+
+    setBillAmount(suggestedAmt > 0 ? String(suggestedAmt) : '');
+    setBillSettlementMode('full');
+    if (resolvedCard === 'AX CC 2904' && ACCOUNTS_CONFIG['Wife Account']) {
+      setBillFromAccount('Wife Account');
+    } else {
+      setBillFromAccount('AX Bank');
+    }
+    setIsRecordBillPaymentOpen(true);
+  };
+
   const handleRecordBillPayment = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!billAmount || isNaN(Number(billAmount)) || Number(billAmount) <= 0) return;
-    const targetCard = selectedAccountId === 'all' ? 'ICICI CC 0000' : selectedAccountId;
-    
-    // Create an entry that pays the bill from the selected bank account to this card
-    await safeFetchJson('/api/transactions', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        type: 'expense',
-        amount: Number(billAmount),
-        category: 'Bills & Utilities',
-        description: `CC Bill Payment: ${targetCard} (Paid from ${billFromAccount})`,
-        date: billDate,
-        paymentMethod: 'Net Banking',
-        account: billFromAccount,
-        isSavingsTransfer: false,
-        tags: ['credit-card-bill', targetCard.toLowerCase()],
-      }),
-    });
-
-    if (onRefreshTransactions) {
-      await onRefreshTransactions();
+    const numAmt = Number(billAmount);
+    if (!billAmount || isNaN(numAmt) || numAmt <= 0) {
+      setToastMessage('⚠️ Kripya valid settlement amount dalein');
+      setTimeout(() => setToastMessage(null), 3000);
+      return;
     }
-    setIsRecordBillPaymentOpen(false);
-    setBillAmount('');
+    if (!billTargetCard || !billFromAccount) return;
+
+    setIsSettlingCard(true);
+    try {
+      const { data, error } = await safeFetchJson<{
+        success?: boolean;
+        balances?: AccountBalancesData;
+      }>('/api/accounts/settle-card', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          cardId: billTargetCard,
+          fromAccount: billFromAccount,
+          amount: numAmt,
+          fundingSource: billFundingSource,
+          settlementMode: billSettlementMode,
+          date: billDate,
+          cycleMonth: billCycleMonth,
+          notes: billNotes.trim(),
+        }),
+      });
+
+      if (data?.success) {
+        if (data.balances) {
+          setBalancesData(data.balances);
+        } else {
+          await fetchBalances();
+        }
+        if (onRefreshTransactions) {
+          await onRefreshTransactions();
+        }
+        const fundLabel = billFundingSource === 'previous_savings' ? 'Previous Bank Savings' : 'Current Month Income';
+        setToastMessage(
+          `✅ ₹${numAmt.toLocaleString('en-IN')} settled: ${billFromAccount} → ${billTargetCard} (${fundLabel})`
+        );
+        setTimeout(() => setToastMessage(null), 4500);
+        setIsRecordBillPaymentOpen(false);
+        setBillAmount('');
+        setBillNotes('');
+      } else {
+        setToastMessage(`⚠️ ${error || 'Card settlement save karne me samasya aayi'}`);
+        setTimeout(() => setToastMessage(null), 3500);
+      }
+    } catch (err) {
+      console.error('Card settlement error:', err);
+      setToastMessage('⚠️ Card settlement save karne me samasya aayi');
+      setTimeout(() => setToastMessage(null), 3500);
+    } finally {
+      setIsSettlingCard(false);
+    }
   };
 
   const handleReassignAccount = async (txId: string, newAccount: AccountId) => {
@@ -549,6 +724,57 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
   const totalMonthlyEmiAmount = cardEmis.reduce((sum, e) => sum + (e.monthlyAmount || 0), 0);
   const totalCardObligation = currentMonthExpense + totalMonthlyEmiAmount;
 
+  // Bill-cycle reserve summary for active month & settlement modal
+  const activeCycleReserves = React.useMemo(
+    () => calculateMonthlyCardReserves(transactions, defaultCycleMonth),
+    [transactions, defaultCycleMonth]
+  );
+
+  const selectedCardCycleInfo = React.useMemo(() => {
+    if (!selectedMeta || (selectedMeta.type !== 'credit_card' && selectedMeta.type !== 'rupay_card')) return null;
+    const found = activeCycleReserves.items.find((i) => i.cardId === selectedMeta.id);
+    if (found) return found;
+    const bDay = balancesData?.cardBillingDays?.[selectedMeta.id] ?? selectedMeta.billingDay ?? 15;
+    const dDay = balancesData?.cardPaymentDueDays?.[selectedMeta.id] ?? selectedMeta.paymentDueDay ?? 5;
+    return {
+      cardId: selectedMeta.id,
+      shortName: selectedMeta.shortName,
+      isWifeCard: Boolean(selectedMeta.isWifeAccount),
+      cycle: getCardBillCycleForPaymentMonth(defaultCycleMonth, bDay, dDay),
+      cycleSpends: 0,
+      cycleRefunds: 0,
+      cycleBillAmount: 0,
+      paidFromCurrentIncome: 0,
+      paidFromPreviousSavings: 0,
+      totalSettled: 0,
+      pendingReserve: 0,
+      excludedWifeUdhaar: 0,
+    };
+  }, [activeCycleReserves, selectedMeta, balancesData, defaultCycleMonth]);
+
+  const modalCardCycleInfo = React.useMemo(() => {
+    const res = calculateMonthlyCardReserves(transactions, billCycleMonth);
+    const found = res.items.find((i) => i.cardId === billTargetCard);
+    if (found) return found;
+    const meta = ACCOUNTS_CONFIG[billTargetCard];
+    const bDay = balancesData?.cardBillingDays?.[billTargetCard] ?? meta?.billingDay ?? 15;
+    const dDay = balancesData?.cardPaymentDueDays?.[billTargetCard] ?? meta?.paymentDueDay ?? 5;
+    return {
+      cardId: billTargetCard,
+      shortName: meta?.shortName || billTargetCard,
+      isWifeCard: Boolean(meta?.isWifeAccount),
+      cycle: getCardBillCycleForPaymentMonth(billCycleMonth, bDay, dDay),
+      cycleSpends: 0,
+      cycleRefunds: 0,
+      cycleBillAmount: 0,
+      paidFromCurrentIncome: 0,
+      paidFromPreviousSavings: 0,
+      totalSettled: 0,
+      pendingReserve: 0,
+      excludedWifeUdhaar: 0,
+    };
+  }, [transactions, billCycleMonth, billTargetCard, balancesData]);
+
   // Preview stats for Modal
   const modalPreviewTxs = filterTransactionsForStatement(
     transactions,
@@ -590,11 +816,21 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
               </h2>
             </div>
             <p className="text-xs text-slate-400 mt-1">
-              1 RuPay UPI CC, 4 Credit Cards, 2 Bank Accounts & Cash ka alag-alag statement, underlying EMIs aur bill tracker.
+              {CREDIT_CARDS.length} Credit/RuPay Cards (incl. Wife's Card 2904), {BANK_ACCOUNTS.length} Bank Accounts (incl. Wife's A/c) & Cash ka bill cycle reserve, settlement aur EMI ledger.
             </p>
           </div>
 
           <div className="flex items-center gap-2 flex-wrap">
+            {/* Settle Card Bill Button (Available across all tabs) */}
+            <button
+              type="button"
+              onClick={() => openCardSettleModal()}
+              className="px-3.5 py-1.5 rounded-xl bg-gradient-to-r from-emerald-600 to-cyan-600 hover:from-emerald-500 hover:to-cyan-500 text-white text-xs font-bold flex items-center gap-1.5 transition-all shadow-md shadow-emerald-900/30 cursor-pointer"
+            >
+              <CheckCircle2 className="w-3.5 h-3.5" />
+              <span>💳 Settle Card Bill</span>
+            </button>
+
             {/* Add New Card / Account Button */}
             <button
               onClick={() => setIsAddCardModalOpen(true)}
@@ -637,16 +873,6 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
               <Plus className="w-3.5 h-3.5" />
               <span>+ Card Entry / EMI Jodein</span>
             </button>
-
-            {selectedMeta && (selectedMeta.type === 'credit_card' || selectedMeta.type === 'rupay_card') && (
-              <button
-                onClick={() => setIsRecordBillPaymentOpen(true)}
-                className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-white/10 text-xs font-semibold flex items-center gap-1.5 transition-all shadow-sm cursor-pointer"
-              >
-                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
-                <span>Bill Payment Record Karein</span>
-              </button>
-            )}
           </div>
         </div>
 
@@ -692,6 +918,11 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
                   <Wallet className="w-3.5 h-3.5 text-rose-400" />
                 )}
                 <span>{acc.shortName}</span>
+                {isWifeOwnedAccount(acc.id) && (
+                  <span className="text-[9px] font-bold px-1.5 py-0.2 rounded-md bg-pink-500/20 text-pink-300 border border-pink-500/30">
+                    👩 Wife
+                  </span>
+                )}
                 {accBalInfo && (
                   <span className={`text-[10px] font-mono px-1.5 py-0.2 rounded-md ${
                     isBank || acc.type === 'cash'
@@ -830,14 +1061,32 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
                 <span className="font-bold text-white text-sm">{selectedMeta.name}</span>
               </div>
             </div>
-            <div className="text-[11px] text-slate-400 mt-1 flex items-center gap-1.5">
-              <span className="px-1.5 py-0.5 rounded bg-white/[0.06] font-mono text-[10px] text-indigo-300">
-                {selectedMeta.type.replace('_', ' ').toUpperCase()}
-              </span>
-              {selectedMeta.billingDay ? (
-                <span>· Bill Cycle: {selectedMeta.billingDay}th</span>
-              ) : (
-                <span>· {selectedMeta.badge}</span>
+            <div className="text-[11px] text-slate-400 mt-1 flex items-center justify-between gap-2 flex-wrap">
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <span className="px-1.5 py-0.5 rounded bg-white/[0.06] font-mono text-[10px] text-indigo-300">
+                  {selectedMeta.type.replace('_', ' ').toUpperCase()}
+                </span>
+                {(selectedMeta.type === 'credit_card' || selectedMeta.type === 'rupay_card') ? (
+                  <>
+                    <span>
+                      · Bill Cycle: <strong className="text-slate-200">{balancesData?.cardBillingDays?.[selectedMeta.id] ?? balancesData?.accounts?.[selectedMeta.id]?.billingDay ?? selectedMeta.billingDay ?? 15}th</strong>
+                    </span>
+                    <span>
+                      · Due: <strong className="text-amber-300">{balancesData?.cardPaymentDueDays?.[selectedMeta.id] ?? balancesData?.accounts?.[selectedMeta.id]?.paymentDueDay ?? selectedMeta.paymentDueDay ?? 5}th</strong>
+                    </span>
+                  </>
+                ) : (
+                  <span>· {selectedMeta.badge}</span>
+                )}
+              </div>
+              {(selectedMeta.type === 'credit_card' || selectedMeta.type === 'rupay_card') && (
+                <button
+                  type="button"
+                  onClick={() => handleOpenSingleAccountModal(selectedMeta)}
+                  className="text-[10px] text-amber-300 hover:text-amber-200 underline font-semibold cursor-pointer"
+                >
+                  📅 Cycle Badlein
+                </button>
               )}
             </div>
           </div>
@@ -885,13 +1134,45 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
                 </div>
               </div>
 
-              <div className="bg-gradient-to-br from-indigo-950/40 to-purple-950/40 border border-indigo-500/30 rounded-2xl p-4">
-                <div className="text-xs text-indigo-300 font-medium">Kul Monthly Obligation</div>
-                <div className="text-xl font-extrabold text-white font-mono mt-1">
-                  {isFamily || isPrivacyMode ? '••••••' : `₹${totalCardObligation.toLocaleString('en-IN')}`}
+              <div className="bg-gradient-to-br from-amber-950/40 to-indigo-950/40 border border-amber-500/35 rounded-2xl p-4">
+                <div className="text-xs text-amber-300 font-medium flex items-center justify-between gap-1">
+                  <span>Bill-Cycle Reserve ({defaultCycleMonth})</span>
+                  {!isFamily && (
+                    <button
+                      type="button"
+                      onClick={() => openCardSettleModal(selectedMeta.id)}
+                      className="text-[10px] px-2 py-0.5 rounded-md bg-emerald-500/25 hover:bg-emerald-500/40 text-emerald-200 border border-emerald-500/40 font-bold cursor-pointer transition-colors"
+                    >
+                      💳 Settle
+                    </button>
+                  )}
                 </div>
-                <div className="text-[11px] text-indigo-200/80 mt-1">
-                  {isFamily ? '🔒 Hidden for Family' : `Spends + EMIs (Bill Date: ~${selectedMeta.billingDay || 15}th)`}
+                <div className="text-xl font-extrabold text-amber-300 font-mono mt-1">
+                  {isFamily || isPrivacyMode
+                    ? '••••••'
+                    : `₹${(selectedCardCycleInfo?.pendingReserve ?? totalCardObligation).toLocaleString('en-IN')}`}
+                </div>
+                <div className="text-[11px] text-indigo-200/85 mt-1 space-y-0.5">
+                  {isFamily ? (
+                    '🔒 Hidden for Family'
+                  ) : selectedCardCycleInfo ? (
+                    <>
+                      <div>
+                        📅 {selectedCardCycleInfo.cycle.cycleLabel} · Due{' '}
+                        <strong className="text-amber-300">{selectedCardCycleInfo.cycle.dueLabel}</strong>
+                      </div>
+                      <div className="text-[10px] text-slate-300 font-mono">
+                        Cycle Bill: ₹{selectedCardCycleInfo.cycleBillAmount.toLocaleString('en-IN')}
+                        {selectedCardCycleInfo.totalSettled > 0 && (
+                          <span className="text-emerald-300 ml-1.5">
+                            · Settled: ₹{selectedCardCycleInfo.totalSettled.toLocaleString('en-IN')}
+                          </span>
+                        )}
+                      </div>
+                    </>
+                  ) : (
+                    `Spends + EMIs: ₹${totalCardObligation.toLocaleString('en-IN')}`
+                  )}
                 </div>
               </div>
             </>
@@ -976,6 +1257,8 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
               const liveBal = accInfo?.currentBalance ?? 0;
               const cardDue = accInfo?.currentOutstanding ?? 0;
               const avlLimit = accInfo?.availableLimit ?? Math.max(0, cardLimit - cardDue);
+              const cardBillDay = balancesData?.cardBillingDays?.[acc.id] ?? accInfo?.billingDay ?? acc.billingDay ?? 15;
+              const cardPayDueDay = balancesData?.cardPaymentDueDays?.[acc.id] ?? accInfo?.paymentDueDay ?? acc.paymentDueDay ?? 5;
 
               return (
                 <div
@@ -985,23 +1268,45 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
                 >
                   <div className="flex items-start justify-between gap-2">
                     <div>
-                      <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-white/[0.06] text-slate-300">
-                        {acc.badge}
-                      </span>
+                      <div className="flex items-center gap-1 flex-wrap">
+                        <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-white/[0.06] text-slate-300">
+                          {acc.badge}
+                        </span>
+                        {isWifeOwnedAccount(acc.id) && (
+                          <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-pink-500/20 text-pink-300 border border-pink-500/30">
+                            👩 Wife
+                          </span>
+                        )}
+                      </div>
                       <h4 className="font-bold text-xs text-white mt-1.5">{acc.shortName}</h4>
-                      <p className="text-[10px] text-slate-400 truncate max-w-[160px]">{acc.name}</p>
+                      <p className="text-[10px] text-slate-400 truncate max-w-[155px]">{acc.name}</p>
                     </div>
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleOpenSingleAccountModal(acc);
-                      }}
-                      className="px-2 py-1 rounded-lg bg-indigo-500/20 hover:bg-indigo-500/40 text-indigo-300 border border-indigo-500/30 text-[10px] font-semibold cursor-pointer shrink-0 transition-colors"
-                      title={isCard ? 'Is card ki Limit aur Due set karein' : 'Is bank/cash ka Base Balance set karein'}
-                    >
-                      ✏️ {isCard ? 'Limit / Due' : 'Set Base'}
-                    </button>
+                    <div className="flex flex-col items-end gap-1 shrink-0">
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleOpenSingleAccountModal(acc);
+                        }}
+                        className="px-2 py-1 rounded-lg bg-indigo-500/20 hover:bg-indigo-500/40 text-indigo-300 border border-indigo-500/30 text-[10px] font-semibold cursor-pointer transition-colors"
+                        title={isCard ? 'Is card ki Limit, Due aur Bill Cycle change karein' : 'Is bank/cash ka Base Balance set karein'}
+                      >
+                        ✏️ {isCard ? 'Edit / Cycle' : 'Set Base'}
+                      </button>
+                      {isCard && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openCardSettleModal(acc.id);
+                          }}
+                          className="px-2 py-1 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/40 text-emerald-300 border border-emerald-500/30 text-[10px] font-bold cursor-pointer transition-colors"
+                          title="Is card ka bill partial ya full settle karein"
+                        >
+                          💳 Settle
+                        </button>
+                      )}
+                    </div>
                   </div>
 
                   {isCard ? (
@@ -1015,6 +1320,10 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
                       <div className="flex justify-between text-[10px]">
                         <span className="text-slate-500">Limit: ₹{cardLimit.toLocaleString('en-IN')}</span>
                         <span className="text-rose-400">Due: ₹{cardDue.toLocaleString('en-IN')}</span>
+                      </div>
+                      <div className="flex justify-between text-[10px] pt-0.5 text-amber-300/80">
+                        <span>📅 Bill: {cardBillDay}th</span>
+                        <span>⏰ Due: {cardPayDueDay}th</span>
                       </div>
                     </div>
                   ) : (
@@ -1793,93 +2102,329 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
         </div>
       )}
 
-      {/* Record Bill Payment Modal */}
-      {isRecordBillPaymentOpen && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-emerald-500/40 rounded-2xl max-w-md w-full p-6 shadow-2xl animate-in fade-in zoom-in duration-150">
-            <div className="flex items-center justify-between pb-3 border-b border-white/[0.08]">
-              <h3 className="font-bold text-sm text-white flex items-center gap-2">
-                <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                Record Card Bill Payment
-              </h3>
+      {/* Full Card Bill Settlement Modal (Partial / Full + From->To Account + Income vs Previous Savings Toggle) */}
+      {isRecordBillPaymentOpen && typeof document !== 'undefined' && createPortal(
+        <div
+          className="fixed inset-0 z-[9999] bg-black/80 backdrop-blur-md flex items-center justify-center p-3 sm:p-4 overflow-y-auto"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setIsRecordBillPaymentOpen(false);
+          }}
+        >
+          <div
+            className="bg-slate-900 border border-emerald-500/40 rounded-2xl max-w-lg w-full shadow-2xl animate-in fade-in zoom-in duration-150 max-h-[92dvh] flex flex-col overflow-hidden my-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-5 py-4 border-b border-white/[0.08] flex items-center justify-between bg-slate-900/95 shrink-0">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center text-emerald-400">
+                  <CheckCircle2 className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-sm sm:text-base text-white">
+                    Credit Card Bill Settlement
+                  </h3>
+                  <p className="text-[11px] text-slate-400">
+                    Partial ya Full settle karein • Account route & funding source chunein
+                  </p>
+                </div>
+              </div>
               <button
+                type="button"
                 onClick={() => setIsRecordBillPaymentOpen(false)}
-                className="text-slate-400 hover:text-white"
+                className="text-slate-400 hover:text-white p-1.5 rounded-lg hover:bg-slate-800 cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
 
-            <form onSubmit={handleRecordBillPayment} className="space-y-3.5 mt-4 text-xs font-mono">
-              <p className="text-slate-300 text-[11px]">
-                Card ka bill pay karne par yeh aapke Bank Account se debit record karega bina double expense count hue.
-              </p>
+            <form onSubmit={handleRecordBillPayment} className="overflow-y-auto p-5 space-y-4 text-xs">
+              {/* Account Route: From Account -> To Credit Card */}
+              <div className="bg-slate-950/70 border border-indigo-500/25 rounded-xl p-3.5 space-y-3">
+                <div className="text-[11px] font-bold uppercase tracking-wider text-indigo-300">
+                  1. Kis Account Se → Kis Card Me Settle Ho Raha Hai
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-slate-300 font-semibold mb-1">
+                      🏦 Kis Account Se (From)
+                    </label>
+                    <select
+                      value={billFromAccount}
+                      onChange={(e) => setBillFromAccount(e.target.value as AccountId)}
+                      className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-white focus:outline-hidden focus:border-emerald-500 text-xs font-medium"
+                    >
+                      {ALL_ACCOUNTS.filter((a) => a.type === 'bank_account' || a.type === 'cash').map((acc) => {
+                        const liveBal = balancesData?.accounts?.[acc.id]?.currentBalance;
+                        return (
+                          <option key={acc.id} value={acc.id}>
+                            {isWifeOwnedAccount(acc.id) ? '👩 ' : acc.type === 'cash' ? '💵 ' : '🏦 '}
+                            {acc.shortName}
+                            {liveBal !== undefined ? ` (₹${liveBal.toLocaleString('en-IN')})` : ''}
+                          </option>
+                        );
+                      })}
+                    </select>
+                  </div>
 
-              <div>
-                <label className="block text-slate-300 mb-1">Paying Bill For Card</label>
-                <input
-                  type="text"
-                  disabled
-                  value={selectedAccountId}
-                  className="w-full bg-slate-950/70 border border-slate-700 rounded-xl px-3 py-2 text-slate-400 text-xs"
-                />
+                  <div>
+                    <label className="block text-slate-300 font-semibold mb-1">
+                      💳 Kis Card Me (To Card)
+                    </label>
+                    <select
+                      value={billTargetCard}
+                      onChange={(e) => {
+                        const nextCard = e.target.value as AccountId;
+                        setBillTargetCard(nextCard);
+                        const nextRes = calculateMonthlyCardReserves(transactions, billCycleMonth).items.find(
+                          (i) => i.cardId === nextCard
+                        );
+                        const nextOut = balancesData?.accounts?.[nextCard]?.currentOutstanding ?? 0;
+                        const sug = nextRes && nextRes.pendingReserve > 0 ? nextRes.pendingReserve : nextOut;
+                        if (sug > 0) setBillAmount(String(sug));
+                      }}
+                      className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-white focus:outline-hidden focus:border-emerald-500 text-xs font-medium"
+                    >
+                      {CREDIT_CARDS.map((c) => {
+                        const out = balancesData?.accounts?.[c.id]?.currentOutstanding ?? 0;
+                        return (
+                          <option key={c.id} value={c.id}>
+                            {isWifeOwnedAccount(c.id) ? '👩 ' : '💳 '}
+                            {c.shortName} (Due ₹{out.toLocaleString('en-IN')})
+                          </option>
+                        );
+                      })}
+                    </select>
+                  </div>
+                </div>
+
+                {/* Live Cycle Snapshot for Target Card */}
+                <div className="bg-amber-950/25 border border-amber-500/25 rounded-lg p-2.5 flex flex-wrap items-center justify-between gap-2 text-[11px]">
+                  <div>
+                    <div className="text-amber-300 font-semibold">
+                      📅 Bill Cycle ({billCycleMonth}): {modalCardCycleInfo.cycle.cycleLabel}
+                    </div>
+                    <div className="text-[10px] text-slate-400">
+                      Due Date: {modalCardCycleInfo.cycle.dueLabel} · Already Settled: ₹{modalCardCycleInfo.totalSettled.toLocaleString('en-IN')}
+                    </div>
+                  </div>
+                  <div className="text-right font-mono">
+                    <div className="text-amber-300 font-bold">
+                      Cycle Pending: ₹{modalCardCycleInfo.pendingReserve.toLocaleString('en-IN')}
+                    </div>
+                    <div className="text-[10px] text-rose-300">
+                      Total Outstanding: ₹{(balancesData?.accounts?.[billTargetCard]?.currentOutstanding ?? 0).toLocaleString('en-IN')}
+                    </div>
+                  </div>
+                </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-slate-300 mb-1">Bill Amount (₹)</label>
+              {/* Settlement Mode: Full vs Partial + Amount */}
+              <div className="space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <label className="text-slate-300 font-semibold">
+                    2. Full ya Partial Settlement
+                  </label>
+                  <div className="inline-flex bg-slate-950 border border-slate-700 rounded-lg p-0.5">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setBillSettlementMode('full');
+                        const fullAmt =
+                          modalCardCycleInfo.pendingReserve > 0
+                            ? modalCardCycleInfo.pendingReserve
+                            : balancesData?.accounts?.[billTargetCard]?.currentOutstanding ?? 0;
+                        if (fullAmt > 0) setBillAmount(String(fullAmt));
+                      }}
+                      className={`px-2.5 py-1 rounded-md text-[11px] font-bold cursor-pointer transition-all ${
+                        billSettlementMode === 'full'
+                          ? 'bg-emerald-600 text-white'
+                          : 'text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      ✅ Full Settle
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setBillSettlementMode('partial')}
+                      className={`px-2.5 py-1 rounded-md text-[11px] font-bold cursor-pointer transition-all ${
+                        billSettlementMode === 'partial'
+                          ? 'bg-amber-600 text-white'
+                          : 'text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      ✂️ Partial Settle
+                    </button>
+                  </div>
+                </div>
+
+                <div className="relative">
+                  <span className="absolute left-3.5 top-2.5 text-emerald-400 font-bold text-sm">₹</span>
                   <input
                     type="number"
-                    placeholder="12500"
+                    step="any"
+                    min="1"
+                    placeholder="Kitna amount pay karna hai (e.g. 12500)"
                     value={billAmount}
-                    onChange={(e) => setBillAmount(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white focus:outline-hidden focus:border-emerald-500 text-xs"
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setBillAmount(val);
+                      const num = Number(val) || 0;
+                      const refBill =
+                        modalCardCycleInfo.pendingReserve > 0
+                          ? modalCardCycleInfo.pendingReserve
+                          : balancesData?.accounts?.[billTargetCard]?.currentOutstanding ?? 0;
+                      if (refBill > 0 && num > 0 && num < refBill) {
+                        setBillSettlementMode('partial');
+                      } else if (refBill > 0 && num >= refBill) {
+                        setBillSettlementMode('full');
+                      }
+                    }}
+                    className="w-full bg-slate-950 border border-slate-700 rounded-xl pl-8 pr-3 py-2.5 text-white font-mono text-sm font-bold focus:outline-hidden focus:border-emerald-500"
+                    required
+                  />
+                </div>
+
+                {/* Quick Amount Chips */}
+                <div className="flex flex-wrap gap-1.5">
+                  {modalCardCycleInfo.pendingReserve > 0 && (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setBillAmount(String(modalCardCycleInfo.pendingReserve));
+                          setBillSettlementMode('full');
+                        }}
+                        className="px-2.5 py-1 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/35 text-emerald-300 text-[10px] font-mono font-semibold cursor-pointer"
+                      >
+                        Full Cycle Bill (₹{modalCardCycleInfo.pendingReserve.toLocaleString('en-IN')})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setBillAmount(String(Math.round(modalCardCycleInfo.pendingReserve / 2)));
+                          setBillSettlementMode('partial');
+                        }}
+                        className="px-2.5 py-1 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/35 text-amber-300 text-[10px] font-mono font-semibold cursor-pointer"
+                      >
+                        50% Partial (₹{Math.round(modalCardCycleInfo.pendingReserve / 2).toLocaleString('en-IN')})
+                      </button>
+                    </>
+                  )}
+                  {(balancesData?.accounts?.[billTargetCard]?.currentOutstanding ?? 0) > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const out = balancesData?.accounts?.[billTargetCard]?.currentOutstanding ?? 0;
+                        setBillAmount(String(out));
+                        setBillSettlementMode('full');
+                      }}
+                      className="px-2.5 py-1 rounded-lg bg-sky-500/15 hover:bg-sky-500/25 border border-sky-500/35 text-sky-300 text-[10px] font-mono font-semibold cursor-pointer"
+                    >
+                      Full Outstanding (₹{(balancesData?.accounts?.[billTargetCard]?.currentOutstanding ?? 0).toLocaleString('en-IN')})
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Funding Source Toggle: Current Month Income vs Previous Bank Savings */}
+              <div className="space-y-2">
+                <label className="block text-slate-300 font-semibold">
+                  3. Yeh Payment Kahan Se Minus Karna Hai? (Toggle)
+                </label>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                  <button
+                    type="button"
+                    onClick={() => setBillFundingSource('current_income')}
+                    className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
+                      billFundingSource === 'current_income'
+                        ? 'bg-emerald-950/50 border-emerald-400 text-white ring-1 ring-emerald-400/50 shadow-md'
+                        : 'bg-slate-950/70 border-slate-800 text-slate-400 hover:border-slate-600'
+                    }`}
+                  >
+                    <div className="font-bold text-xs flex items-center gap-1.5 text-emerald-300">
+                      <span>💰 Current Month Income se</span>
+                    </div>
+                    <p className="text-[10px] text-slate-300/90 mt-1 leading-relaxed">
+                      Is mahine ki income se katega. Bank balance aur Card Reserve dono clear honge (no double-count).
+                    </p>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setBillFundingSource('previous_savings')}
+                    className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
+                      billFundingSource === 'previous_savings'
+                        ? 'bg-cyan-950/50 border-cyan-400 text-white ring-1 ring-cyan-400/50 shadow-md'
+                        : 'bg-slate-950/70 border-slate-800 text-slate-400 hover:border-slate-600'
+                    }`}
+                  >
+                    <div className="font-bold text-xs flex items-center gap-1.5 text-cyan-300">
+                      <span>🏦 Pehle Ki Bank Savings se</span>
+                    </div>
+                    <p className="text-[10px] text-slate-300/90 mt-1 leading-relaxed">
+                      Purani bank savings se deduct hoga. Current month ki income untouched rahegi!
+                    </p>
+                  </button>
+                </div>
+              </div>
+
+              {/* Date, Cycle Month & Notes */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-slate-300 font-semibold mb-1">Payment Date</label>
+                  <input
+                    type="date"
+                    value={billDate}
+                    onChange={(e) => setBillDate(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white focus:outline-hidden focus:border-emerald-500 text-xs font-mono"
                     required
                   />
                 </div>
                 <div>
-                  <label className="block text-slate-300 mb-1">Debited From Bank</label>
-                  <select
-                    value={billFromAccount}
-                    onChange={(e) => setBillFromAccount(e.target.value as AccountId)}
-                    className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white focus:outline-hidden focus:border-emerald-500 text-xs"
-                  >
-                    {BANK_ACCOUNTS.map(b => (
-                      <option key={b.id} value={b.id}>{b.name}</option>
-                    ))}
-                  </select>
+                  <label className="block text-slate-300 font-semibold mb-1">Bill Cycle Month</label>
+                  <input
+                    type="month"
+                    value={billCycleMonth}
+                    onChange={(e) => setBillCycleMonth(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white focus:outline-hidden focus:border-emerald-500 text-xs font-mono"
+                    required
+                  />
                 </div>
               </div>
 
               <div>
-                <label className="block text-slate-300 mb-1">Payment Date</label>
+                <label className="block text-slate-300 font-semibold mb-1">Note / Reference (Optional)</label>
                 <input
-                  type="date"
-                  value={billDate}
-                  onChange={(e) => setBillDate(e.target.value)}
+                  type="text"
+                  placeholder="e.g. CRED UPI / Nov Statement Paid"
+                  value={billNotes}
+                  onChange={(e) => setBillNotes(e.target.value)}
                   className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white focus:outline-hidden focus:border-emerald-500 text-xs"
-                  required
                 />
               </div>
 
-              <div className="pt-2 flex justify-end gap-2">
+              <div className="pt-2 border-t border-white/[0.08] flex items-center justify-end gap-2">
                 <button
                   type="button"
                   onClick={() => setIsRecordBillPaymentOpen(false)}
-                  className="px-3 py-1.5 rounded-xl text-slate-300 hover:bg-slate-800 cursor-pointer"
+                  className="px-4 py-2 rounded-xl text-slate-300 hover:bg-slate-800 cursor-pointer font-semibold"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold cursor-pointer"
+                  disabled={isSettlingCard}
+                  className="px-5 py-2 rounded-xl bg-gradient-to-r from-emerald-600 to-cyan-600 hover:from-emerald-500 hover:to-cyan-500 text-white font-bold cursor-pointer shadow-md disabled:opacity-50"
                 >
-                  Record Payment
+                  {isSettlingCard
+                    ? 'Settling...'
+                    : `✅ Confirm ${billSettlementMode === 'partial' ? 'Partial' : 'Full'} Settle`}
                 </button>
               </div>
             </form>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
       {/* Set Account & Cards Opening Balances Modal */}
@@ -2015,10 +2560,12 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
                       const currentDueVal = parseFloat(editBaseBalances[card.id] || '0') || 0;
                       const currentLimitVal = parseFloat(editCardLimits[card.id] || String(balancesData?.cardCreditLimits?.[card.id] || card.creditLimit || 100000)) || (card.creditLimit || 100000);
                       const calculatedAvl = Math.max(0, currentLimitVal - currentDueVal);
+                      const currentBillDay = editCardBillingDays[card.id] ?? String(balancesData?.cardBillingDays?.[card.id] ?? card.billingDay ?? 15);
+                      const currentPayDueDay = editCardDueDays[card.id] ?? String(balancesData?.cardPaymentDueDays?.[card.id] ?? card.paymentDueDay ?? 5);
 
                       return (
                         <div key={card.id} className="p-3.5 bg-slate-950/70 border border-slate-800 rounded-xl space-y-2.5">
-                          <div className="flex items-center justify-between">
+                          <div className="flex items-center justify-between flex-wrap gap-1">
                             <span className="font-bold text-white text-xs flex items-center gap-1.5">
                               <CreditCard className="w-3.5 h-3.5 text-sky-400" />
                               {card.name}
@@ -2061,6 +2608,37 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
                                   className="w-full bg-slate-900 border border-slate-700 rounded-xl pl-8 pr-3 py-1.5 text-white font-mono text-xs focus:border-rose-500 focus:outline-hidden"
                                 />
                               </div>
+                            </div>
+                          </div>
+
+                          <div className="grid grid-cols-2 gap-3 pt-1">
+                            <div>
+                              <label className="text-[11px] text-amber-300 font-medium block mb-1">
+                                📅 Bill Cycle Tarikh (1-31)
+                              </label>
+                              <input
+                                type="number"
+                                min={1}
+                                max={31}
+                                placeholder={String(card.billingDay || 15)}
+                                value={currentBillDay}
+                                onChange={(e) => setEditCardBillingDays({ ...editCardBillingDays, [card.id]: e.target.value })}
+                                className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-1.5 text-white font-mono text-xs focus:border-amber-500 focus:outline-hidden"
+                              />
+                            </div>
+                            <div>
+                              <label className="text-[11px] text-indigo-300 font-medium block mb-1">
+                                ⏰ Payment Due Tarikh (1-31)
+                              </label>
+                              <input
+                                type="number"
+                                min={1}
+                                max={31}
+                                placeholder={String(card.paymentDueDay || 5)}
+                                value={currentPayDueDay}
+                                onChange={(e) => setEditCardDueDays({ ...editCardDueDays, [card.id]: e.target.value })}
+                                className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-1.5 text-white font-mono text-xs focus:border-indigo-500 focus:outline-hidden"
+                              />
                             </div>
                           </div>
                         </div>
@@ -2266,6 +2844,24 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
                 </div>
               )}
 
+              {/* Wife's Card / Account Toggle */}
+              <label className="flex items-start gap-2.5 p-3 rounded-xl bg-pink-950/30 border border-pink-500/30 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={newCardIsWifeAccount}
+                  onChange={(e) => setNewCardIsWifeAccount(e.target.checked)}
+                  className="mt-0.5 rounded bg-slate-900 border-pink-500/50 text-pink-500 focus:ring-pink-500 h-4 w-4 cursor-pointer"
+                />
+                <div>
+                  <div className="font-bold text-pink-200 text-xs">
+                    👩 Yeh Wife ka Card / Account hai
+                  </div>
+                  <div className="text-[10px] text-pink-200/75 mt-0.5">
+                    Wife ke card se diya gaya Udhaar aapke monthly outflow & card reserve se automatically exclude rahega.
+                  </div>
+                </div>
+              </label>
+
               {/* Color Picker */}
               <div>
                 <label className="block text-slate-300 font-semibold mb-1.5">
@@ -2365,7 +2961,9 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
                   <span>{editingSingleAccount.shortName}</span>
                 </h3>
                 <p className="text-xs text-slate-400 mt-0.5">
-                  {editingSingleAccount.name} • Alag se Limit / Base Balance set karein
+                  {editingSingleAccount.name} • {(editingSingleAccount.type === 'credit_card' || editingSingleAccount.type === 'rupay_card')
+                    ? 'Limit, Due & Bill Cycle set karein'
+                    : 'Alag se Base Balance set karein'}
                 </p>
               </div>
               <button
@@ -2411,6 +3009,46 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
                       Available Limit: <strong className="text-emerald-400 font-mono">₹{Math.max(0, (parseFloat(singleLimitInput) || 0) - (parseFloat(singleBaseInput) || 0)).toLocaleString('en-IN')}</strong>
                     </p>
                   </div>
+
+                  <div className="grid grid-cols-2 gap-3 pt-1">
+                    <div>
+                      <label className="block text-amber-300 font-semibold mb-1">
+                        📅 Bill Cycle Tarikh (1–31)
+                      </label>
+                      <input
+                        type="number"
+                        min={1}
+                        max={31}
+                        required
+                        value={singleBillingDayInput}
+                        onChange={(e) => setSingleBillingDayInput(e.target.value)}
+                        className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white font-mono text-sm focus:border-amber-500 focus:outline-hidden"
+                      />
+                      <span className="text-[10px] text-slate-400 mt-1 block">
+                        Bill generate hone ki tarikh
+                      </span>
+                    </div>
+                    <div>
+                      <label className="block text-indigo-300 font-semibold mb-1">
+                        ⏰ Payment Due Tarikh (1–31)
+                      </label>
+                      <input
+                        type="number"
+                        min={1}
+                        max={31}
+                        required
+                        value={singleDueDayInput}
+                        onChange={(e) => setSingleDueDayInput(e.target.value)}
+                        className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white font-mono text-sm focus:border-indigo-500 focus:outline-hidden"
+                      />
+                      <span className="text-[10px] text-slate-400 mt-1 block">
+                        Last payment due tarikh
+                      </span>
+                    </div>
+                  </div>
+                  <p className="text-[10px] text-slate-400 bg-slate-950/70 border border-slate-800 rounded-lg px-2.5 py-2">
+                    💡 Sirf Bill Cycle ya Limit badalne par aapka running due / transactions reset nahi honge. Statement export bhi naye bill cycle ke hisab se chalega.
+                  </p>
                 </>
               ) : (
                 <div>

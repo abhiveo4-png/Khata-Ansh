@@ -239,10 +239,16 @@ export default function App() {
   // Fetch transactions and summary
   const fetchTransactions = useCallback(async () => {
     const activeUid = getActiveUserId() || 'user_ansh';
-    const { data } = await safeFetchJson<{ transactions?: Transaction[]; summary?: FinancialSummary; customAccounts?: AccountMeta[] }>('/api/transactions');
+    const { data } = await safeFetchJson<{
+      transactions?: Transaction[];
+      summary?: FinancialSummary;
+      customAccounts?: AccountMeta[];
+      cardBillingDays?: Record<string, number>;
+      cardPaymentDueDays?: Record<string, number>;
+    }>('/api/transactions');
     
-    if (data?.customAccounts) {
-      syncCustomAccounts(data.customAccounts);
+    if (data?.customAccounts || data?.cardBillingDays || data?.cardPaymentDueDays) {
+      syncCustomAccounts(data.customAccounts, data.cardBillingDays, data.cardPaymentDueDays);
     }
     if (data?.transactions) {
       setTransactions(data.transactions);
@@ -619,7 +625,7 @@ export default function App() {
 
   const handleSettleUdhaar = async (
     id: string,
-    payload?: { amountSettled?: number; settleAccount?: string; settleDate?: string; notes?: string }
+    payload?: { amountSettled?: number; settleAccount?: string; originAccount?: string; settleDate?: string; notes?: string }
   ) => {
     const { data } = await safeFetchJson<{
       success?: boolean;

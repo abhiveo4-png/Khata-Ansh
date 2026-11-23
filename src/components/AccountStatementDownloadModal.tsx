@@ -96,14 +96,18 @@ export const AccountStatementDownloadModal: React.FC<AccountStatementDownloadMod
       const d = new Date();
       let billYear = d.getFullYear();
       let billMonth = d.getMonth() + 1;
-      if (d.getDate() < billingDay) {
+      const currentMonthDays = new Date(billYear, billMonth, 0).getDate();
+      const effectiveCurMonthBillDay = Math.min(billingDay, currentMonthDays);
+      if (d.getDate() < effectiveCurMonthBillDay) {
         billMonth -= 1;
         if (billMonth < 1) {
           billMonth = 12;
           billYear -= 1;
         }
       }
-      const start = `${billYear}-${String(billMonth).padStart(2, '0')}-${String(billingDay).padStart(2, '0')}`;
+      const billMonthDays = new Date(billYear, billMonth, 0).getDate();
+      const effectiveBillDay = Math.min(billingDay, billMonthDays);
+      const start = `${billYear}-${String(billMonth).padStart(2, '0')}-${String(effectiveBillDay).padStart(2, '0')}`;
       setFromDate(start);
       setToDate(todayStr);
     }

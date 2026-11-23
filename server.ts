@@ -128,6 +128,12 @@ export interface Transaction {
   isSavingsTransfer?: boolean;
   isWifeTransfer?: boolean;
   isCcPayment?: boolean;
+  isCardPaymentCredit?: boolean;
+  targetCardAccount?: string;
+  sourceAccount?: string;
+  ccPaymentFundingSource?: 'current_income' | 'previous_savings';
+  ccSettlementMode?: 'full' | 'partial';
+  ccSettlementCycleMonth?: string;
   isInvestment?: boolean;
   isUdhaarLent?: boolean;
   isUdhaarRecovery?: boolean;
@@ -753,6 +759,8 @@ interface UserDataStore {
   wifeBaseBalance?: number;
   wifeBalanceSetTimestamp?: string;
   cardCreditLimits?: Record<string, number>;
+  cardBillingDays?: Record<string, number>;
+  cardPaymentDueDays?: Record<string, number>;
   customAccounts?: Array<{
     id: string;
     name: string;
@@ -764,6 +772,7 @@ interface UserDataStore {
     creditLimit?: number;
     billingDay?: number;
     paymentDueDay?: number;
+    isWifeAccount?: boolean;
     isCustom?: boolean;
   }>;
   deletedCategories?: string[];
@@ -1445,6 +1454,10 @@ function calculateUserSummary(userId: string): FinancialSummary {
       currentMonthCount++;
     }
 
+    const isCcPaymentCredit = Boolean(
+      t.isCardPaymentCredit ||
+      (t.type === 'income' && (t.isCcPayment || t.category === 'CC Payment Credit' || t.category === 'CC Payment'))
+    );
     const isRimInflow = Boolean(
       t.isReimbursementInflow ||
       (t.type === 'income' && (t.isReimbursement || t.category === 'Reimbursement' || t.category === 'Reimbursement Received'))
@@ -1455,7 +1468,10 @@ function calculateUserSummary(userId: string): FinancialSummary {
     );
 
     if (t.type === 'income') {
-      if (isUdhaarRecovery) {
+      if (isCcPaymentCredit) {
+        // Card bill settlement credit leg on card ledger — NOT real income
+        continue;
+      } else if (isUdhaarRecovery) {
         if (isCurrentMonth) currentMonthUdhaarRecovered += amt;
         if (isPrevMonth) prevUdhaarRecovered += amt;
       } else if (isRimInflow) {
@@ -1484,6 +1500,16 @@ function calculateUserSummary(userId: string): FinancialSummary {
         (t.category && t.category.toLowerCase().includes('udhaar') && t.type === 'expense') ||
         (t.tags && t.tags.includes('udhaar-lent'))
       );
+      const txAccLower = String(t.account || '').toLowerCase();
+      const customWifeCard = (store.customAccounts || []).some(
+        a => a.id === t.account && a.isWifeAccount && (a.type === 'credit_card' || a.type === 'rupay_card')
+      );
+      const isWifeCardAccount =
+        t.account === 'AX CC 2904' ||
+        txAccLower.includes('2904') ||
+        (txAccLower.includes('wife') && (txAccLower.includes('cc') || txAccLower.includes('card'))) ||
+        customWifeCard;
+
       const catDef = (store.categories || []).find(c => c.name.toLowerCase() === (t.category || '').toLowerCase());
       const isExemptFromBudget = Boolean(catDef?.excludeFromBudget) || isRim || isWifeTr || isCcPay || isUdhaarLent || isUdhaarRepaid;
 
@@ -1501,10 +1527,12 @@ function calculateUserSummary(userId: string): FinancialSummary {
           pendingReimbursements += remaining;
         }
       } else if (isUdhaarLent) {
-        // Udhaar Lent: Bank/Card/Cash deducted, but strictly EXEMPT from kharcha/expense, monthly budget, and Net Savings!
-        udhaarLentTotal += amt;
-        if (isCurrentMonth) currentMonthUdhaarLent += amt;
-        if (isPrevMonth) prevUdhaarLent += amt;
+        // Udhaar Lent from Wife's Card (AX CC 2904) is excluded from owner's monthly outflow
+        if (!isWifeCardAccount) {
+          udhaarLentTotal += amt;
+          if (isCurrentMonth) currentMonthUdhaarLent += amt;
+          if (isPrevMonth) prevUdhaarLent += amt;
+        }
       } else {
         totalExpense += amt;
         expenseCount++;
@@ -3055,6 +3083,9 @@ const ACCOUNTS_META: Record<string, {
   badge: string;
   color: string;
   creditLimit?: number;
+  billingDay?: number;
+  paymentDueDay?: number;
+  isWifeAccount?: boolean;
 }> = {
   'ICICI CC 0000': {
     id: 'ICICI CC 0000',
@@ -3064,6 +3095,8 @@ const ACCOUNTS_META: Record<string, {
     badge: 'RuPay CC',
     color: '#f97316',
     creditLimit: 120000,
+    billingDay: 18,
+    paymentDueDay: 7,
   },
   'SBI CC 5733': {
     id: 'SBI CC 5733',
@@ -3073,6 +3106,8 @@ const ACCOUNTS_META: Record<string, {
     badge: 'SBI CC',
     color: '#0284c7',
     creditLimit: 150000,
+    billingDay: 12,
+    paymentDueDay: 2,
   },
   'SBI CC 6526': {
     id: 'SBI CC 6526',
@@ -3082,6 +3117,8 @@ const ACCOUNTS_META: Record<string, {
     badge: 'SBI CC',
     color: '#2563eb',
     creditLimit: 100000,
+    billingDay: 24,
+    paymentDueDay: 14,
   },
   'AX CC 8210': {
     id: 'AX CC 8210',
@@ -3091,6 +3128,8 @@ const ACCOUNTS_META: Record<string, {
     badge: 'Axis CC',
     color: '#9333ea',
     creditLimit: 180000,
+    billingDay: 15,
+    paymentDueDay: 5,
   },
   'AX CC 5376': {
     id: 'AX CC 5376',
@@ -3100,6 +3139,8 @@ const ACCOUNTS_META: Record<string, {
     badge: 'Axis CC',
     color: '#a855f7',
     creditLimit: 90000,
+    billingDay: 20,
+    paymentDueDay: 10,
   },
   'IC Bank 2005': {
     id: 'IC Bank 2005',
@@ -3109,6 +3150,20 @@ const ACCOUNTS_META: Record<string, {
     badge: 'ICICI CC',
     color: '#e11d48',
     creditLimit: 150000,
+    billingDay: 20,
+    paymentDueDay: 10,
+  },
+  'AX CC 2904': {
+    id: 'AX CC 2904',
+    name: "Axis Bank CC 2904 (Wife's Card)",
+    shortName: 'AX CC 2904',
+    type: 'credit_card',
+    badge: 'Wife CC',
+    color: '#ec4899',
+    creditLimit: 100000,
+    billingDay: 15,
+    paymentDueDay: 5,
+    isWifeAccount: true,
   },
   'IC Bank': {
     id: 'IC Bank',
@@ -3126,6 +3181,15 @@ const ACCOUNTS_META: Record<string, {
     badge: 'Axis Bank',
     color: '#be185d',
   },
+  'Wife Account': {
+    id: 'Wife Account',
+    name: "Wife's Bank / Savings Account",
+    shortName: 'Wife Account',
+    type: 'bank_account',
+    badge: 'Wife Bank',
+    color: '#db2777',
+    isWifeAccount: true,
+  },
   'Cash': {
     id: 'Cash',
     name: 'Cash in Hand / Pocket',
@@ -3141,6 +3205,8 @@ export function calculateAccountsBalances(userId: string) {
   const baseBalances = store.accountBaseBalances || {};
   const baseTimestamps = store.accountBalanceSetTimestamps || {};
   const cardLimits = store.cardCreditLimits || {};
+  const cardBillingDays = store.cardBillingDays || {};
+  const cardPaymentDueDays = store.cardPaymentDueDays || {};
   const wifeBase = Number(store.wifeBaseBalance) || 0;
   const wifeBaseTimestamp = store.wifeBalanceSetTimestamp;
   const txs = store.transactions || [];
@@ -3163,6 +3229,7 @@ export function calculateAccountsBalances(userId: string) {
     creditLimit?: number;
     billingDay?: number;
     paymentDueDay?: number;
+    isWifeAccount?: boolean;
     isCustom?: boolean;
   }> = { ...ACCOUNTS_META };
 
@@ -3237,6 +3304,10 @@ export function calculateAccountsBalances(userId: string) {
     if (isCard) {
       const customLimit = Number(cardLimits[accId]);
       const creditLimit = (customLimit && customLimit > 0) ? customLimit : (meta.creditLimit || 100000);
+      const overrideBilling = Math.round(Number(cardBillingDays[accId]));
+      const billingDay = (!isNaN(overrideBilling) && overrideBilling >= 1 && overrideBilling <= 31) ? overrideBilling : meta.billingDay;
+      const overrideDue = Math.round(Number(cardPaymentDueDays[accId]));
+      const paymentDueDay = (!isNaN(overrideDue) && overrideDue >= 1 && overrideDue <= 31) ? overrideDue : meta.paymentDueDay;
       const currentOutstanding = Math.round((Math.max(0, base + debits - credits) + Number.EPSILON) * 100) / 100;
       const availableLimit = Math.round((Math.max(0, creditLimit - currentOutstanding) + Number.EPSILON) * 100) / 100;
 
@@ -3254,6 +3325,9 @@ export function calculateAccountsBalances(userId: string) {
         creditLimit,
         availableLimit,
         currentOutstanding,
+        billingDay,
+        paymentDueDay,
+        isWifeAccount: Boolean(meta.isWifeAccount),
       };
 
       totalCardAvailableLimit += availableLimit;
@@ -3272,6 +3346,7 @@ export function calculateAccountsBalances(userId: string) {
         credits: Math.round((credits + Number.EPSILON) * 100) / 100,
         debits: Math.round((debits + Number.EPSILON) * 100) / 100,
         currentBalance,
+        isWifeAccount: Boolean(meta.isWifeAccount),
       };
 
       totalBankCashBalance += currentBalance;
@@ -3320,6 +3395,8 @@ export function calculateAccountsBalances(userId: string) {
     wifeBaseBalance: wifeBase,
     wifeBalanceSetTimestamp: store.wifeBalanceSetTimestamp,
     cardCreditLimits: cardLimits,
+    cardBillingDays,
+    cardPaymentDueDays,
     customAccounts: store.customAccounts || [],
     accounts,
     totalBankCashBalance,
@@ -9098,6 +9175,8 @@ app.get('/api/transactions', (req, res) => {
   res.json({
     transactions: store.transactions,
     customAccounts: store.customAccounts || [],
+    cardBillingDays: store.cardBillingDays || {},
+    cardPaymentDueDays: store.cardPaymentDueDays || {},
     summary,
     user,
   });
@@ -9400,6 +9479,7 @@ app.post('/api/transactions/:id/settle-reimbursement', (req, res) => {
     amountSettledNow,
     isFullSettle,
     settleAccount,
+    originAccount,
     settleDate,
     paymentMethod,
     notes,
@@ -9409,6 +9489,10 @@ app.post('/api/transactions/:id/settle-reimbursement', (req, res) => {
   const tx = store.transactions.find(t => t.id === id);
   if (!tx) {
     return res.status(404).json({ error: 'Transaction not found' });
+  }
+
+  if (originAccount && typeof originAccount === 'string' && originAccount.trim()) {
+    tx.account = originAccount.trim();
   }
 
   const totalAmt = Number(tx.amount) || 0;
@@ -9465,7 +9549,7 @@ app.post('/api/transactions/:id/settle-reimbursement', (req, res) => {
       paymentMethod ||
       (settleAccount === 'Cash'
         ? 'Cash'
-        : settleAccount.includes('CC') || settleAccount.includes('2005')
+        : settleAccount.includes('CC') || settleAccount.includes('2005') || settleAccount.includes('2904')
         ? 'Card'
         : 'Bank Transfer');
 
@@ -9646,7 +9730,7 @@ app.get('/api/accounts/balances', (req, res) => {
 app.post('/api/accounts/balances', (req, res) => {
   const user = getRequestUser(req);
   const store = getUserData(user.id);
-  const { accountBaseBalances, wifeBaseBalance, cardCreditLimits } = req.body;
+  const { accountBaseBalances, wifeBaseBalance, cardCreditLimits, cardBillingDays, cardPaymentDueDays } = req.body;
   const nowIso = new Date().toISOString();
 
   if (accountBaseBalances && typeof accountBaseBalances === 'object') {
@@ -9667,6 +9751,34 @@ app.post('/api/accounts/balances', (req, res) => {
       const num = Number(lim);
       if (!isNaN(num) && num > 0) {
         store.cardCreditLimits[cardId] = num;
+      }
+    }
+  }
+
+  if (cardBillingDays && typeof cardBillingDays === 'object') {
+    if (!store.cardBillingDays) store.cardBillingDays = {};
+    for (const [cardId, dayVal] of Object.entries(cardBillingDays)) {
+      const num = Math.round(Number(dayVal));
+      if (!isNaN(num) && num >= 1 && num <= 31) {
+        store.cardBillingDays[cardId] = num;
+        if (Array.isArray(store.customAccounts)) {
+          const cAcc = store.customAccounts.find(a => a.id === cardId);
+          if (cAcc) cAcc.billingDay = num;
+        }
+      }
+    }
+  }
+
+  if (cardPaymentDueDays && typeof cardPaymentDueDays === 'object') {
+    if (!store.cardPaymentDueDays) store.cardPaymentDueDays = {};
+    for (const [cardId, dayVal] of Object.entries(cardPaymentDueDays)) {
+      const num = Math.round(Number(dayVal));
+      if (!isNaN(num) && num >= 1 && num <= 31) {
+        store.cardPaymentDueDays[cardId] = num;
+        if (Array.isArray(store.customAccounts)) {
+          const cAcc = store.customAccounts.find(a => a.id === cardId);
+          if (cAcc) cAcc.paymentDueDay = num;
+        }
       }
     }
   }
@@ -9700,6 +9812,7 @@ app.post('/api/accounts/custom', (req, res) => {
     creditLimit,
     billingDay,
     paymentDueDay,
+    isWifeAccount,
     openingBalance,
   } = req.body;
 
@@ -9712,6 +9825,8 @@ app.post('/api/accounts/custom', (req, res) => {
   const validTypes = ['rupay_card', 'credit_card', 'bank_account', 'cash'];
   const accType = validTypes.includes(type) ? type : 'credit_card';
   const numLimit = Number(creditLimit) > 0 ? Number(creditLimit) : (accType === 'credit_card' || accType === 'rupay_card' ? 100000 : undefined);
+  const clampedBillingDay = Math.min(31, Math.max(1, Math.round(Number(billingDay) || 15)));
+  const clampedPaymentDueDay = Math.min(31, Math.max(1, Math.round(Number(paymentDueDay) || 5)));
 
   const newMeta = {
     id: accId,
@@ -9722,8 +9837,9 @@ app.post('/api/accounts/custom', (req, res) => {
     color: String(color || '#6366f1'),
     isUpiCapable: Boolean(isUpiCapable ?? (accType === 'rupay_card' || accType === 'bank_account')),
     creditLimit: numLimit,
-    billingDay: Number(billingDay) > 0 ? Number(billingDay) : 15,
-    paymentDueDay: Number(paymentDueDay) > 0 ? Number(paymentDueDay) : 5,
+    billingDay: clampedBillingDay,
+    paymentDueDay: clampedPaymentDueDay,
+    isWifeAccount: Boolean(isWifeAccount),
     isCustom: true,
   };
 
@@ -9732,6 +9848,13 @@ app.post('/api/accounts/custom', (req, res) => {
     store.customAccounts[existingIdx] = newMeta;
   } else {
     store.customAccounts.push(newMeta);
+  }
+
+  if (accType === 'credit_card' || accType === 'rupay_card') {
+    if (!store.cardBillingDays) store.cardBillingDays = {};
+    if (!store.cardPaymentDueDays) store.cardPaymentDueDays = {};
+    store.cardBillingDays[accId] = clampedBillingDay;
+    store.cardPaymentDueDays[accId] = clampedPaymentDueDay;
   }
 
   if (numLimit && numLimit > 0) {
@@ -9752,6 +9875,129 @@ app.post('/api/accounts/custom', (req, res) => {
   saveUserData(user.id, store);
   const updatedData = calculateAccountsBalances(user.id);
   res.json({ success: true, account: newMeta, ...updatedData });
+});
+
+app.post('/api/accounts/settle-card', (req, res) => {
+  const user = getRequestUser(req);
+  if (!user) return res.status(401).json({ error: 'User session required' });
+  const store = getUserData(user.id);
+
+  const {
+    cardId,
+    fromAccount,
+    amount,
+    fundingSource,
+    settlementMode,
+    date,
+    cycleMonth,
+    notes,
+  } = req.body || {};
+
+  const targetCard = typeof cardId === 'string' ? cardId.trim() : '';
+  const sourceAcc = typeof fromAccount === 'string' ? fromAccount.trim() : '';
+  const numAmount = Number(amount);
+
+  if (!targetCard || !sourceAcc) {
+    return res.status(400).json({ error: 'Both source account and target card are required' });
+  }
+  if (targetCard === sourceAcc) {
+    return res.status(400).json({ error: 'Source account and target card cannot be the same' });
+  }
+  if (!Number.isFinite(numAmount) || numAmount <= 0) {
+    return res.status(400).json({ error: 'Valid positive settlement amount is required' });
+  }
+
+  const validFunding = fundingSource === 'previous_savings' ? 'previous_savings' : 'current_income';
+  const validMode = settlementMode === 'partial' ? 'partial' : 'full';
+  const istNow = getAppDateTime();
+  const txDate = typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date.trim()) ? date.trim() : istNow.date;
+  const effectiveCycleMonth =
+    typeof cycleMonth === 'string' && /^\d{4}-\d{2}$/.test(cycleMonth.trim())
+      ? cycleMonth.trim()
+      : txDate.substring(0, 7);
+  const cleanNote = typeof notes === 'string' ? notes.trim().slice(0, 180) : '';
+  const roundedAmount = Math.round((numAmount + Number.EPSILON) * 100) / 100;
+  const nowIso = new Date().toISOString();
+  const suffix = Math.random().toString(36).slice(2, 7);
+
+  const debitId = `tx_cc_pay_${Date.now()}_${suffix}`;
+  const creditId = `tx_cc_crd_${Date.now()}_${suffix}`;
+
+  const fundingTag = validFunding === 'previous_savings' ? 'Previous Savings' : 'Current Income';
+  const modeLabel = validMode === 'partial' ? 'Partial' : 'Full';
+
+  const debitTx: Transaction = {
+    id: debitId,
+    userId: user.id,
+    type: 'expense',
+    amount: roundedAmount,
+    category: 'CC Payment',
+    description: `💳 ${targetCard} Bill Settle (${modeLabel} • ${fundingTag})${cleanNote ? ` - ${cleanNote}` : ''}`,
+    date: txDate,
+    time: istNow.time,
+    paymentMethod: sourceAcc === 'Cash' ? 'Cash' : 'Bank Transfer',
+    account: sourceAcc,
+    source: 'manual',
+    createdAt: nowIso,
+    isCcPayment: true,
+    targetCardAccount: targetCard,
+    sourceAccount: sourceAcc,
+    ccPaymentFundingSource: validFunding,
+    ccSettlementMode: validMode,
+    ccSettlementCycleMonth: effectiveCycleMonth,
+    linkedTransferId: creditId,
+    tags: [
+      'cc-payment',
+      `cc-target:${targetCard}`,
+      `cc-funding:${validFunding}`,
+      `cc-mode:${validMode}`,
+      `cc-cycle:${effectiveCycleMonth}`,
+    ],
+  };
+
+  const creditTx: Transaction = {
+    id: creditId,
+    userId: user.id,
+    type: 'income',
+    amount: roundedAmount,
+    category: 'CC Payment Credit',
+    description: `✅ Bill Settled from ${sourceAcc} (${modeLabel} • ${fundingTag})${cleanNote ? ` - ${cleanNote}` : ''}`,
+    date: txDate,
+    time: istNow.time,
+    paymentMethod: sourceAcc === 'Cash' ? 'Cash' : 'Bank Transfer',
+    account: targetCard,
+    source: 'manual',
+    createdAt: nowIso,
+    isCcPayment: true,
+    isCardPaymentCredit: true,
+    targetCardAccount: targetCard,
+    sourceAccount: sourceAcc,
+    ccPaymentFundingSource: validFunding,
+    ccSettlementMode: validMode,
+    ccSettlementCycleMonth: effectiveCycleMonth,
+    linkedTransferId: debitId,
+    tags: [
+      'cc-payment-credit',
+      `cc-from:${sourceAcc}`,
+      `cc-funding:${validFunding}`,
+      `cc-mode:${validMode}`,
+      `cc-cycle:${effectiveCycleMonth}`,
+    ],
+  };
+
+  if (!store.transactions) store.transactions = [];
+  store.transactions.unshift(creditTx);
+  store.transactions.unshift(debitTx);
+
+  saveUserData(user.id, store);
+  res.json({
+    success: true,
+    debitTransaction: debitTx,
+    creditTransaction: creditTx,
+    transactions: store.transactions,
+    balances: calculateAccountsBalances(user.id),
+    summary: calculateUserSummary(user.id),
+  });
 });
 
 app.delete('/api/accounts/custom/:id', (req, res) => {
@@ -10097,6 +10343,13 @@ app.delete('/api/transactions/:id', (req, res) => {
   if (deleted && (deleted.isReimbursement || deleted.category === 'Reimbursement') && !deleted.isReimbursementInflow) {
     store.transactions = store.transactions.filter(
       t => !(t.isReimbursementInflow && t.linkedTransferId === id)
+    );
+  }
+
+  // If a paired CC bill settlement leg was deleted, also remove its twin leg so both bank & card stay in sync
+  if (deleted && deleted.isCcPayment && deleted.linkedTransferId) {
+    store.transactions = store.transactions.filter(
+      t => t.id !== deleted.linkedTransferId && t.linkedTransferId !== id
     );
   }
 
@@ -13330,7 +13583,8 @@ app.post('/api/udhaar', (req, res) => {
   // If lending money (Maine diya / lent):
   // Deduct from Bank/Card/Cash balance, but STRICTLY EXEMPT from monthly budget!
   if (newRecord.type === 'lent') {
-    const isCc = chosenAccount.includes('CC');
+    const isCc = /\bcc\b|credit card|2005|0000|5733|6526|8210|5376|2904/i.test(chosenAccount) ||
+      (store.customAccounts || []).some(a => a.id === chosenAccount && (a.type === 'credit_card' || a.type === 'rupay_card'));
     const linkedTxId = `tx_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
     const linkedTx: Transaction = {
       id: linkedTxId,
@@ -13367,7 +13621,7 @@ app.post('/api/udhaar/:id/settle', (req, res) => {
   if (!user) return res.status(401).json({ error: 'User session required' });
   const store = getUserData(user.id);
   const { id } = req.params;
-  const { amountSettled, settleAccount, settleDate, notes, recordAccountTx = true } = req.body || {};
+  const { amountSettled, settleAccount, originAccount, settleDate, notes, recordAccountTx = true } = req.body || {};
 
   if (!store.udhaars) store.udhaars = [];
   const itemIndex = store.udhaars.findIndex(u => u.id === id);
@@ -13376,6 +13630,15 @@ app.post('/api/udhaar/:id/settle', (req, res) => {
   }
 
   const existing = store.udhaars[itemIndex];
+  if (originAccount && typeof originAccount === 'string' && originAccount.trim() && originAccount.trim() !== existing.account) {
+    existing.account = originAccount.trim();
+    if (existing.linkedTransactionId) {
+      const linkedOrig = (store.transactions || []).find(t => t.id === existing.linkedTransactionId);
+      if (linkedOrig) {
+        linkedOrig.account = existing.account;
+      }
+    }
+  }
   const alreadySettled = Math.max(0, Number(existing.settledAmount) || 0);
   const remainingBefore = Math.max(0, (Number(existing.amount) || 0) - alreadySettled);
 
@@ -13411,7 +13674,8 @@ app.post('/api/udhaar/:id/settle', (req, res) => {
   let linkedTxId: string | undefined;
   if (recordAccountTx !== false) {
     linkedTxId = `tx_us_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
-    const isCc = /\bcc\b|credit card|2005|0000|5733|6526|8210|5376/i.test(chosenAcc);
+    const isCc = /\bcc\b|credit card|2005|0000|5733|6526|8210|5376|2904/i.test(chosenAcc) ||
+      (store.customAccounts || []).some(a => a.id === chosenAcc && (a.type === 'credit_card' || a.type === 'rupay_card'));
     const payMethod: PaymentMethod = chosenAcc === 'Cash' ? 'Cash' : isCc ? 'Card' : 'Bank Transfer';
 
     if (existing.type === 'lent') {

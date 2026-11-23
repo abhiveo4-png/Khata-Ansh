@@ -19,7 +19,12 @@ import {
   CheckCircle2
 } from 'lucide-react';
 import { FinancialSummary, Transaction, UserRole, CategoryBudget, CategoryDef, UdhaarRecord } from '../types';
-import { CREDIT_CARDS } from '../utils/accounts';
+import { CREDIT_CARDS, isCreditCardAccount, isExcludedWifeCardUdhaar } from '../utils/accounts';
+import {
+  calculateMonthlyCardReserves,
+  isCcPaymentCreditTx,
+  isCcPaymentDebitTx,
+} from '../utils/billingCycle';
 
 interface OverviewCardsProps {
   summary: FinancialSummary;
@@ -78,8 +83,7 @@ export const OverviewCards: React.FC<OverviewCardsProps> = ({
   // Helper: Check if a transaction was paid via Credit Card
   const isCreditCardTx = (t: Transaction): boolean => {
     const acc = (t.account || '').trim();
-    if (CREDIT_CARDS.some(c => c.id === acc)) return true;
-    if (/\bcc\b|credit card|2005|0000|5733|6526|8210|5376/i.test(acc)) return true;
+    if (isCreditCardAccount(acc)) return true;
     if (!acc && t.paymentMethod === 'Card') return true;
     return false;
   };
@@ -110,9 +114,11 @@ export const OverviewCards: React.FC<OverviewCardsProps> = ({
   for (const t of prevTransactions) {
     const amt = Number(t.amount) || 0;
     if (t.type === 'income') {
+      if (isCcPaymentCreditTx(t)) continue;
       prevTotalInflow += amt;
     } else {
-      const isCcBillPayment = Boolean(t.isCcPayment || t.category === 'CC Payment');
+      if (isExcludedWifeCardUdhaar(t)) continue;
+      const isCcBillPayment = isCcPaymentDebitTx(t);
       if (!isCcBillPayment) {
         prevTotalKharcha += amt;
         if (!isCreditCardTx(t)) {
@@ -133,7 +139,6 @@ export const OverviewCards: React.FC<OverviewCardsProps> = ({
   }
 
   const prevFinalSavingsCarry = prevTotalInflow - prevTotalKharcha;
-  const prevBankCashCarry = prevTotalInflow - prevBankCashKharcha;
 
   // 3. Selected Month Seedha Hisaab Figures
   let regularIncome = 0;
@@ -144,8 +149,11 @@ export const OverviewCards: React.FC<OverviewCardsProps> = ({
   // Expenses breakdown by Purpose (Bank + Cash + Card combined)
   let budgetAndGharKharcha = 0; // Personal/Budget/Ghar kharcha
   let rimKharcha = 0;           // Reimbursement kharcha
-  let udhaarDiyaKharcha = 0;    // Udhar diya
-  let ccPaymentDone = 0;        // Credit card bill paid from bank (tracked separately)
+  let udhaarDiyaKharcha = 0;    // Udhar diya (excluding Wife Card 2904 Udhaar)
+  let excludedWifeCardUdhaarTotal = 0; // Tracked transparently, excluded from owner's outflow
+  let ccPaymentDone = 0;        // Credit card bill paid from bank
+  let ccPaidFromCurrentIncomeMonth = 0;
+  let ccPaidFromPreviousSavingsMonth = 0;
   let monthBudgetSpent = 0;     // Strictly for Monthly Budget progress bar
   let monthExpenseCount = 0;
 
@@ -174,6 +182,8 @@ export const OverviewCards: React.FC<OverviewCardsProps> = ({
     );
 
     if (t.type === 'income') {
+      // Paired CC bill settlement credit leg on card ledger is NOT income
+      if (isCcPaymentCreditTx(t)) continue;
       monthIncomeCount++;
       if (isUdhaarRecovery) {
         udhaarRecoveryIncome += amt;
@@ -183,9 +193,23 @@ export const OverviewCards: React.FC<OverviewCardsProps> = ({
         regularIncome += amt;
       }
     } else {
-      const isCcBillPayment = Boolean(t.isCcPayment || t.category === 'CC Payment');
-      if (isCcBillPayment) {
+      if (isCcPaymentDebitTx(t)) {
         ccPaymentDone += amt;
+        const isPrevSavingsFunded =
+          t.ccPaymentFundingSource === 'previous_savings' ||
+          t.tags?.includes('cc-funding:previous_savings') ||
+          t.tags?.includes('funded:previous_savings');
+        if (isPrevSavingsFunded) {
+          ccPaidFromPreviousSavingsMonth += amt;
+        } else {
+          ccPaidFromCurrentIncomeMonth += amt;
+        }
+        continue;
+      }
+
+      // Exclude Udhaar Given via Wife's Card (e.g. AX CC 2904) from owner's monthly outflow
+      if (isExcludedWifeCardUdhaar(t)) {
+        excludedWifeCardUdhaarTotal += amt;
         continue;
       }
 
@@ -238,29 +262,49 @@ export const OverviewCards: React.FC<OverviewCardsProps> = ({
     }
   }
 
-  // 4. Core Seedha Hisaab Totals (Matching User's Exact Formula)
+  // 3C. Bill-Cycle-Based Card Reserve Calculation (for selected month)
+  const monthlyCardReserves = !isAllTime
+    ? calculateMonthlyCardReserves(transactions, activeMonth)
+    : null;
+
+  // 4. Core Seedha Hisaab Totals
   // Total Income (including Salary + RIM Recovery + Udhar Recovery)
   const monthTotalIncome = regularIncome + rimRecoveryIncome + udhaarRecoveryIncome;
   const effectiveTotalIncome = (!isAllTime && includeCarryforward)
     ? monthTotalIncome + prevFinalSavingsCarry
     : monthTotalIncome;
 
-  // Total Kharcha (Bank + Cash + All Cards — Budget + RIM + Udhar Diya)
+  // Total Kharcha (Bank + Cash + All Cards — Budget + RIM + Udhar Diya, excluding Wife Card 2904 Udhaar)
   const totalBankAndCashKharcha = bankOnlyKharcha + cashOnlyKharcha;
-  const totalAllKharcha = totalBankAndCashKharcha + cardTotalKharcha; // Also equals budgetAndGharKharcha + rimKharcha + udhaarDiyaKharcha
+  const totalAllKharcha = totalBankAndCashKharcha + cardTotalKharcha;
 
-  // Bank & Cash Balance currently in hand (before setting aside Card Reserve)
-  // Example: 1,00,000 Income - 30,000 Bank/Cash Kharcha = 70,000 in Bank & Cash
-  const bankAndCashInHand = effectiveTotalIncome - totalBankAndCashKharcha;
+  // CC payments funded from current month income vs previous bank savings
+  const ccPaidFromCurrentIncome = monthlyCardReserves
+    ? monthlyCardReserves.totalPaidFromCurrentIncome
+    : ccPaidFromCurrentIncomeMonth;
+  const ccPaidFromPreviousSavings = monthlyCardReserves
+    ? monthlyCardReserves.totalPaidFromPreviousSavings
+    : ccPaidFromPreviousSavingsMonth;
+  const totalCcSettledForView = monthlyCardReserves
+    ? monthlyCardReserves.totalSettled
+    : ccPaymentDone;
 
-  // Card Reserve (To be set aside from Bank & Cash for paying Credit Card bills)
-  // Example: 30,000 spent via different Credit Cards
-  const cardReserveAmount = cardTotalKharcha;
+  // Bank & Cash Balance currently in hand (deducting Bank/Cash kharcha + CC bills paid from current month income)
+  // Note: CC bills paid from previous bank savings do NOT reduce current month's Bank/Cash income balance!
+  const bankAndCashInHand = effectiveTotalIncome - totalBankAndCashKharcha - ccPaidFromCurrentIncome;
+
+  // Card Reserve: Strictly by each card's Bill Cycle due in `activeMonth` (minus partial/full settlements already done)
+  const cardReserveAmount = monthlyCardReserves
+    ? monthlyCardReserves.totalPendingReserve
+    : Math.max(0, cardTotalKharcha - ccPaymentDone);
   const cardBreakdownEntries = Object.entries(cardWiseBreakdown).sort((a, b) => b[1] - a[1]);
 
-  // Final Pure Savings (After setting aside Card Reserve)
-  // Example: 70,000 Bank/Cash - 30,000 Card Reserve = 40,000 Final Savings (or 1,00,000 - 60,000 = 40,000)
+  // Final Pure Savings (After setting aside pending Bill-Cycle Card Reserve)
   const finalPureSavings = bankAndCashInHand - cardReserveAmount;
+  const displayExcludedWifeUdhaar = Math.max(
+    excludedWifeCardUdhaarTotal,
+    monthlyCardReserves?.totalExcludedWifeUdhaar || 0
+  );
 
   // Udhaar Tab Pending info for quick reference (accounting for partial settlements)
   const safeUdhaars = Array.isArray(udhaars) ? udhaars : [];
@@ -592,7 +636,7 @@ export const OverviewCards: React.FC<OverviewCardsProps> = ({
                   <span className="font-mono font-bold text-cyan-300">₹{displayAmount(bankAndCashInHand)}</span>
                 </div>
                 <div className="flex items-center justify-between text-amber-300 bg-amber-950/50 px-2 py-0.5 rounded border border-amber-500/30">
-                  <span>💳 (-) Card Reserve:</span>
+                  <span>💳 (-) Card Reserve {!isAllTime ? '(Bill Cycle)' : ''}:</span>
                   <span className="font-mono font-bold">-₹{displayAmount(cardReserveAmount)}</span>
                 </div>
               </div>
@@ -673,23 +717,38 @@ export const OverviewCards: React.FC<OverviewCardsProps> = ({
               </div>
               <div>
                 <h3 className="text-sm font-bold text-white flex items-center gap-2">
-                  Seedha Hisaab & Card Reserve Calculator
+                  Seedha Hisaab & Bill-Cycle Card Reserve
                   <span className="text-[10px] font-mono font-semibold px-2 py-0.5 rounded-md bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
                     {formatMonthName(activeMonth)}
                   </span>
                 </h3>
                 <p className="text-[11px] text-slate-400">
-                  Total Income me se Bank/Cash kharcha aur Card Reserve alag karke asli bachat
+                  Har card ka reserve uske statement bill cycle ke hisaab se calculate hota hai (due in {formatMonthName(activeMonth)})
                 </p>
               </div>
             </div>
 
-            {ccPaymentDone > 0 && (
-              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-emerald-950/60 border border-emerald-500/30 text-emerald-300 text-xs font-mono">
-                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
-                Is Mahine CC Bill Paid: ₹{displayAmount(ccPaymentDone)}
-              </span>
-            )}
+            <div className="flex flex-wrap items-center gap-2">
+              {displayExcludedWifeUdhaar > 0 && (
+                <span
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-pink-950/60 border border-pink-500/35 text-pink-200 text-[11px] font-medium"
+                  title="Wife ke card (AX CC 2904) se diya gaya udhaar aapke monthly outflow aur card reserve se excluded hai"
+                >
+                  👩 Wife Card Udhaar Excluded: <span className="font-mono font-bold">₹{displayAmount(displayExcludedWifeUdhaar)}</span>
+                </span>
+              )}
+              {totalCcSettledForView > 0 && (
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-emerald-950/60 border border-emerald-500/30 text-emerald-300 text-xs font-mono">
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                  CC Settled: ₹{displayAmount(totalCcSettledForView)}
+                  {ccPaidFromPreviousSavings > 0 && (
+                    <span className="text-[10px] text-cyan-300 ml-1">
+                      (🏦 Past Sav: ₹{displayAmount(ccPaidFromPreviousSavings)})
+                    </span>
+                  )}
+                </span>
+              )}
+            </div>
           </div>
 
           {/* Step-by-Step Visual Equation */}
@@ -749,23 +808,57 @@ export const OverviewCards: React.FC<OverviewCardsProps> = ({
                   <span>(-) Bank/Cash Kharcha:</span>
                   <span className="font-mono">₹{displayAmount(totalBankAndCashKharcha)}</span>
                 </div>
+                {ccPaidFromCurrentIncome > 0 && (
+                  <div className="flex justify-between text-amber-300">
+                    <span>(-) CC Paid (Income):</span>
+                    <span className="font-mono">₹{displayAmount(ccPaidFromCurrentIncome)}</span>
+                  </div>
+                )}
                 <div className="text-[9px] text-slate-400">
                   (Bank: ₹{displayAmount(bankOnlyKharcha)} • Cash: ₹{displayAmount(cashOnlyKharcha)})
                 </div>
               </div>
             </div>
 
-            {/* Step 4: Card Reserve (To set aside for CC bills) */}
+            {/* Step 4: Bill-Cycle Card Reserve (To set aside for CC bills due in activeMonth) */}
             <div className="bg-amber-950/25 border border-amber-500/35 rounded-xl p-3 flex flex-col justify-between">
-              <div className="text-[11px] font-bold uppercase tracking-wider text-amber-400 flex items-center justify-between">
+              <div className="text-[11px] font-bold uppercase tracking-wider text-amber-400 flex items-center justify-between gap-1">
                 <span>4. Card Reserve 💳</span>
-                <span className="text-[9px] bg-amber-500/20 text-amber-200 px-1.5 py-0.5 rounded">Alag Rakhein</span>
+                <span className="text-[9px] bg-amber-500/20 text-amber-200 px-1.5 py-0.5 rounded whitespace-nowrap">
+                  {!isAllTime ? 'Bill Cycle' : 'Alag Rakhein'}
+                </span>
               </div>
               <div className="text-lg sm:text-xl font-extrabold font-mono text-amber-300 my-1">
                 ₹{displayAmount(cardReserveAmount)}
               </div>
-              <div className="text-[10px] text-amber-200/90 space-y-0.5 border-t border-amber-500/20 pt-1.5 max-h-20 overflow-y-auto">
-                {cardBreakdownEntries.length > 0 ? (
+              <div className="text-[10px] text-amber-200/90 space-y-1 border-t border-amber-500/20 pt-1.5 max-h-28 overflow-y-auto pr-0.5">
+                {!isAllTime && monthlyCardReserves ? (
+                  monthlyCardReserves.items.length > 0 ? (
+                    monthlyCardReserves.items.map((item) => (
+                      <div key={item.cardId} className="bg-black/25 rounded px-1.5 py-1 border border-amber-500/15">
+                        <div className="flex items-center justify-between gap-1">
+                          <span className="truncate font-semibold text-amber-100">
+                            {item.isWifeCard ? '👩 ' : ''}{item.shortName}
+                          </span>
+                          <span className={`font-mono font-bold ${item.pendingReserve === 0 ? 'text-emerald-400' : 'text-amber-300'}`}>
+                            {item.pendingReserve === 0 ? '✅ Paid' : `₹${displayAmount(item.pendingReserve)}`}
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between text-[9px] text-amber-300/75 mt-0.5">
+                          <span>{item.cycle.cycleLabel}</span>
+                          <span>Due {item.cycle.dueLabel}</span>
+                        </div>
+                        {item.totalSettled > 0 && (
+                          <div className="text-[9px] text-emerald-300/90 mt-0.5">
+                            Bill ₹{displayAmount(item.cycleBillAmount)} • Settled ₹{displayAmount(item.totalSettled)}
+                          </div>
+                        )}
+                      </div>
+                    ))
+                  ) : (
+                    <div className="text-slate-400">Is cycle me koi Card bill pending nahi</div>
+                  )
+                ) : cardBreakdownEntries.length > 0 ? (
                   cardBreakdownEntries.map(([cardName, amt]) => (
                     <div key={cardName} className="flex justify-between">
                       <span className="truncate pr-1">{cardName}:</span>
@@ -792,7 +885,9 @@ export const OverviewCards: React.FC<OverviewCardsProps> = ({
                   ₹{displayAmount(bankAndCashInHand)} (Bank) - ₹{displayAmount(cardReserveAmount)} (Card)
                 </div>
                 <div className="text-[9px] text-emerald-300/80">
-                  Ye rashi aap sidha Savings me dal sakte hain
+                  {ccPaidFromPreviousSavings > 0
+                    ? `🏦 ₹${displayAmount(ccPaidFromPreviousSavings)} purani savings se settle hua (income safe)`
+                    : 'Ye rashi aap sidha Savings me dal sakte hain'}
                 </div>
               </div>
             </div>

@@ -20,11 +20,12 @@ import {
   Wallet
 } from 'lucide-react';
 import { UdhaarRecord, AccountId } from '../types';
-import { ALL_ACCOUNTS } from '../utils/accounts';
+import { ALL_ACCOUNTS, isWifeCardAccount, isWifeOwnedAccount } from '../utils/accounts';
 
 export interface UdhaarSettlePayload {
   amountSettled?: number;
   settleAccount?: AccountId | string;
+  originAccount?: AccountId | string;
   settleDate?: string;
   notes?: string;
 }
@@ -82,9 +83,11 @@ export const UdhaarKhataView: React.FC<UdhaarKhataViewProps> = ({
   const [editAccount, setEditAccount] = useState<AccountId>('Cash');
   const [isSavingRecord, setIsSavingRecord] = useState(false);
 
-  // Settlement Modal State (Partial or Full + Choose Bank/Cash/Card Account)
+  // Settlement Modal State (Partial or Full + From->To Bank/Cash/Card Account)
   const [settlingRecord, setSettlingRecord] = useState<UdhaarRecord | null>(null);
+  const [settleModeInput, setSettleModeInput] = useState<'full' | 'partial'>('full');
   const [settleAmountInput, setSettleAmountInput] = useState('');
+  const [settleOriginAccountInput, setSettleOriginAccountInput] = useState<string>('AX Bank');
   const [settleAccountInput, setSettleAccountInput] = useState<string>('AX Bank');
   const [settleDateInput, setSettleDateInput] = useState(() => new Date().toISOString().split('T')[0]);
   const [settleNotesInput, setSettleNotesInput] = useState('');
@@ -180,9 +183,13 @@ export const UdhaarKhataView: React.FC<UdhaarKhataViewProps> = ({
   const handleOpenSettleModal = (item: UdhaarRecord) => {
     const rem = getRemainingAmount(item);
     setSettlingRecord(item);
+    setSettleModeInput('full');
     setSettleAmountInput(String(rem || item.amount));
+    setSettleOriginAccountInput(item.account || 'AX Bank');
     const preferredAcc = item.account && ALL_ACCOUNTS.some(a => a.id === item.account && (a.type === 'bank_account' || a.type === 'cash'))
       ? item.account
+      : isWifeCardAccount(item.account)
+      ? 'Wife Account'
       : 'AX Bank';
     setSettleAccountInput(preferredAcc);
     setSettleDateInput(new Date().toISOString().split('T')[0]);
@@ -200,6 +207,7 @@ export const UdhaarKhataView: React.FC<UdhaarKhataViewProps> = ({
     try {
       await handleSettle(settlingRecord.id, {
         amountSettled: Math.min(rem, parsedAmt),
+        originAccount: settleOriginAccountInput || settlingRecord.account,
         settleAccount: settleAccountInput || 'AX Bank',
         settleDate: settleDateInput || new Date().toISOString().split('T')[0],
         notes: settleNotesInput.trim() || undefined,
@@ -682,7 +690,12 @@ export const UdhaarKhataView: React.FC<UdhaarKhataViewProps> = ({
                                   {item.time && <span>• {item.time}</span>}
                                   {item.account && (
                                     <span className="text-[10px] px-1.5 py-0.5 rounded font-mono font-medium bg-slate-800/90 text-indigo-300 border border-indigo-500/20">
-                                      💳 {item.account}
+                                      {isWifeOwnedAccount(item.account) ? '👩 ' : '💳 '}{item.account}
+                                    </span>
+                                  )}
+                                  {itemIsLent && isWifeCardAccount(item.account) && (
+                                    <span className="text-[10px] px-1.5 py-0.5 rounded font-semibold bg-pink-500/20 text-pink-300 border border-pink-500/35">
+                                      Wife Card • Outflow Excluded
                                     </span>
                                   )}
                                   {item.description && <span className="text-slate-400 italic">({item.description})</span>}
@@ -828,7 +841,12 @@ export const UdhaarKhataView: React.FC<UdhaarKhataViewProps> = ({
                           {item.time && <span>• {item.time}</span>}
                           {item.account && (
                             <span className="text-[10px] px-1.5 py-0.5 rounded font-mono font-medium bg-slate-800/90 text-indigo-300 border border-indigo-500/20">
-                              💳 {item.account}
+                              {isWifeOwnedAccount(item.account) ? '👩 ' : '💳 '}{item.account}
+                            </span>
+                          )}
+                          {isLent && isWifeCardAccount(item.account) && (
+                            <span className="text-[10px] px-1.5 py-0.5 rounded font-semibold bg-pink-500/20 text-pink-300 border border-pink-500/35">
+                              Wife Card • Outflow Excluded
                             </span>
                           )}
                         </p>
@@ -1278,6 +1296,41 @@ export const UdhaarKhataView: React.FC<UdhaarKhataViewProps> = ({
             </p>
 
             <form onSubmit={handleConfirmSettle} className="mt-4 space-y-4">
+              {/* Full / Partial Mode Switcher */}
+              <div className="grid grid-cols-2 gap-1.5 p-1 bg-slate-900 border border-white/[0.08] rounded-xl">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSettleModeInput('full');
+                    setSettleAmountInput(String(getRemainingAmount(settlingRecord)));
+                  }}
+                  className={`py-1.5 px-2.5 rounded-lg text-xs font-bold cursor-pointer transition-all ${
+                    settleModeInput === 'full'
+                      ? 'bg-emerald-600 text-white shadow-sm'
+                      : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  ✅ Full Settle
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSettleModeInput('partial');
+                    const rem = getRemainingAmount(settlingRecord);
+                    if (Number(settleAmountInput) >= rem) {
+                      setSettleAmountInput(String(Math.max(1, Math.round(rem / 2))));
+                    }
+                  }}
+                  className={`py-1.5 px-2.5 rounded-lg text-xs font-bold cursor-pointer transition-all ${
+                    settleModeInput === 'partial'
+                      ? 'bg-amber-600 text-white shadow-sm'
+                      : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  ✂️ Partial Settle
+                </button>
+              </div>
+
               {/* Amount to Settle + Quick Percentage Chips */}
               <div>
                 <div className="flex items-center justify-between mb-1">
@@ -1295,7 +1348,12 @@ export const UdhaarKhataView: React.FC<UdhaarKhataViewProps> = ({
                   max={getRemainingAmount(settlingRecord)}
                   step="any"
                   value={settleAmountInput}
-                  onChange={(e) => setSettleAmountInput(e.target.value)}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setSettleAmountInput(v);
+                    const rem = getRemainingAmount(settlingRecord);
+                    setSettleModeInput(Number(v) >= rem ? 'full' : 'partial');
+                  }}
                   className="w-full px-3 py-2 glass-input rounded-xl text-sm font-bold text-white font-mono focus:outline-none focus:border-emerald-400"
                   autoFocus
                 />
@@ -1311,7 +1369,10 @@ export const UdhaarKhataView: React.FC<UdhaarKhataViewProps> = ({
                       <button
                         key={chip.label}
                         type="button"
-                        onClick={() => setSettleAmountInput(String(val))}
+                        onClick={() => {
+                          setSettleAmountInput(String(val));
+                          setSettleModeInput(chip.pct === 1 ? 'full' : 'partial');
+                        }}
                         className="py-1.5 px-2 rounded-lg bg-white/[0.05] hover:bg-indigo-600/30 border border-white/[0.08] hover:border-indigo-400/50 text-[11px] font-mono text-slate-200 cursor-pointer transition-colors"
                       >
                         {chip.label} (₹{val.toLocaleString('en-IN')})
@@ -1321,38 +1382,74 @@ export const UdhaarKhataView: React.FC<UdhaarKhataViewProps> = ({
                 </div>
               </div>
 
-              {/* Account Selection (Bank / Cash / Card) */}
-              <div>
-                <label className="block text-xs font-medium text-slate-300 mb-1 flex items-center gap-1.5">
+              {/* Account Route: Kis Account Se -> Kis Account Me */}
+              <div className="p-3 rounded-xl bg-slate-900/80 border border-indigo-500/25 space-y-2.5">
+                <div className="text-[11px] font-bold uppercase tracking-wider text-indigo-300 flex items-center gap-1.5">
                   <Wallet className="w-3.5 h-3.5 text-cyan-400" />
+                  Account Route (Kis Account Se → Kis Account Me)
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                  <div>
+                    <label className="block text-[11px] font-medium text-slate-400 mb-1">
+                      {settlingRecord.type === 'lent'
+                        ? 'Kis Account Se Diya Tha (From)'
+                        : 'Kis Account Me Liya Tha (Origin)'}
+                    </label>
+                    <select
+                      value={settleOriginAccountInput}
+                      onChange={(e) => setSettleOriginAccountInput(e.target.value)}
+                      className="w-full px-2.5 py-2 glass-input rounded-xl text-xs text-white focus:outline-none focus:border-indigo-400 bg-slate-950 cursor-pointer font-mono"
+                    >
+                      <optgroup label="Bank Accounts & Cash" className="bg-slate-950 text-emerald-300">
+                        {ALL_ACCOUNTS.filter(a => a.type === 'bank_account' || a.type === 'cash').map((acc) => (
+                          <option key={acc.id} value={acc.id} className="bg-slate-900 text-white">
+                            {isWifeOwnedAccount(acc.id) ? '👩 ' : ''}{acc.shortName}
+                          </option>
+                        ))}
+                      </optgroup>
+                      <optgroup label="Credit & RuPay Cards" className="bg-slate-950 text-sky-300">
+                        {ALL_ACCOUNTS.filter(a => a.type === 'credit_card' || a.type === 'rupay_card').map((acc) => (
+                          <option key={acc.id} value={acc.id} className="bg-slate-900 text-white">
+                            {isWifeOwnedAccount(acc.id) ? '👩 ' : ''}{acc.shortName}
+                          </option>
+                        ))}
+                      </optgroup>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-medium text-cyan-300 mb-1">
+                      {settlingRecord.type === 'lent'
+                        ? 'Kis Account Me Aaya? (To) *'
+                        : 'Kis Account Se Chukaya? (From) *'}
+                    </label>
+                    <select
+                      value={settleAccountInput}
+                      onChange={(e) => setSettleAccountInput(e.target.value)}
+                      className="w-full px-2.5 py-2 glass-input rounded-xl text-xs text-white focus:outline-none focus:border-cyan-400 bg-slate-950 cursor-pointer font-mono"
+                    >
+                      <optgroup label="Bank Accounts & Cash" className="bg-slate-950 text-emerald-300">
+                        {ALL_ACCOUNTS.filter(a => a.type === 'bank_account' || a.type === 'cash').map((acc) => (
+                          <option key={acc.id} value={acc.id} className="bg-slate-900 text-white">
+                            {isWifeOwnedAccount(acc.id) ? '👩 ' : ''}{acc.shortName} ({acc.badge})
+                          </option>
+                        ))}
+                      </optgroup>
+                      <optgroup label="Credit & RuPay Cards" className="bg-slate-950 text-sky-300">
+                        {ALL_ACCOUNTS.filter(a => a.type === 'credit_card' || a.type === 'rupay_card').map((acc) => (
+                          <option key={acc.id} value={acc.id} className="bg-slate-900 text-white">
+                            {isWifeOwnedAccount(acc.id) ? '👩 ' : ''}{acc.shortName} ({acc.badge})
+                          </option>
+                        ))}
+                      </optgroup>
+                    </select>
+                  </div>
+                </div>
+                <p className="text-[10px] text-slate-400">
                   {settlingRecord.type === 'lent'
-                    ? 'Kis Bank / Cash Account Me Aaya? *'
-                    : 'Kis Bank / Cash / Card Se Chukaya? *'}
-                </label>
-                <select
-                  value={settleAccountInput}
-                  onChange={(e) => setSettleAccountInput(e.target.value)}
-                  className="w-full px-3 py-2.5 glass-input rounded-xl text-xs text-white focus:outline-none focus:border-cyan-400 bg-slate-900 cursor-pointer font-mono"
-                >
-                  <optgroup label="Bank Accounts & Cash" className="bg-slate-950 text-emerald-300">
-                    {ALL_ACCOUNTS.filter(a => a.type === 'bank_account' || a.type === 'cash').map((acc) => (
-                      <option key={acc.id} value={acc.id} className="bg-slate-900 text-white">
-                        {acc.badge}: {acc.name}
-                      </option>
-                    ))}
-                  </optgroup>
-                  <optgroup label="Credit & RuPay Cards" className="bg-slate-950 text-sky-300">
-                    {ALL_ACCOUNTS.filter(a => a.type === 'credit_card' || a.type === 'rupay_card').map((acc) => (
-                      <option key={acc.id} value={acc.id} className="bg-slate-900 text-white">
-                        {acc.badge}: {acc.name}
-                      </option>
-                    ))}
-                  </optgroup>
-                </select>
-                <p className="text-[10px] text-slate-400 mt-1">
-                  {settlingRecord.type === 'lent'
-                    ? 'Chuna gaya Bank/Cash balance automatically badh jayega.'
-                    : 'Chune gaye account se payment deduct record ho jayega.'}
+                    ? `Route: ${settleOriginAccountInput} (Udhaar Diya) → ${settleAccountInput} me credit hoga.`
+                    : `Route: ${settleAccountInput} se debit hokar Udhaar chukaya record hoga.`}
                 </p>
               </div>
 

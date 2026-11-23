@@ -68,6 +68,18 @@ export const DEFAULT_ACCOUNTS_CONFIG: Record<string, AccountMeta> = {
     billingDay: 20,
     paymentDueDay: 10,
   },
+  'AX CC 2904': {
+    id: 'AX CC 2904',
+    name: "Axis Bank CC 2904 (Wife's Card)",
+    shortName: 'AX CC 2904',
+    type: 'credit_card',
+    badge: 'Wife CC',
+    color: '#ec4899', // Pink
+    creditLimit: 100000,
+    billingDay: 15,
+    paymentDueDay: 5,
+    isWifeAccount: true,
+  },
   'IC Bank': {
     id: 'IC Bank',
     name: 'ICICI Bank Savings Account',
@@ -86,6 +98,16 @@ export const DEFAULT_ACCOUNTS_CONFIG: Record<string, AccountMeta> = {
     color: '#be185d', // Rose / Maroon
     isUpiCapable: true,
   },
+  'Wife Account': {
+    id: 'Wife Account',
+    name: "Wife's Bank / Savings Account",
+    shortName: 'Wife Account',
+    type: 'bank_account',
+    badge: 'Wife Bank',
+    color: '#db2777', // Deep Pink
+    isUpiCapable: true,
+    isWifeAccount: true,
+  },
   'Cash': {
     id: 'Cash',
     name: 'Cash in Hand / Pocket',
@@ -97,26 +119,71 @@ export const DEFAULT_ACCOUNTS_CONFIG: Record<string, AccountMeta> = {
 };
 
 const CUSTOM_ACCOUNTS_STORAGE_KEY = 'hisab_custom_accounts_v1';
+const ACCOUNT_CYCLES_STORAGE_KEY = 'hisab_account_cycle_overrides_v1';
+
+interface AccountCycleOverrides {
+  billingDays: Record<string, number>;
+  paymentDueDays: Record<string, number>;
+}
 
 export const ACCOUNTS_CONFIG: Record<string, AccountMeta> = { ...DEFAULT_ACCOUNTS_CONFIG };
 export const ALL_ACCOUNTS: AccountMeta[] = Object.values(ACCOUNTS_CONFIG);
 export const CREDIT_CARDS: AccountMeta[] = ALL_ACCOUNTS.filter(a => a.type === 'credit_card' || a.type === 'rupay_card');
 export const BANK_ACCOUNTS: AccountMeta[] = ALL_ACCOUNTS.filter(a => a.type === 'bank_account');
 
-function rebuildAccountExports(customList: AccountMeta[]) {
+function loadSavedCycleOverrides(): AccountCycleOverrides {
+  try {
+    if (typeof window !== 'undefined' && window.localStorage) {
+      const raw = window.localStorage.getItem(ACCOUNT_CYCLES_STORAGE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        return {
+          billingDays: parsed?.billingDays && typeof parsed.billingDays === 'object' ? parsed.billingDays : {},
+          paymentDueDays: parsed?.paymentDueDays && typeof parsed.paymentDueDays === 'object' ? parsed.paymentDueDays : {},
+        };
+      }
+    }
+  } catch {
+    // ignore storage errors
+  }
+  return { billingDays: {}, paymentDueDays: {} };
+}
+
+function rebuildAccountExports(
+  customList: AccountMeta[],
+  cardBillingDays?: Record<string, number>,
+  cardPaymentDueDays?: Record<string, number>
+) {
   // Clear existing keys in ACCOUNTS_CONFIG
   for (const key of Object.keys(ACCOUNTS_CONFIG)) {
     delete ACCOUNTS_CONFIG[key];
   }
-  // Restore defaults
+  // Restore defaults (shallow copy so DEFAULT_ACCOUNTS_CONFIG stays pristine)
   for (const [k, v] of Object.entries(DEFAULT_ACCOUNTS_CONFIG)) {
-    ACCOUNTS_CONFIG[k] = v;
+    ACCOUNTS_CONFIG[k] = { ...v };
   }
   // Add custom accounts
   if (Array.isArray(customList)) {
     for (const item of customList) {
       if (item && item.id) {
         ACCOUNTS_CONFIG[item.id] = { ...item, isCustom: true };
+      }
+    }
+  }
+  // Apply billingDay / paymentDueDay overrides
+  if (cardBillingDays && typeof cardBillingDays === 'object') {
+    for (const [accId, dayVal] of Object.entries(cardBillingDays)) {
+      const day = Math.round(Number(dayVal));
+      if (ACCOUNTS_CONFIG[accId] && !isNaN(day) && day >= 1 && day <= 31) {
+        ACCOUNTS_CONFIG[accId] = { ...ACCOUNTS_CONFIG[accId], billingDay: day };
+      }
+    }
+  }
+  if (cardPaymentDueDays && typeof cardPaymentDueDays === 'object') {
+    for (const [accId, dayVal] of Object.entries(cardPaymentDueDays)) {
+      const day = Math.round(Number(dayVal));
+      if (ACCOUNTS_CONFIG[accId] && !isNaN(day) && day >= 1 && day <= 31) {
+        ACCOUNTS_CONFIG[accId] = { ...ACCOUNTS_CONFIG[accId], paymentDueDay: day };
       }
     }
   }
@@ -148,20 +215,110 @@ export function loadSavedCustomAccounts(): AccountMeta[] {
   return [];
 }
 
-export function syncCustomAccounts(customList?: AccountMeta[]) {
-  const safeList = Array.isArray(customList) ? customList : [];
+export function syncCustomAccounts(
+  customList?: AccountMeta[],
+  cardBillingDays?: Record<string, number>,
+  cardPaymentDueDays?: Record<string, number>
+) {
+  const safeList = Array.isArray(customList) ? customList : loadSavedCustomAccounts();
+  const savedCycles = loadSavedCycleOverrides();
+  const effectiveBillingDays = cardBillingDays && typeof cardBillingDays === 'object'
+    ? cardBillingDays
+    : savedCycles.billingDays;
+  const effectiveDueDays = cardPaymentDueDays && typeof cardPaymentDueDays === 'object'
+    ? cardPaymentDueDays
+    : savedCycles.paymentDueDays;
+
   try {
     if (typeof window !== 'undefined' && window.localStorage) {
-      window.localStorage.setItem(CUSTOM_ACCOUNTS_STORAGE_KEY, JSON.stringify(safeList));
+      if (Array.isArray(customList)) {
+        window.localStorage.setItem(CUSTOM_ACCOUNTS_STORAGE_KEY, JSON.stringify(safeList));
+      }
+      if (cardBillingDays || cardPaymentDueDays) {
+        window.localStorage.setItem(
+          ACCOUNT_CYCLES_STORAGE_KEY,
+          JSON.stringify({ billingDays: effectiveBillingDays, paymentDueDays: effectiveDueDays })
+        );
+      }
     }
   } catch {
     // ignore storage errors
   }
-  rebuildAccountExports(safeList);
+  rebuildAccountExports(safeList, effectiveBillingDays, effectiveDueDays);
 }
 
 // Initialize on module load from localStorage if available
-rebuildAccountExports(loadSavedCustomAccounts());
+const initialCycles = loadSavedCycleOverrides();
+rebuildAccountExports(loadSavedCustomAccounts(), initialCycles.billingDays, initialCycles.paymentDueDays);
+
+/**
+ * Helper: Check whether an account ID is a Credit / RuPay card
+ */
+export function isCreditCardAccount(accountId?: string): boolean {
+  const acc = (accountId || '').trim();
+  if (!acc) return false;
+  const meta = ACCOUNTS_CONFIG[acc];
+  if (meta) return meta.type === 'credit_card' || meta.type === 'rupay_card';
+  return /\bcc\b|credit card|rupay|2005|0000|5733|6526|8210|5376|2904/i.test(acc);
+}
+
+/**
+ * Helper: Check whether an account ID is Wife's Credit Card (e.g. AX CC 2904 or any card marked isWifeAccount)
+ */
+export function isWifeCardAccount(accountId?: string): boolean {
+  const acc = (accountId || '').trim();
+  if (!acc) return false;
+  const meta = ACCOUNTS_CONFIG[acc];
+  if (meta) {
+    const isCard = meta.type === 'credit_card' || meta.type === 'rupay_card';
+    if (!isCard) return false;
+    if (meta.isWifeAccount !== undefined) return Boolean(meta.isWifeAccount);
+  }
+  return /\b2904\b/i.test(acc) || (/wife/i.test(acc) && /\bcc\b|card/i.test(acc));
+}
+
+/**
+ * Helper: Check whether an account ID belongs to Wife (either Bank Account or Card)
+ */
+export function isWifeOwnedAccount(accountId?: string): boolean {
+  const acc = (accountId || '').trim();
+  if (!acc) return false;
+  const meta = ACCOUNTS_CONFIG[acc];
+  if (meta?.isWifeAccount) return true;
+  return /\b2904\b/i.test(acc) || /\bwife\b/i.test(acc);
+}
+
+/**
+ * Helper: Check whether a transaction is an Udhaar Given from Wife's Card (e.g. Axis Card 2904),
+ * which must be excluded from the owner's monthly outflow & card reserve.
+ */
+export function isExcludedWifeCardUdhaar(t: {
+  type?: string;
+  account?: string;
+  isUdhaarLent?: boolean;
+  isUdhaarRepaid?: boolean;
+  category?: string;
+  tags?: string[];
+}): boolean {
+  if (!t || t.type !== 'expense') return false;
+  const isUdhaarRepaid = Boolean(
+    t.isUdhaarRepaid ||
+    t.category === 'Udhaar Repaid' ||
+    (Array.isArray(t.tags) && t.tags.includes('udhaar-repaid'))
+  );
+  if (isUdhaarRepaid) return false;
+
+  const isUdhaarLent = Boolean(
+    t.isUdhaarLent ||
+    t.category === 'Udhaar Given' ||
+    t.category === 'Loan Given' ||
+    (t.category && t.category.toLowerCase().includes('udhaar')) ||
+    (Array.isArray(t.tags) && t.tags.includes('udhaar-lent'))
+  );
+  if (!isUdhaarLent) return false;
+
+  return isWifeCardAccount(t.account);
+}
 
 /**
  * Smart detection of account/card from text
@@ -180,6 +337,25 @@ export function detectAccount(text: string): AccountId | undefined {
         return acc.id;
       }
     }
+  }
+
+  // Axis CC 2904 (Wife's Card)
+  if (
+    lower.includes('2904') ||
+    lower.includes('wife cc') ||
+    lower.includes('wife card') ||
+    lower.includes('patni card')
+  ) {
+    return 'AX CC 2904';
+  }
+
+  // Wife's Bank / Savings Account (explicit direct usage, not savings transfer from AX Bank)
+  if (
+    (lower.includes('wife bank') || lower.includes('wife account') || lower.includes('wife a/c') || lower.includes('patni account')) &&
+    !lower.includes('transfer to wife') &&
+    !lower.includes('transferred to wife')
+  ) {
+    return 'Wife Account';
   }
 
 
