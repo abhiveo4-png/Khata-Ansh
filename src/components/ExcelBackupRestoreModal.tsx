@@ -31,9 +31,11 @@ import {
   Coins,
   TrendingUp,
   HeartHandshake,
-  CreditCard
+  CreditCard,
+  FileJson
 } from 'lucide-react';
 import { safeFetchJson } from '../utils/api';
+import { syncCustomAccounts } from '../utils/accounts';
 import { 
   Transaction, 
   CategoryDef, 
@@ -97,6 +99,18 @@ export const ExcelBackupRestoreModal: React.FC<ExcelBackupRestoreModalProps> = (
   const [parsedInvRows, setParsedInvRows] = useState<any[]>([]);
   const [parsedSavRows, setParsedSavRows] = useState<any[]>([]);
   const [parsedEmiRows, setParsedEmiRows] = useState<any[]>([]);
+  const [parsedJsonBackup, setParsedJsonBackup] = useState<any | null>(null);
+  const [jsonReplicaMeta, setJsonReplicaMeta] = useState<{
+    sourceName: string;
+    exportedAt: string;
+    customCardsCount: number;
+    balancesCount: number;
+    cyclesCount: number;
+    dailyLimitsCount: number;
+    piggyBankCount: number;
+    budgetsCount: number;
+    wifeBaseBalance: number;
+  } | null>(null);
   const [isSnapshotDetected, setIsSnapshotDetected] = useState<boolean>(false);
   const [previewTab, setPreviewTab] = useState<'transactions' | 'udhaars' | 'fuel' | 'investments' | 'savings' | 'emis'>('transactions');
   const [detectedSheets, setDetectedSheets] = useState<string[]>([]);
@@ -159,14 +173,73 @@ export const ExcelBackupRestoreModal: React.FC<ExcelBackupRestoreModalProps> = (
 
   if (!isOpen) return null;
 
-  // Handle file drop & selection
+  // Handle file drop & selection (supports Complete JSON Replica + Excel + CSV)
   const processFile = async (selectedFile: File) => {
     setError(null);
     setSuccessMessage(null);
     setFile(selectedFile);
     setIsSnapshotDetected(false);
+    setParsedJsonBackup(null);
+    setJsonReplicaMeta(null);
 
     try {
+      const isJsonFile =
+        selectedFile.name.toLowerCase().endsWith('.json') ||
+        selectedFile.type === 'application/json';
+
+      if (isJsonFile) {
+        const text = await selectedFile.text();
+        const parsed = JSON.parse(text);
+        if (!parsed || typeof parsed !== 'object') {
+          throw new Error('JSON file ka format valid nahi hai.');
+        }
+        const dataBlock = parsed.data && typeof parsed.data === 'object' ? parsed.data : parsed;
+        const txRows = Array.isArray(dataBlock.transactions) ? dataBlock.transactions : [];
+        const catRows = Array.isArray(dataBlock.categories) ? dataBlock.categories : [];
+        const udhaarRows = Array.isArray(dataBlock.udhaars) ? dataBlock.udhaars : [];
+        const fuelRows = Array.isArray(dataBlock.fuelLogs) ? dataBlock.fuelLogs : [];
+        const invRows = Array.isArray(dataBlock.investments) ? dataBlock.investments : [];
+        const savRows = Array.isArray(dataBlock.savingsTransfers) ? dataBlock.savingsTransfers : [];
+        const emiRows = Array.isArray(dataBlock.cardEmis) ? dataBlock.cardEmis : [];
+        const customCardsCount = Array.isArray(dataBlock.customAccounts) ? dataBlock.customAccounts.length : 0;
+        const balancesCount = dataBlock.accountBaseBalances && typeof dataBlock.accountBaseBalances === 'object'
+          ? Object.keys(dataBlock.accountBaseBalances).length
+          : 0;
+        const cyclesCount = dataBlock.cardBillingDays && typeof dataBlock.cardBillingDays === 'object'
+          ? Object.keys(dataBlock.cardBillingDays).length
+          : 0;
+        const dailyLimitsCount = Array.isArray(dataBlock.dailyItemLimits) ? dataBlock.dailyItemLimits.length : 0;
+        const piggyBankCount = Array.isArray(dataBlock.piggyBankFunds) ? dataBlock.piggyBankFunds.length : 0;
+        const budgetsCount = Array.isArray(dataBlock.budgets) ? dataBlock.budgets.length : 0;
+        const wifeBaseBalance = Number(dataBlock.wifeBaseBalance) || 0;
+
+        setParsedJsonBackup(parsed);
+        setFileBase64(null);
+        setDetectedSheets(['JSON Account Replica']);
+        setParsedRows(txRows);
+        setParsedCatRows(catRows);
+        setParsedUdhaarRows(udhaarRows);
+        setParsedFuelRows(fuelRows);
+        setParsedInvRows(invRows);
+        setParsedSavRows(savRows);
+        setParsedEmiRows(emiRows);
+        setIsSnapshotDetected(true);
+        // Default to Replace All for exact 1:1 Account Replica migration
+        setReplaceExisting(true);
+        setJsonReplicaMeta({
+          sourceName: parsed.sourceAccount?.name || parsed.user?.name || 'Source Account',
+          exportedAt: parsed.exportedAt || '',
+          customCardsCount,
+          balancesCount,
+          cyclesCount,
+          dailyLimitsCount,
+          piggyBankCount,
+          budgetsCount,
+          wifeBaseBalance,
+        });
+        return;
+      }
+
       const data = await selectedFile.arrayBuffer();
       
       // Convert to Base64 for high-fidelity server restore
@@ -300,9 +373,10 @@ export const ExcelBackupRestoreModal: React.FC<ExcelBackupRestoreModalProps> = (
     }
   };
 
-  // Trigger restore API
+  // Trigger restore API (Complete JSON Replica OR Excel/CSV)
   const handleRestore = async () => {
     if (
+      !parsedJsonBackup &&
       parsedRows.length === 0 && 
       parsedCatRows.length === 0 && 
       parsedUdhaarRows.length === 0 && 
@@ -312,7 +386,7 @@ export const ExcelBackupRestoreModal: React.FC<ExcelBackupRestoreModalProps> = (
       parsedEmiRows.length === 0 &&
       !fileBase64
     ) {
-      setError('Pehle ek valid Excel (.xlsx) ya CSV backup file chuniye.');
+      setError('Pehle ek valid JSON (.json), Excel (.xlsx) ya CSV backup file chuniye.');
       return;
     }
 
@@ -321,6 +395,45 @@ export const ExcelBackupRestoreModal: React.FC<ExcelBackupRestoreModalProps> = (
     setSuccessMessage(null);
 
     try {
+      if (parsedJsonBackup) {
+        const { data, error: apiErr } = await safeFetchJson<
+          RestoreBackupResult & {
+            customAccounts?: any[];
+            deletedAccounts?: string[];
+            cardBillingStartDays?: Record<string, number>;
+            cardBillingDays?: Record<string, number>;
+            cardPaymentDueDays?: Record<string, number>;
+          }
+        >('/api/restore/json', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            backup: parsedJsonBackup,
+            mode: replaceExisting ? 'replace' : 'merge',
+          }),
+        });
+
+        if (apiErr || !data?.success) {
+          setError(apiErr || 'JSON Account Replica restore fail ho gaya.');
+          return;
+        }
+
+        syncCustomAccounts(
+          data.customAccounts,
+          data.cardBillingDays,
+          data.cardPaymentDueDays,
+          data.cardBillingStartDays,
+          data.deletedAccounts
+        );
+        setSuccessMessage(data.message || 'Complete Account JSON Replica successfully restore ho gaya!');
+        onRestoreSuccess(data);
+
+        setTimeout(() => {
+          onClose();
+        }, 1600);
+        return;
+      }
+
       const { data, error: apiErr } = await safeFetchJson<RestoreBackupResult>('/api/transactions/restore-backup', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -349,7 +462,60 @@ export const ExcelBackupRestoreModal: React.FC<ExcelBackupRestoreModalProps> = (
         onClose();
       }, 1600);
     } catch (err: any) {
-      setError(err?.message || 'Failed to restore transactions');
+      setError(err?.message || 'Failed to restore backup');
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  // Download Complete JSON Account Replica (.json)
+  const handleDownloadJsonBackup = async () => {
+    try {
+      setIsProcessing(true);
+      setError(null);
+      setSuccessMessage(null);
+
+      const headers: Record<string, string> = {};
+      const token = localStorage.getItem('teleexpense_auth_token') || localStorage.getItem('auth_token');
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+      if (currentUser?.id) {
+        headers['x-user-id'] = currentUser.id;
+      }
+
+      const res = await fetch('/api/backup/json', { headers });
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => ({}));
+        throw new Error(errJson.error || 'JSON Replica download fail ho gaya.');
+      }
+
+      const blob = await res.blob();
+      const blobUrl = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = blobUrl;
+
+      const contentDisposition = res.headers.get('Content-Disposition');
+      const sanitizedName = (currentUser?.name || 'Account').replace(/[^a-zA-Z0-9_]/g, '_');
+      let fileName = `TeleExpense_Account_Replica_${sanitizedName}_${new Date().toISOString().split('T')[0]}.json`;
+
+      if (contentDisposition && contentDisposition.includes('filename=')) {
+        const match = contentDisposition.match(/filename="?([^"]+)"?/);
+        if (match && match[1]) {
+          fileName = match[1];
+        }
+      }
+
+      link.download = fileName;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(blobUrl);
+
+      setSuccessMessage(`✅ Complete JSON Account Replica download ho gaya (${fileName})! Isko kisi bhi account me upload karke exact replica bana sakte hain.`);
+    } catch (err: any) {
+      console.error('Download JSON backup error:', err);
+      setError(err?.message || 'JSON backup download me samasya aayi.');
     } finally {
       setIsProcessing(false);
     }
@@ -423,13 +589,13 @@ export const ExcelBackupRestoreModal: React.FC<ExcelBackupRestoreModalProps> = (
             </div>
             <div>
               <h2 className="text-base sm:text-lg font-bold text-white font-display flex items-center gap-2">
-                EXCEL BACKUP & RESTORE
-                <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-cyan-950 border border-cyan-500/40 text-cyan-300">
-                  ALL-IN-ONE 10-MODULE
+                ACCOUNT BACKUP & RESTORE
+                <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-indigo-950 border border-indigo-500/50 text-indigo-300">
+                  JSON REPLICA + EXCEL
                 </span>
               </h2>
               <p className="text-xs text-slate-400 font-mono mt-0.5">
-                Transactions, Categories, Udhaar Khata, Fuel, Investments, Transfers, EMIs aur Family Khate ka complete backup.
+                1-Click Complete JSON Account Migration (1:1 Replica), Excel Backup, aur Restore.
               </p>
             </div>
           </div>
@@ -504,16 +670,46 @@ export const ExcelBackupRestoreModal: React.FC<ExcelBackupRestoreModalProps> = (
           {/* TAB 1: EXPORT BACKUP */}
           {activeTab === 'export' && (
             <div className="space-y-4">
+
+              {/* Featured #1: 1-Click Complete JSON Account Replica (.json) */}
+              <div className="p-5 rounded-2xl bg-gradient-to-br from-violet-950/60 via-indigo-950/50 to-slate-900 border border-indigo-400/50 space-y-3.5 shadow-xl shadow-indigo-950/40">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="space-y-1">
+                    <span className="text-[10px] font-bold text-indigo-300 uppercase tracking-wider bg-indigo-950/90 px-2 py-0.5 rounded-full border border-indigo-400/50">
+                      BEST FOR ACCOUNT MIGRATION • 1:1 EXACT REPLICA
+                    </span>
+                    <h3 className="text-sm sm:text-base font-bold text-white mt-1">
+                      Complete App Data JSON Backup (.json)
+                    </h3>
+                    <p className="text-xs text-slate-300 leading-relaxed">
+                      Kisi bhi naye account ya dusri jagah migrate karne ke liye sabse accurate backup! Isme <b>100% app data</b> include hota hai — <b>Transactions</b>, <b>Udhaar (partial history sahit)</b>, <b>Card Limits & Start/End/Due Bill Cycles</b>, <b>Custom Cards</b>, <b>Bank/Wife Base Balances</b>, <b>Investments & Auto-Debit</b>, <b>EMIs</b>, <b>Fuel Logs</b>, <b>Daily Limits</b>, <b>Gullak / Piggy Bank</b>, <b>Categories & Budgets</b>.
+                    </p>
+                  </div>
+                  <div className="w-12 h-12 rounded-2xl bg-indigo-950/90 border border-indigo-400/60 flex items-center justify-center text-indigo-300 shrink-0 shadow-lg">
+                    <FileJson className="w-6 h-6" />
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handleDownloadJsonBackup}
+                  disabled={isProcessing}
+                  className="w-full py-3.5 px-4 rounded-xl bg-gradient-to-r from-indigo-500 via-violet-500 to-cyan-500 hover:from-indigo-400 hover:to-cyan-400 text-white font-bold text-xs sm:text-sm flex items-center justify-center space-x-2.5 transition-all cursor-pointer shadow-lg shadow-indigo-950/60 group disabled:opacity-50"
+                >
+                  <FileJson className="w-5 h-5 group-hover:scale-105 transition-transform" />
+                  <span>{isProcessing ? 'PREPARING JSON REPLICA...' : 'DOWNLOAD COMPLETE ACCOUNT JSON REPLICA (.JSON)'}</span>
+                </button>
+              </div>
               
-              {/* Featured Primary 1-Click Excel Backup Button Card */}
+              {/* Secondary Featured: 1-Click Excel Backup Button Card */}
               <div className="p-5 rounded-2xl bg-gradient-to-br from-indigo-950/50 via-slate-900 to-cyan-950/40 border border-cyan-500/40 space-y-4 shadow-xl shadow-cyan-950/30">
                 <div className="flex items-start justify-between gap-3">
                   <div className="space-y-1">
                     <span className="text-[10px] font-bold text-cyan-400 uppercase tracking-wider bg-cyan-950/80 px-2 py-0.5 rounded-full border border-cyan-500/40">
-                      RECOMMENDED • COMPLETE 10-SHEET ARCHIVE
+                      SPREADSHEET ARCHIVE • 10 SHEETS
                     </span>
                     <h3 className="text-sm sm:text-base font-bold text-white mt-1">
-                      1-Click Complete Account Excel Backup (.xlsx)
+                      Complete Account Excel Backup (.xlsx)
                     </h3>
                     <p className="text-xs text-slate-300 leading-relaxed">
                       Ek hi multi-sheet Excel file me aapke khate ka complete data download ho jayega: <b>Transactions</b>, <b>Categories & Budgets</b>, <b>Udhaar Khata (Diya / Liya)</b>, <b>Fuel & Mileage Logs</b>, <b>Investments Portfolio (RD/FD/MF)</b>, <b>Savings Transfers</b>, <b>Credit Card EMIs</b>, <b>Gullak Savings</b>, aur <b>Linked Telegram Family Members</b>.
@@ -621,10 +817,10 @@ export const ExcelBackupRestoreModal: React.FC<ExcelBackupRestoreModalProps> = (
             <div className="space-y-4">
               
               {/* Info Note */}
-              <div className="p-3.5 rounded-2xl bg-cyan-950/30 border border-cyan-500/30 flex items-start space-x-3 text-xs text-slate-300">
-                <Info className="w-4 h-4 text-cyan-400 shrink-0 mt-0.5" />
+              <div className="p-3.5 rounded-2xl bg-indigo-950/35 border border-indigo-500/35 flex items-start space-x-3 text-xs text-slate-300">
+                <Info className="w-4 h-4 text-indigo-400 shrink-0 mt-0.5" />
                 <p className="leading-relaxed">
-                  Aap TeleExpense se download kiye gaye Excel (.xlsx) ya CSV file ko yahan upload karein. Isme <b>Transactions</b>, <b>Udhaar Khata</b>, <b>Fuel & Mileage</b>, <b>Investments</b>, <b>Transfers</b>, <b>Card EMIs</b>, <b>Categories</b> aur <b>Budgets</b> sab automatic detect ho kar restore ho jayenge.
+                  Naye account me <b>exact replica</b> banane ke liye <b>JSON Replica (.json)</b> file upload karein — saare Transactions, Cards, Bill Cycles, Balances, Udhaar, Investments, Gullak, Fuel, EMIs aur Budgets 1 click me clone ho jayenge (Excel <code>.xlsx</code> aur <code>.csv</code> bhi supported hain).
                 </p>
               </div>
 
@@ -642,19 +838,25 @@ export const ExcelBackupRestoreModal: React.FC<ExcelBackupRestoreModalProps> = (
                     ? 'border-cyan-400 bg-cyan-950/40 scale-[0.99]'
                     : file
                     ? 'border-emerald-500/60 bg-emerald-950/20'
-                    : 'border-slate-700 hover:border-cyan-500/60 bg-slate-900/40 hover:bg-slate-900/80'
+                    : 'border-slate-700 hover:border-indigo-400/70 bg-slate-900/40 hover:bg-slate-900/80'
                 }`}
               >
                 <input
                   ref={fileInputRef}
                   type="file"
-                  accept=".xlsx, .xls, .csv"
+                  accept=".json, .xlsx, .xls, .csv"
                   onChange={handleFileChange}
                   className="hidden"
                 />
 
                 <div className="w-12 h-12 rounded-2xl bg-slate-800 border border-slate-700 text-cyan-400 flex items-center justify-center mx-auto mb-3 shadow-inner">
-                  {file ? <FileSpreadsheet className="w-6 h-6 text-emerald-400" /> : <Upload className="w-6 h-6 text-cyan-400" />}
+                  {parsedJsonBackup ? (
+                    <FileJson className="w-6 h-6 text-indigo-400" />
+                  ) : file ? (
+                    <FileSpreadsheet className="w-6 h-6 text-emerald-400" />
+                  ) : (
+                    <Upload className="w-6 h-6 text-cyan-400" />
+                  )}
                 </div>
 
                 {file ? (
@@ -669,10 +871,10 @@ export const ExcelBackupRestoreModal: React.FC<ExcelBackupRestoreModalProps> = (
                 ) : (
                   <div>
                     <span className="text-xs font-bold text-white block">
-                      Excel (.xlsx) ya CSV Backup File Yahan Upload Karein
+                      Complete JSON Replica (.json), Excel (.xlsx) ya CSV Backup Upload Karein
                     </span>
                     <span className="text-[11px] text-slate-400 mt-1 block">
-                      Supports complete TeleExpense 10-Sheet backups with Transactions, Udhaar, Fuel, Investments, EMIs, Categories & Settings
+                      JSON upload karte hi pure account ke Cards, Bill Cycles, Balances, Udhaar, Investments, Gullak aur Transactions clone ho jayenge
                     </span>
                   </div>
                 )}
@@ -681,16 +883,34 @@ export const ExcelBackupRestoreModal: React.FC<ExcelBackupRestoreModalProps> = (
               {/* Detected Content Badges */}
               {file && (
                 <div className="p-3.5 rounded-2xl bg-slate-950/80 border border-slate-800 space-y-2">
-                  <div className="flex items-center justify-between">
+                  <div className="flex items-center justify-between flex-wrap gap-1.5">
                     <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block">
                       FILE ME PAYA GAYA DATA:
                     </span>
-                    {isSnapshotDetected && (
+                    {parsedJsonBackup ? (
+                      <span className="px-2 py-0.5 rounded-full text-[9px] font-bold bg-indigo-950 text-indigo-300 border border-indigo-400/50 flex items-center gap-1">
+                        <Sparkles className="w-3 h-3" /> Complete JSON Account Replica (1:1 Clone Ready)
+                      </span>
+                    ) : isSnapshotDetected && (
                       <span className="px-2 py-0.5 rounded-full text-[9px] font-bold bg-emerald-950 text-emerald-300 border border-emerald-500/50 flex items-center gap-1">
                         <Sparkles className="w-3 h-3" /> All-in-One High-Fidelity Snapshot (v4.0)
                       </span>
                     )}
                   </div>
+                  {jsonReplicaMeta && (
+                    <div className="text-[10px] text-indigo-200/85 bg-indigo-950/35 border border-indigo-500/25 rounded-xl px-3 py-2 flex flex-wrap gap-x-3 gap-y-1">
+                      <span>👤 Source: <b>{jsonReplicaMeta.sourceName}</b></span>
+                      {jsonReplicaMeta.exportedAt && (
+                        <span>🕒 Exported: <b>{jsonReplicaMeta.exportedAt.split('T')[0]}</b></span>
+                      )}
+                      <span>💳 Custom Cards: <b>{jsonReplicaMeta.customCardsCount}</b></span>
+                      <span>📅 Card Cycles: <b>{jsonReplicaMeta.cyclesCount}</b></span>
+                      <span>🏦 Base Balances: <b>{jsonReplicaMeta.balancesCount}</b></span>
+                      <span>❤️ Wife Base: <b>₹{jsonReplicaMeta.wifeBaseBalance.toLocaleString('en-IN')}</b></span>
+                      <span>🐷 Gullak Pots: <b>{jsonReplicaMeta.piggyBankCount}</b></span>
+                      <span>📏 Daily Limits: <b>{jsonReplicaMeta.dailyLimitsCount}</b></span>
+                    </div>
+                  )}
                   <div className="flex flex-wrap gap-2 text-xs">
                     <span className="px-2.5 py-1 rounded-lg bg-indigo-950/80 border border-indigo-500/40 text-indigo-300 flex items-center gap-1.5">
                       <FileSpreadsheet className="w-3.5 h-3.5" />
@@ -1095,18 +1315,18 @@ export const ExcelBackupRestoreModal: React.FC<ExcelBackupRestoreModalProps> = (
                 </button>
                 <button
                   onClick={handleRestore}
-                  disabled={isProcessing || (!file && parsedRows.length === 0 && parsedUdhaarRows.length === 0 && parsedFuelRows.length === 0 && parsedInvRows.length === 0 && parsedSavRows.length === 0 && parsedEmiRows.length === 0)}
-                  className="flex-1 py-3 px-4 rounded-xl bg-gradient-to-r from-cyan-500 to-indigo-600 hover:from-cyan-400 hover:to-indigo-500 text-white text-xs font-bold transition-all cursor-pointer shadow-lg shadow-cyan-950/50 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center space-x-2"
+                  disabled={isProcessing || (!parsedJsonBackup && !file && parsedRows.length === 0 && parsedUdhaarRows.length === 0 && parsedFuelRows.length === 0 && parsedInvRows.length === 0 && parsedSavRows.length === 0 && parsedEmiRows.length === 0)}
+                  className="flex-1 py-3 px-4 rounded-xl bg-gradient-to-r from-indigo-500 via-cyan-500 to-indigo-600 hover:from-indigo-400 hover:to-cyan-400 text-white text-xs font-bold transition-all cursor-pointer shadow-lg shadow-cyan-950/50 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center space-x-2"
                 >
                   {isProcessing ? (
                     <>
                       <RefreshCw className="w-4 h-4 animate-spin" />
-                      <span>RESTORING 10-MODULE BACKUP...</span>
+                      <span>{parsedJsonBackup ? 'CLONING ACCOUNT REPLICA...' : 'RESTORING 10-MODULE BACKUP...'}</span>
                     </>
                   ) : (
                     <>
                       <Upload className="w-4 h-4" />
-                      <span>CONFIRM & RESTORE COMPLETE DATA</span>
+                      <span>{parsedJsonBackup ? (replaceExisting ? 'CLONE FULL ACCOUNT REPLICA' : 'MERGE JSON BACKUP') : 'CONFIRM & RESTORE COMPLETE DATA'}</span>
                     </>
                   )}
                 </button>

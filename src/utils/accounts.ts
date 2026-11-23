@@ -127,6 +127,7 @@ export const DEFAULT_ACCOUNTS_CONFIG: Record<string, AccountMeta> = {
 
 const CUSTOM_ACCOUNTS_STORAGE_KEY = 'hisab_custom_accounts_v1';
 const ACCOUNT_CYCLES_STORAGE_KEY = 'hisab_account_cycle_overrides_v1';
+const DELETED_ACCOUNTS_STORAGE_KEY = 'hisab_deleted_accounts_v1';
 
 interface AccountCycleOverrides {
   billingStartDays: Record<string, number>;
@@ -158,24 +159,43 @@ function loadSavedCycleOverrides(): AccountCycleOverrides {
   return { billingStartDays: {}, billingDays: {}, paymentDueDays: {} };
 }
 
+export function loadSavedDeletedAccounts(): string[] {
+  try {
+    if (typeof window !== 'undefined' && window.localStorage) {
+      const raw = window.localStorage.getItem(DELETED_ACCOUNTS_STORAGE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) return parsed.filter((s) => typeof s === 'string');
+      }
+    }
+  } catch {
+    // ignore storage errors
+  }
+  return [];
+}
+
 function rebuildAccountExports(
   customList: AccountMeta[],
   cardBillingDays?: Record<string, number>,
   cardPaymentDueDays?: Record<string, number>,
-  cardBillingStartDays?: Record<string, number>
+  cardBillingStartDays?: Record<string, number>,
+  deletedList?: string[]
 ) {
+  const deletedSet = new Set(Array.isArray(deletedList) ? deletedList : []);
   // Clear existing keys in ACCOUNTS_CONFIG
   for (const key of Object.keys(ACCOUNTS_CONFIG)) {
     delete ACCOUNTS_CONFIG[key];
   }
-  // Restore defaults (shallow copy so DEFAULT_ACCOUNTS_CONFIG stays pristine)
+  // Restore defaults (excluding any deleted default accounts)
   for (const [k, v] of Object.entries(DEFAULT_ACCOUNTS_CONFIG)) {
-    ACCOUNTS_CONFIG[k] = { ...v };
+    if (!deletedSet.has(k)) {
+      ACCOUNTS_CONFIG[k] = { ...v };
+    }
   }
   // Add custom accounts
   if (Array.isArray(customList)) {
     for (const item of customList) {
-      if (item && item.id) {
+      if (item && item.id && !deletedSet.has(item.id)) {
         ACCOUNTS_CONFIG[item.id] = { ...item, isCustom: true };
       }
     }
@@ -237,9 +257,11 @@ export function syncCustomAccounts(
   customList?: AccountMeta[],
   cardBillingDays?: Record<string, number>,
   cardPaymentDueDays?: Record<string, number>,
-  cardBillingStartDays?: Record<string, number>
+  cardBillingStartDays?: Record<string, number>,
+  deletedAccounts?: string[]
 ) {
   const safeList = Array.isArray(customList) ? customList : loadSavedCustomAccounts();
+  const safeDeleted = Array.isArray(deletedAccounts) ? deletedAccounts : loadSavedDeletedAccounts();
   const savedCycles = loadSavedCycleOverrides();
   const effectiveBillingStartDays = cardBillingStartDays && typeof cardBillingStartDays === 'object'
     ? cardBillingStartDays
@@ -256,6 +278,9 @@ export function syncCustomAccounts(
       if (Array.isArray(customList)) {
         window.localStorage.setItem(CUSTOM_ACCOUNTS_STORAGE_KEY, JSON.stringify(safeList));
       }
+      if (Array.isArray(deletedAccounts)) {
+        window.localStorage.setItem(DELETED_ACCOUNTS_STORAGE_KEY, JSON.stringify(safeDeleted));
+      }
       if (cardBillingDays || cardPaymentDueDays || cardBillingStartDays) {
         window.localStorage.setItem(
           ACCOUNT_CYCLES_STORAGE_KEY,
@@ -270,7 +295,7 @@ export function syncCustomAccounts(
   } catch {
     // ignore storage errors
   }
-  rebuildAccountExports(safeList, effectiveBillingDays, effectiveDueDays, effectiveBillingStartDays);
+  rebuildAccountExports(safeList, effectiveBillingDays, effectiveDueDays, effectiveBillingStartDays, safeDeleted);
 }
 
 // Initialize on module load from localStorage if available
@@ -279,14 +304,40 @@ rebuildAccountExports(
   loadSavedCustomAccounts(),
   initialCycles.billingDays,
   initialCycles.paymentDueDays,
-  initialCycles.billingStartDays
+  initialCycles.billingStartDays,
+  loadSavedDeletedAccounts()
 );
+
+/**
+ * Helper: Resolve legacy / variant account names (e.g. "Axis 2904" -> "AX CC 2904")
+ * so transactions and card limits stay matched cleanly.
+ */
+export function canonicalizeAccountId(accountId?: string): string {
+  const raw = (accountId || '').trim();
+  if (!raw) return '';
+  if (ACCOUNTS_CONFIG[raw]) return raw;
+  const lower = raw.toLowerCase();
+  for (const key of Object.keys(ACCOUNTS_CONFIG)) {
+    if (key.toLowerCase() === lower) return key;
+  }
+  if (/\b2904\b/i.test(raw) && ACCOUNTS_CONFIG['AX CC 2904']) return 'AX CC 2904';
+  if (/\b0000\b/i.test(raw) && ACCOUNTS_CONFIG['ICICI CC 0000']) return 'ICICI CC 0000';
+  if (/\b5733\b/i.test(raw) && ACCOUNTS_CONFIG['SBI CC 5733']) return 'SBI CC 5733';
+  if (/\b6526\b/i.test(raw) && ACCOUNTS_CONFIG['SBI CC 6526']) return 'SBI CC 6526';
+  if (/\b8210\b/i.test(raw) && ACCOUNTS_CONFIG['AX CC 8210']) return 'AX CC 8210';
+  if (/\b5376\b/i.test(raw) && ACCOUNTS_CONFIG['AX CC 5376']) return 'AX CC 5376';
+  if (/\b2005\b/i.test(raw) && ACCOUNTS_CONFIG['IC Bank 2005']) return 'IC Bank 2005';
+  if ((lower === 'wife savings' || lower === "wife's savings" || lower === "wife's account") && ACCOUNTS_CONFIG['Wife Account']) {
+    return 'Wife Account';
+  }
+  return raw;
+}
 
 /**
  * Helper: Check whether an account ID is a Credit / RuPay card
  */
 export function isCreditCardAccount(accountId?: string): boolean {
-  const acc = (accountId || '').trim();
+  const acc = canonicalizeAccountId(accountId);
   if (!acc) return false;
   const meta = ACCOUNTS_CONFIG[acc];
   if (meta) return meta.type === 'credit_card' || meta.type === 'rupay_card';

@@ -2,6 +2,7 @@ import { Transaction } from '../types';
 import {
   ACCOUNTS_CONFIG,
   CREDIT_CARDS,
+  canonicalizeAccountId,
   isCreditCardAccount,
   isExcludedWifeCardUdhaar,
   isWifeCardAccount,
@@ -214,8 +215,9 @@ export function calculateMonthlyCardReserves(
   // Gather all known card IDs (built-in + custom + any card present in transactions)
   const cardIdSet = new Set<string>(CREDIT_CARDS.map((c) => c.id));
   for (const tx of transactions) {
-    if (tx.account && isCreditCardAccount(tx.account)) {
-      cardIdSet.add(tx.account);
+    const resolved = canonicalizeAccountId(tx.account);
+    if (resolved && isCreditCardAccount(resolved)) {
+      cardIdSet.add(resolved);
     }
   }
 
@@ -266,7 +268,7 @@ export function calculateMonthlyCardReserves(
       }
 
       // 2. Check card spends / merchant refunds inside this cycle's Start Date -> End Date
-      const txAcc = (tx.account || '').trim();
+      const txAcc = canonicalizeAccountId(tx.account);
       if (txAcc !== cardId) continue;
       const beforeStart = cycle.exclusiveStart ? tx.date <= cycle.startDate : tx.date < cycle.startDate;
       if (beforeStart || tx.date > cycle.endDate) continue;

@@ -29,11 +29,14 @@ import {
 import { Transaction, AccountId, CardEmi, UserRole, CategoryDef, AccountBalancesData, AccountMeta } from '../types';
 import {
   ACCOUNTS_CONFIG,
+  DEFAULT_ACCOUNTS_CONFIG,
   ALL_ACCOUNTS,
   CREDIT_CARDS,
   BANK_ACCOUNTS,
   syncCustomAccounts,
   isWifeOwnedAccount,
+  canonicalizeAccountId,
+  loadSavedDeletedAccounts,
 } from '../utils/accounts';
 import {
   calculateMonthlyCardReserves,
@@ -151,9 +154,9 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
   const [singleDueDayInput, setSingleDueDayInput] = useState('');
   const [isSavingSingleAccount, setIsSavingSingleAccount] = useState(false);
 
-  // Add New Card / Account Modal State
+  // Add / Manage Card & Account Modal State
   const [isAddCardModalOpen, setIsAddCardModalOpen] = useState(false);
-  const [newCardType, setNewCardType] = useState<'credit_card' | 'rupay_card' | 'bank_account'>('credit_card');
+  const [newCardType, setNewCardType] = useState<'credit_card' | 'rupay_card' | 'bank_account' | 'cash'>('credit_card');
   const [newCardShortName, setNewCardShortName] = useState('');
   const [newCardFullName, setNewCardFullName] = useState('');
   const [newCardLimit, setNewCardLimit] = useState('150000');
@@ -164,16 +167,19 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
   const [newCardColor, setNewCardColor] = useState('#ec4899');
   const [newCardIsWifeAccount, setNewCardIsWifeAccount] = useState(false);
   const [isSavingNewCard, setIsSavingNewCard] = useState(false);
+  const [confirmDeleteAccount, setConfirmDeleteAccount] = useState<AccountMeta | null>(null);
+  const [isDeletingAccount, setIsDeletingAccount] = useState(false);
 
   const fetchBalances = async () => {
     const { data } = await safeFetchJson<AccountBalancesData>('/api/accounts/balances');
     if (data) {
-      if (data.customAccounts || data.cardBillingDays || data.cardPaymentDueDays || data.cardBillingStartDays) {
+      if (data.customAccounts || data.deletedAccounts || data.cardBillingDays || data.cardPaymentDueDays || data.cardBillingStartDays) {
         syncCustomAccounts(
           data.customAccounts,
           data.cardBillingDays,
           data.cardPaymentDueDays,
-          data.cardBillingStartDays
+          data.cardBillingStartDays,
+          data.deletedAccounts
         );
       }
       setBalancesData(data);
@@ -222,6 +228,8 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
         ? 'RuPay CC'
         : newCardType === 'credit_card'
         ? `${cleanShort.split(' ')[0]} CC`
+        : newCardType === 'cash'
+        ? 'Cash / Wallet'
         : `${cleanShort.split(' ')[0]} Bank`;
 
       const { data, error } = await safeFetchJson<AccountBalancesData & { account?: any }>('/api/accounts/custom', {
@@ -245,12 +253,13 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
       });
 
       if (data) {
-        if (data.customAccounts || data.cardBillingDays || data.cardPaymentDueDays || data.cardBillingStartDays) {
+        if (data.customAccounts || data.deletedAccounts || data.cardBillingDays || data.cardPaymentDueDays || data.cardBillingStartDays) {
           syncCustomAccounts(
             data.customAccounts,
             data.cardBillingDays,
             data.cardPaymentDueDays,
-            data.cardBillingStartDays
+            data.cardBillingStartDays,
+            data.deletedAccounts
           );
         }
         setBalancesData(data);
@@ -260,9 +269,10 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
         setNewCardOpeningBalance('0');
         setNewCardIsWifeAccount(false);
         setIsAddCardModalOpen(false);
-        setToastMessage(`✅ Naya Card "${cleanShort}" successfully add ho gaya!`);
+        setToastMessage(`✅ Naya Card / Account "${cleanShort}" successfully add ho gaya!`);
         setTimeout(() => setToastMessage(null), 3500);
         await fetchBalances();
+        if (onRefreshTransactions) await onRefreshTransactions();
       } else if (error) {
         setToastMessage(`⚠️ ${error}`);
         setTimeout(() => setToastMessage(null), 3000);
@@ -277,25 +287,62 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
   };
 
   const handleDeleteCustomCard = async (cardId: string) => {
+    setIsDeletingAccount(true);
     try {
-      const { data } = await safeFetchJson<AccountBalancesData>(`/api/accounts/custom/${encodeURIComponent(cardId)}`, {
+      const { data, error } = await safeFetchJson<AccountBalancesData>(`/api/accounts/custom/${encodeURIComponent(cardId)}`, {
         method: 'DELETE',
       });
       if (data) {
-        if (data.customAccounts || data.cardBillingDays || data.cardPaymentDueDays || data.cardBillingStartDays) {
-          syncCustomAccounts(
-            data.customAccounts,
-            data.cardBillingDays,
-            data.cardPaymentDueDays,
-            data.cardBillingStartDays
-          );
-        }
+        syncCustomAccounts(
+          data.customAccounts,
+          data.cardBillingDays,
+          data.cardPaymentDueDays,
+          data.cardBillingStartDays,
+          data.deletedAccounts
+        );
         setBalancesData(data);
         if (selectedAccountId === cardId) {
           setSelectedAccountId('all');
         }
-        setToastMessage(`🗑️ Card "${cardId}" hata diya gaya.`);
+        if (editingSingleAccount?.id === cardId) {
+          setEditingSingleAccount(null);
+        }
+        setConfirmDeleteAccount(null);
+        setToastMessage(`🗑️ "${cardId}" successfully delete ho gaya (purane transactions safe hain).`);
+        setTimeout(() => setToastMessage(null), 3500);
+        if (onRefreshTransactions) await onRefreshTransactions();
+      } else if (error) {
+        setToastMessage(`⚠️ ${error}`);
         setTimeout(() => setToastMessage(null), 3000);
+      }
+    } catch (err) {
+      console.error(err);
+      setToastMessage('⚠️ Account/Card delete karne me error aaya');
+      setTimeout(() => setToastMessage(null), 3000);
+    } finally {
+      setIsDeletingAccount(false);
+    }
+  };
+
+  const handleRestoreDefaultAccount = async (accountId: string) => {
+    try {
+      const { data } = await safeFetchJson<AccountBalancesData>('/api/accounts/restore-default', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ accountId }),
+      });
+      if (data) {
+        syncCustomAccounts(
+          data.customAccounts,
+          data.cardBillingDays,
+          data.cardPaymentDueDays,
+          data.cardBillingStartDays,
+          data.deletedAccounts
+        );
+        setBalancesData(data);
+        setToastMessage(`♻️ "${accountId}" wapas restore ho gaya!`);
+        setTimeout(() => setToastMessage(null), 3000);
+        if (onRefreshTransactions) await onRefreshTransactions();
       }
     } catch (err) {
       console.error(err);
@@ -402,7 +449,8 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
           data.customAccounts,
           data.cardBillingDays,
           data.cardPaymentDueDays,
-          data.cardBillingStartDays
+          data.cardBillingStartDays,
+          data.deletedAccounts
         );
         setBalancesData(data);
         if (bodyPayload.accountBaseBalances) {
@@ -497,7 +545,8 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
           data.customAccounts,
           data.cardBillingDays,
           data.cardPaymentDueDays,
-          data.cardBillingStartDays
+          data.cardBillingStartDays,
+          data.deletedAccounts
         );
         setBalancesData(data);
         setInitialEditBaseBalances({ ...editBaseBalances });
@@ -766,26 +815,48 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
     }
   };
 
-  // Filter transactions for main view
+  // Helper: identifies savings transfers sent into Wife's Savings A/c from any bank/cash account
+  const isWifeTransferEntry = (t: Transaction) =>
+    Boolean(
+      t.isSavingsTransfer ||
+      t.isWifeTransfer ||
+      t.category === 'Wife Transfer' ||
+      t.category?.toLowerCase() === 'wife transfer'
+    );
+
+  // Filter transactions for main view (resolving legacy aliases like "Axis 2904" -> "AX CC 2904")
   const currentMonthStr = new Date().toISOString().substring(0, 7);
   const filteredTxs = transactions.filter((t) => {
     if (selectedAccountId === 'all') return true;
-    return t.account === selectedAccountId;
+    const resolvedAcc = canonicalizeAccountId(t.account);
+    if (selectedAccountId === 'Wife Account') {
+      return resolvedAcc === 'Wife Account' || isWifeTransferEntry(t);
+    }
+    return resolvedAcc === selectedAccountId;
   });
 
   const selectedMeta = selectedAccountId !== 'all' ? ACCOUNTS_CONFIG[selectedAccountId] : null;
 
-  // Account stats
+  // Account stats (for Wife Account, incoming Wife Transfers count as Inflow/Credit, not Outflow)
   const totalAccountExpense = filteredTxs
-    .filter((t) => t.type === 'expense')
+    .filter((t) => {
+      if (selectedAccountId === 'Wife Account' && isWifeTransferEntry(t)) return false;
+      return t.type === 'expense';
+    })
     .reduce((sum, t) => sum + (t.amount || 0), 0);
 
   const totalAccountIncome = filteredTxs
-    .filter((t) => t.type === 'income')
+    .filter((t) => {
+      if (selectedAccountId === 'Wife Account' && isWifeTransferEntry(t)) return true;
+      return t.type === 'income';
+    })
     .reduce((sum, t) => sum + (t.amount || 0), 0);
 
   const currentMonthExpense = filteredTxs
-    .filter((t) => t.type === 'expense' && t.date?.startsWith(currentMonthStr))
+    .filter((t) => {
+      if (selectedAccountId === 'Wife Account' && isWifeTransferEntry(t)) return false;
+      return t.type === 'expense' && t.date?.startsWith(currentMonthStr);
+    })
     .reduce((sum, t) => sum + (t.amount || 0), 0);
 
   // Active EMIs for this card
@@ -945,14 +1016,14 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
               <span>💳 Settle Card Bill</span>
             </button>
 
-            {/* Add New Card / Account Button */}
+            {/* Add / Delete Cards & Accounts Button */}
             <button
               onClick={() => setIsAddCardModalOpen(true)}
               className="px-3.5 py-1.5 rounded-xl bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-400 hover:to-orange-500 text-white text-xs font-bold flex items-center gap-1.5 transition-all shadow-md shadow-orange-900/30 cursor-pointer"
             >
               <CreditCard className="w-3.5 h-3.5" />
               <Plus className="w-3 h-3 -ml-1" />
-              <span>+ New Card Add Karein</span>
+              <span>+ Add / Delete Card & A/c</span>
             </button>
 
             {/* Set Opening Balances Button */}
@@ -1006,7 +1077,10 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
 
           {ALL_ACCOUNTS.map((acc) => {
             const isSelected = selectedAccountId === acc.id;
-            const count = transactions.filter((t) => t.account === acc.id).length;
+            const count =
+              acc.id === 'Wife Account'
+                ? transactions.filter((t) => canonicalizeAccountId(t.account) === 'Wife Account' || isWifeTransferEntry(t)).length
+                : transactions.filter((t) => canonicalizeAccountId(t.account) === acc.id).length;
             const isRuPay = acc.type === 'rupay_card';
             const isCC = acc.type === 'credit_card';
             const isBank = acc.type === 'bank_account';
@@ -1183,15 +1257,28 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           <div className="bg-slate-900/50 border border-white/[0.08] rounded-2xl p-4 flex flex-col justify-between">
             <div>
-              <div className="text-xs text-slate-400 flex items-center justify-between">
+              <div className="text-xs text-slate-400 flex items-center justify-between gap-1.5">
                 <span>Account Type & Badge</span>
-                <button
-                  type="button"
-                  onClick={() => handleOpenSingleAccountModal(selectedMeta)}
-                  className="text-[10px] px-2 py-0.5 rounded-md bg-indigo-500/20 hover:bg-indigo-500/35 text-indigo-300 border border-indigo-500/30 font-semibold cursor-pointer transition-colors"
-                >
-                  ✏️ Edit Is Card/Bank
-                </button>
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => handleOpenSingleAccountModal(selectedMeta)}
+                    className="text-[10px] px-2 py-0.5 rounded-md bg-indigo-500/20 hover:bg-indigo-500/35 text-indigo-300 border border-indigo-500/30 font-semibold cursor-pointer transition-colors"
+                  >
+                    ✏️ Edit
+                  </button>
+                  {selectedMeta.id !== 'Wife Account' && (
+                    <button
+                      type="button"
+                      onClick={() => setConfirmDeleteAccount(selectedMeta)}
+                      className="text-[10px] px-2 py-0.5 rounded-md bg-rose-500/15 hover:bg-rose-500/30 text-rose-300 border border-rose-500/30 font-semibold cursor-pointer transition-colors flex items-center gap-0.5"
+                      title="Is Card ya Account ko delete karein"
+                    >
+                      <Trash2 className="w-3 h-3" />
+                      Delete
+                    </button>
+                  )}
+                </div>
               </div>
               <div className="flex items-center gap-2 mt-1.5">
                 <span className="font-bold text-white text-sm">{selectedMeta.name}</span>
@@ -1442,17 +1529,30 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
                       <p className="text-[10px] text-slate-400 truncate max-w-[155px]">{acc.name}</p>
                     </div>
                     <div className="flex flex-col items-end gap-1 shrink-0">
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleOpenSingleAccountModal(acc);
-                        }}
-                        className="px-2 py-1 rounded-lg bg-indigo-500/20 hover:bg-indigo-500/40 text-indigo-300 border border-indigo-500/30 text-[10px] font-semibold cursor-pointer transition-colors"
-                        title={isCard ? 'Is card ki Limit, Due aur Bill Cycle change karein' : 'Is bank/cash ka Base Balance set karein'}
-                      >
-                        ✏️ {isCard ? 'Edit / Cycle' : 'Set Base'}
-                      </button>
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleOpenSingleAccountModal(acc);
+                          }}
+                          className="px-2 py-1 rounded-lg bg-indigo-500/20 hover:bg-indigo-500/40 text-indigo-300 border border-indigo-500/30 text-[10px] font-semibold cursor-pointer transition-colors"
+                          title={isCard ? 'Is card ki Limit, Due aur Bill Cycle change karein' : 'Is bank/cash ka Base Balance set karein'}
+                        >
+                          ✏️ {isCard ? 'Edit' : 'Set Base'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setConfirmDeleteAccount(acc);
+                          }}
+                          className="p-1 rounded-lg bg-rose-500/15 hover:bg-rose-500/35 text-rose-300 border border-rose-500/30 cursor-pointer transition-colors"
+                          title={`"${acc.shortName}" delete karein`}
+                        >
+                          <Trash2 className="w-3 h-3" />
+                        </button>
+                      </div>
                       {isCard && (
                         <button
                           type="button"
@@ -1630,7 +1730,8 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
               </thead>
               <tbody className="divide-y divide-white/[0.04]">
                 {filteredTxs.map((t) => {
-                  const isInc = t.type === 'income';
+                  const isIncomingWifeTransfer = selectedAccountId === 'Wife Account' && isWifeTransferEntry(t);
+                  const isInc = isIncomingWifeTransfer ? true : t.type === 'income';
                   const currentAcc = (t.account as AccountId) || 'ICICI CC 0000';
                   const isOwnTx = !isFamily || Boolean(
                     (activeFamilyMemberName && (
@@ -1649,7 +1750,14 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
                         {t.time && <span className="ml-1 text-[10px] text-slate-500">{t.time}</span>}
                       </td>
                       <td className="py-3 px-4">
-                        <div className="text-white font-medium">{t.description || t.category}</div>
+                        <div className="text-white font-medium flex items-center gap-1.5 flex-wrap">
+                          <span>{t.description || t.category}</span>
+                          {isIncomingWifeTransfer && (
+                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-pink-500/20 text-pink-300 border border-pink-500/30 font-semibold">
+                              Transfer In from {currentAcc}
+                            </span>
+                          )}
+                        </div>
                         {t.rawMessage && (
                           <div className="text-[10px] text-slate-500 truncate max-w-xs">{t.rawMessage}</div>
                         )}
@@ -1660,17 +1768,23 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
                         </span>
                       </td>
                       <td className="py-3 px-4">
-                        <select
-                          value={currentAcc}
-                          onChange={(e) => handleReassignAccount(t.id, e.target.value as AccountId)}
-                          className="bg-slate-950 border border-white/[0.1] rounded-lg px-2 py-1 text-[11px] text-slate-200 focus:outline-hidden focus:border-indigo-500 cursor-pointer"
-                        >
-                          {ALL_ACCOUNTS.map((a) => (
-                            <option key={a.id} value={a.id}>
-                              {a.shortName} ({a.type.replace('_', ' ')})
-                            </option>
-                          ))}
-                        </select>
+                        {isIncomingWifeTransfer ? (
+                          <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-pink-950/50 border border-pink-500/30 text-[11px] text-pink-200 font-medium">
+                            {currentAcc} → Wife's Savings
+                          </span>
+                        ) : (
+                          <select
+                            value={currentAcc}
+                            onChange={(e) => handleReassignAccount(t.id, e.target.value as AccountId)}
+                            className="bg-slate-950 border border-white/[0.1] rounded-lg px-2 py-1 text-[11px] text-slate-200 focus:outline-hidden focus:border-indigo-500 cursor-pointer"
+                          >
+                            {ALL_ACCOUNTS.map((a) => (
+                              <option key={a.id} value={a.id}>
+                                {a.shortName} ({a.type.replace('_', ' ')})
+                              </option>
+                            ))}
+                          </select>
+                        )}
                       </td>
                       <td className={`py-3 px-4 text-right font-mono font-bold ${isInc ? 'text-emerald-400' : 'text-slate-100'}`}>
                         {isOwnTx ? (
@@ -2901,7 +3015,7 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
                 <label className="block text-slate-300 font-semibold mb-1.5">
                   1. Card / Account Type Chunein
                 </label>
-                <div className="grid grid-cols-3 gap-2">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                   <button
                     type="button"
                     onClick={() => setNewCardType('credit_card')}
@@ -2934,6 +3048,17 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
                     }`}
                   >
                     🏦 Bank Account
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setNewCardType('cash')}
+                    className={`p-2.5 rounded-xl border text-center font-semibold cursor-pointer transition-all ${
+                      newCardType === 'cash'
+                        ? 'bg-teal-500/20 border-teal-400 text-teal-200 shadow-sm'
+                        : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    💵 Cash / Wallet
                   </button>
                 </div>
               </div>
@@ -3127,32 +3252,65 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
                 </div>
               </div>
 
-              {/* Existing Custom Cards List (with Delete option) */}
-              {ALL_ACCOUNTS.some(a => a.isCustom) && (
-                <div className="pt-3 border-t border-slate-800 space-y-2">
-                  <div className="text-[11px] font-bold text-slate-400 uppercase">
-                    Aapke Added Custom Cards / Accounts:
-                  </div>
-                  <div className="space-y-1.5">
-                    {ALL_ACCOUNTS.filter(a => a.isCustom).map(acc => (
-                      <div key={acc.id} className="flex items-center justify-between bg-slate-950 border border-slate-800 px-3 py-2 rounded-xl">
-                        <div>
-                          <span className="font-bold text-white">{acc.shortName}</span>
-                          <span className="text-slate-400 ml-2 text-[11px]">{acc.name}</span>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => handleDeleteCustomCard(acc.id)}
-                          className="text-rose-400 hover:text-rose-300 p-1 rounded hover:bg-rose-950/50 cursor-pointer flex items-center gap-1 text-[11px]"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                          Delete
-                        </button>
-                      </div>
-                    ))}
-                  </div>
+              {/* All Active Cards & Accounts Manager (Delete any built-in or custom Card/Account) */}
+              <div className="pt-3 border-t border-slate-800 space-y-2">
+                <div className="text-[11px] font-bold text-slate-400 uppercase flex items-center justify-between">
+                  <span>Active Cards & Accounts ({ALL_ACCOUNTS.length})</span>
+                  <span className="text-[10px] font-normal text-slate-500">Koi bhi card/account delete kar sakte hain</span>
                 </div>
-              )}
+                <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
+                  {ALL_ACCOUNTS.filter(a => a.id !== 'Wife Account').map(acc => (
+                    <div key={acc.id} className="flex items-center justify-between bg-slate-950 border border-slate-800 px-3 py-2 rounded-xl">
+                      <div className="min-w-0 pr-2">
+                        <div className="flex items-center gap-1.5">
+                          <span className="font-bold text-white truncate">{acc.shortName}</span>
+                          <span className="text-[9px] px-1.5 py-0.5 rounded bg-white/[0.06] text-slate-300 font-mono">
+                            {acc.type.replace('_', ' ')}
+                          </span>
+                          {acc.isWifeAccount && (
+                            <span className="text-[9px] px-1.5 py-0.5 rounded bg-pink-500/20 text-pink-300 font-bold">👩 Wife</span>
+                          )}
+                        </div>
+                        <div className="text-slate-400 text-[10px] truncate">{acc.name}</div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setConfirmDeleteAccount(acc)}
+                        className="text-rose-400 hover:text-rose-200 px-2 py-1 rounded-lg bg-rose-950/40 hover:bg-rose-900/50 border border-rose-500/30 cursor-pointer flex items-center gap-1 text-[11px] shrink-0"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                        Delete
+                      </button>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Restore Removed Default Cards / Accounts */}
+                {(() => {
+                  const deletedList = balancesData?.deletedAccounts || loadSavedDeletedAccounts();
+                  const restorable = deletedList.filter((id) => Boolean(DEFAULT_ACCOUNTS_CONFIG[id]));
+                  if (restorable.length === 0) return null;
+                  return (
+                    <div className="pt-2 border-t border-slate-800/80 space-y-1.5">
+                      <div className="text-[10px] font-bold text-amber-300/90 uppercase">
+                        Removed Default Cards / Accounts (Click to Restore):
+                      </div>
+                      <div className="flex flex-wrap gap-1.5">
+                        {restorable.map((id) => (
+                          <button
+                            key={id}
+                            type="button"
+                            onClick={() => handleRestoreDefaultAccount(id)}
+                            className="px-2.5 py-1 rounded-lg bg-amber-500/15 hover:bg-amber-500/30 text-amber-200 border border-amber-500/35 text-[10.5px] font-semibold cursor-pointer transition-colors"
+                          >
+                            ♻️ Restore {id}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })()}
+              </div>
 
               <div className="pt-3 border-t border-slate-800 flex items-center justify-end gap-2">
                 <button
@@ -3359,23 +3517,86 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
                 </div>
               )}
 
-              <div className="pt-3 border-t border-slate-800 flex items-center justify-end gap-2">
+              <div className="pt-3 border-t border-slate-800 flex items-center justify-between gap-2">
+                <div>
+                  {editingSingleAccount.id !== 'Wife Account' && (
+                    <button
+                      type="button"
+                      onClick={() => setConfirmDeleteAccount(editingSingleAccount)}
+                      className="px-3 py-2 rounded-xl bg-rose-950/50 hover:bg-rose-900/60 border border-rose-500/40 text-rose-300 font-semibold flex items-center gap-1.5 cursor-pointer transition-colors"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>Delete</span>
+                    </button>
+                  )}
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setEditingSingleAccount(null)}
+                    className="px-4 py-2 rounded-xl border border-slate-700 text-slate-400 hover:text-white cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isSavingSingleAccount}
+                    className="px-5 py-2 bg-gradient-to-r from-indigo-600 to-sky-600 hover:from-indigo-500 hover:to-sky-500 text-white font-bold rounded-xl shadow-md transition-all cursor-pointer disabled:opacity-50"
+                  >
+                    {isSavingSingleAccount ? 'Saving...' : '💾 Save Only This Account'}
+                  </button>
+                </div>
+              </div>
+            </form>
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {/* Modal: Inline Delete Card / Account Confirmation */}
+      {confirmDeleteAccount && typeof document !== 'undefined' && createPortal(
+        <div
+          className="fixed inset-0 z-[10000] flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-in fade-in duration-150"
+          onClick={(e) => {
+            if (e.target === e.currentTarget && !isDeletingAccount) setConfirmDeleteAccount(null);
+          }}
+        >
+          <div className="bg-slate-900 border border-rose-500/40 rounded-2xl w-full max-w-sm shadow-2xl overflow-hidden">
+            <div className="p-5 space-y-3">
+              <div className="flex items-center gap-2.5 text-rose-400">
+                <div className="w-9 h-9 rounded-xl bg-rose-500/15 border border-rose-500/30 flex items-center justify-center shrink-0">
+                  <Trash2 className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-white">Card / Account Delete Karein?</h3>
+                  <p className="text-[11px] text-slate-400">
+                    {confirmDeleteAccount.shortName} ({confirmDeleteAccount.name})
+                  </p>
+                </div>
+              </div>
+              <p className="text-xs text-slate-300 leading-relaxed">
+                Ye card/account aapki active accounts list aur dropdowns se hat jayega. Aapke purane transactions safe rahenge{DEFAULT_ACCOUNTS_CONFIG[confirmDeleteAccount.id] ? ' aur aap ise kabhi bhi "Add / Delete Card & A/c" modal se wapas Restore kar sakte hain.' : '.'}
+              </p>
+              <div className="pt-2 flex items-center justify-end gap-2">
                 <button
                   type="button"
-                  onClick={() => setEditingSingleAccount(null)}
-                  className="px-4 py-2 rounded-xl border border-slate-700 text-slate-400 hover:text-white cursor-pointer"
+                  disabled={isDeletingAccount}
+                  onClick={() => setConfirmDeleteAccount(null)}
+                  className="px-3.5 py-2 rounded-xl border border-slate-700 text-slate-300 hover:text-white text-xs cursor-pointer"
                 >
                   Cancel
                 </button>
                 <button
-                  type="submit"
-                  disabled={isSavingSingleAccount}
-                  className="px-5 py-2 bg-gradient-to-r from-indigo-600 to-sky-600 hover:from-indigo-500 hover:to-sky-500 text-white font-bold rounded-xl shadow-md transition-all cursor-pointer disabled:opacity-50"
+                  type="button"
+                  disabled={isDeletingAccount}
+                  onClick={() => handleDeleteCustomCard(confirmDeleteAccount.id)}
+                  className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
                 >
-                  {isSavingSingleAccount ? 'Saving...' : '💾 Save Only This Account'}
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>{isDeletingAccount ? 'Deleting...' : 'Haan, Delete Karein'}</span>
                 </button>
               </div>
-            </form>
+            </div>
           </div>
         </div>,
         document.body

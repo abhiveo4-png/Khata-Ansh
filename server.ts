@@ -17,8 +17,19 @@ const PORT = Number(process.env.PORT) || 3000;
 
 // Enable Gzip/Brotli compression for all responses (reduces bandwidth by 75-85%)
 app.use(compression());
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: '25mb' }));
+app.use(express.urlencoded({ extended: true, limit: '25mb' }));
+
+// Graceful JSON error response for oversized or malformed request bodies
+app.use((err: any, _req: express.Request, res: express.Response, next: express.NextFunction) => {
+  if (err?.type === 'entity.too.large' || err?.status === 413) {
+    return res.status(413).json({ error: 'Uploaded file/payload is too large (max 25MB).' });
+  }
+  if (err instanceof SyntaxError && 'body' in err) {
+    return res.status(400).json({ error: 'Invalid JSON payload.' });
+  }
+  return next(err);
+});
 
 // Ultra-fast Health / Ping endpoint for 14-minute Keep-Alive Cron jobs (less than 25 bytes payload)
 app.get(['/api/health', '/api/ping', '/healthz'], (_req, res) => {
@@ -778,6 +789,7 @@ interface UserDataStore {
     isCustom?: boolean;
   }>;
   deletedCategories?: string[];
+  deletedAccounts?: string[];
 }
 
 let users: UserProfile[] = loadJson<UserProfile[]>(USERS_FILE, []);
@@ -1230,7 +1242,27 @@ export function getUserData(userId: string): UserDataStore {
       }
     }
 
-    if (synced || timeAdjusted || descAdjusted || savingsSynced) {
+    // Auto-normalize legacy Axis 2904 aliases (e.g. "Axis 2904" -> "AX CC 2904") so card limit & ledger always match
+    let accountAliasNormalized = false;
+    const hasCustomAxis2904 = (store.customAccounts || []).some((a) => a.id === 'Axis 2904');
+    if (!hasCustomAxis2904) {
+      for (const tx of store.transactions) {
+        if (tx.account && /^axis\s*(?:cc\s*)?2904$/i.test(tx.account.trim()) && tx.account !== 'AX CC 2904') {
+          tx.account = 'AX CC 2904';
+          accountAliasNormalized = true;
+        }
+      }
+      if (Array.isArray(store.udhaars)) {
+        for (const u of store.udhaars) {
+          if (u.account && /^axis\s*(?:cc\s*)?2904$/i.test(u.account.trim()) && u.account !== 'AX CC 2904') {
+            u.account = 'AX CC 2904';
+            accountAliasNormalized = true;
+          }
+        }
+      }
+    }
+
+    if (synced || timeAdjusted || descAdjusted || savingsSynced || accountAliasNormalized) {
       saveJson(filePath, store);
       persistToPg(`user_data:${userId}`, store).catch(() => {});
     }
@@ -3230,6 +3262,8 @@ export function calculateAccountsBalances(userId: string) {
 
   let needsSave = false;
 
+  const deletedSet = new Set(Array.isArray(store.deletedAccounts) ? store.deletedAccounts : []);
+
   const combinedAccountsMeta: Record<string, {
     id: string;
     name: string;
@@ -3243,15 +3277,39 @@ export function calculateAccountsBalances(userId: string) {
     paymentDueDay?: number;
     isWifeAccount?: boolean;
     isCustom?: boolean;
-  }> = { ...ACCOUNTS_META };
+  }> = {};
+
+  for (const [k, v] of Object.entries(ACCOUNTS_META)) {
+    if (!deletedSet.has(k)) {
+      combinedAccountsMeta[k] = { ...v };
+    }
+  }
 
   if (Array.isArray(store.customAccounts)) {
     for (const cAcc of store.customAccounts) {
-      if (cAcc && cAcc.id) {
+      if (cAcc && cAcc.id && !deletedSet.has(cAcc.id)) {
         combinedAccountsMeta[cAcc.id] = { ...cAcc, isCustom: true };
       }
     }
   }
+
+  const canonicalizeAcc = (rawAcc?: string): string => {
+    const raw = (rawAcc || '').trim();
+    if (!raw) return 'ICICI CC 0000';
+    if (combinedAccountsMeta[raw]) return raw;
+    const lower = raw.toLowerCase();
+    for (const key of Object.keys(combinedAccountsMeta)) {
+      if (key.toLowerCase() === lower) return key;
+    }
+    if (/\b2904\b/i.test(raw) && combinedAccountsMeta['AX CC 2904']) return 'AX CC 2904';
+    if (/\b0000\b/i.test(raw) && combinedAccountsMeta['ICICI CC 0000']) return 'ICICI CC 0000';
+    if (/\b5733\b/i.test(raw) && combinedAccountsMeta['SBI CC 5733']) return 'SBI CC 5733';
+    if (/\b6526\b/i.test(raw) && combinedAccountsMeta['SBI CC 6526']) return 'SBI CC 6526';
+    if (/\b8210\b/i.test(raw) && combinedAccountsMeta['AX CC 8210']) return 'AX CC 8210';
+    if (/\b5376\b/i.test(raw) && combinedAccountsMeta['AX CC 5376']) return 'AX CC 5376';
+    if (/\b2005\b/i.test(raw) && combinedAccountsMeta['IC Bank 2005']) return 'IC Bank 2005';
+    return raw;
+  };
 
   for (const [accId, meta] of Object.entries(combinedAccountsMeta)) {
     const isCard = meta.type === 'credit_card' || meta.type === 'rupay_card';
@@ -3273,7 +3331,7 @@ export function calculateAccountsBalances(userId: string) {
     let debits = 0;
 
     for (const t of txs) {
-      const tAcc = t.account || 'ICICI CC 0000';
+      const tAcc = canonicalizeAcc(t.account);
       if (tAcc === accId) {
         const txTimeMs = t.createdAt ? new Date(t.createdAt).getTime() : (t.date ? new Date(t.date).getTime() : 0);
         // Only apply transactions occurring on or after opening balance was set
@@ -3293,7 +3351,7 @@ export function calculateAccountsBalances(userId: string) {
     // For bank/cash accounts, also subtract any dedicated savings transfers sent from this account
     if (!isCard) {
       for (const s of savingsTransfers) {
-        if (s.fromAccount === accId) {
+        if (canonicalizeAcc(s.fromAccount) === accId) {
           const sTimeMs = s.createdAt ? new Date(s.createdAt).getTime() : (s.date ? new Date(s.date).getTime() : 0);
           if (setTimeMs > 0 && sTimeMs > 0 && sTimeMs < setTimeMs) {
             continue;
@@ -3376,28 +3434,20 @@ export function calculateAccountsBalances(userId: string) {
   totalCardAvailableLimit = Math.round((totalCardAvailableLimit + Number.EPSILON) * 100) / 100;
   totalCardOutstanding = Math.round((totalCardOutstanding + Number.EPSILON) * 100) / 100;
 
-  // Unified Wife's Savings A/c Balance (single source of truth combining Base + Transfers + direct Wife Account tx credits/debits)
+  // Unified Wife's Savings A/c Balance (single source of truth: Starting/Opening Base + ALL Transfers + direct Wife Account credits - debits)
+  // Note: Wife's Base Balance represents the opening/starting reserve before tracking, so past transfers (e.g. ₹53,450) are never cut off by timestamp.
   const effectiveWifeBase =
     store.wifeBaseBalance !== undefined
       ? (Number(store.wifeBaseBalance) || 0)
       : (Number(baseBalances['Wife Account']) || 0);
   const effectiveWifeTimestamp = wifeBaseTimestamp || baseTimestamps['Wife Account'];
-  const wifeBaseTimeMs = effectiveWifeTimestamp ? new Date(effectiveWifeTimestamp).getTime() : 0;
 
   let totalTransferred = 0;
   for (const s of savingsTransfers) {
-    const sTimeMs = s.createdAt ? new Date(s.createdAt).getTime() : (s.date ? new Date(s.date).getTime() : 0);
-    if (wifeBaseTimeMs > 0 && sTimeMs > 0 && sTimeMs < wifeBaseTimeMs) {
-      continue;
-    }
     totalTransferred += (Number(s.amount) || 0);
   }
   for (const t of txs) {
     if (t.isSavingsTransfer || t.isWifeTransfer || t.category === 'Wife Transfer' || t.category?.toLowerCase() === 'wife transfer') {
-      const tTimeMs = t.createdAt ? new Date(t.createdAt).getTime() : (t.date ? new Date(t.date).getTime() : 0);
-      if (wifeBaseTimeMs > 0 && tTimeMs > 0 && tTimeMs < wifeBaseTimeMs) {
-        continue;
-      }
       const tAmt = Number(t.amount) || 0;
       const isDupe = savingsTransfers.some(
         s => Number(s.amount) === tAmt && s.date === t.date
@@ -3416,10 +3466,6 @@ export function calculateAccountsBalances(userId: string) {
       t.isSavingsTransfer || t.isWifeTransfer || t.category === 'Wife Transfer' || t.category?.toLowerCase() === 'wife transfer'
     );
     if (isTransferEntry) continue;
-    const tTimeMs = t.createdAt ? new Date(t.createdAt).getTime() : (t.date ? new Date(t.date).getTime() : 0);
-    if (wifeBaseTimeMs > 0 && tTimeMs > 0 && tTimeMs < wifeBaseTimeMs) {
-      continue;
-    }
     const amt = Number(t.amount) || 0;
     if (t.type === 'income') {
       directWifeCredits += amt;
@@ -3455,6 +3501,7 @@ export function calculateAccountsBalances(userId: string) {
     cardBillingDays,
     cardPaymentDueDays,
     customAccounts: store.customAccounts || [],
+    deletedAccounts: store.deletedAccounts || [],
     accounts,
     totalBankCashBalance,
     totalCardAvailableLimit,
@@ -9232,6 +9279,7 @@ app.get('/api/transactions', (req, res) => {
   res.json({
     transactions: store.transactions,
     customAccounts: store.customAccounts || [],
+    deletedAccounts: store.deletedAccounts || [],
     cardBillingStartDays: store.cardBillingStartDays || {},
     cardBillingDays: store.cardBillingDays || {},
     cardPaymentDueDays: store.cardPaymentDueDays || {},
@@ -9939,6 +9987,9 @@ app.post('/api/accounts/custom', (req, res) => {
   } else {
     store.customAccounts.push(newMeta);
   }
+  if (Array.isArray(store.deletedAccounts)) {
+    store.deletedAccounts = store.deletedAccounts.filter(id => id.toLowerCase() !== accId.toLowerCase());
+  }
 
   if (accType === 'credit_card' || accType === 'rupay_card') {
     if (!store.cardBillingStartDays) store.cardBillingStartDays = {};
@@ -10094,14 +10145,40 @@ app.post('/api/accounts/settle-card', (req, res) => {
 
 app.delete('/api/accounts/custom/:id', (req, res) => {
   const user = getRequestUser(req);
+  if (!user) return res.status(401).json({ error: 'User session required' });
   const store = getUserData(user.id);
-  const targetId = decodeURIComponent(req.params.id || '');
+  const targetId = decodeURIComponent(req.params.id || '').trim();
+  if (!targetId) return res.status(400).json({ error: 'Account ID is required' });
+
   if (Array.isArray(store.customAccounts)) {
     store.customAccounts = store.customAccounts.filter(a => a.id !== targetId);
   }
+  // If this is a built-in default account/card, record it in deletedAccounts so it stays removed
+  if (ACCOUNTS_META[targetId]) {
+    if (!Array.isArray(store.deletedAccounts)) store.deletedAccounts = [];
+    if (!store.deletedAccounts.includes(targetId)) {
+      store.deletedAccounts.push(targetId);
+    }
+  }
   saveUserData(user.id, store);
   const updatedData = calculateAccountsBalances(user.id);
-  res.json({ success: true, ...updatedData });
+  res.json({ success: true, deletedId: targetId, ...updatedData });
+});
+
+app.post('/api/accounts/restore-default', (req, res) => {
+  const user = getRequestUser(req);
+  if (!user) return res.status(401).json({ error: 'User session required' });
+  const store = getUserData(user.id);
+  const accountId = String(req.body?.accountId || '').trim();
+  if (!accountId || !ACCOUNTS_META[accountId]) {
+    return res.status(400).json({ error: 'Valid default account ID is required' });
+  }
+  if (Array.isArray(store.deletedAccounts)) {
+    store.deletedAccounts = store.deletedAccounts.filter(id => id !== accountId);
+  }
+  saveUserData(user.id, store);
+  const updatedData = calculateAccountsBalances(user.id);
+  res.json({ success: true, restoredId: accountId, ...updatedData });
 });
 
 app.get('/api/savings-transfers', (req, res) => {
@@ -11889,6 +11966,427 @@ app.get('/api/transactions/duplicates', (req, res) => {
   } catch (err: any) {
     console.error('Error auditing duplicates:', err);
     return res.status(500).json({ error: err?.message || 'Failed to audit duplicates' });
+  }
+});
+
+// Helper: Recursively strip dangerous prototype keys from untrusted JSON
+function sanitizeUntrustedJson(val: any, depth = 0): any {
+  if (depth > 12) return null;
+  if (val === null || val === undefined) return val;
+  if (typeof val !== 'object') return val;
+  if (Array.isArray(val)) {
+    return val.map((item) => sanitizeUntrustedJson(item, depth + 1));
+  }
+  const clean: Record<string, any> = {};
+  for (const [k, v] of Object.entries(val)) {
+    if (k === '__proto__' || k === 'constructor' || k === 'prototype') continue;
+    clean[k] = sanitizeUntrustedJson(v, depth + 1);
+  }
+  return clean;
+}
+
+// COMPLETE ACCOUNT JSON BACKUP (1:1 ACCOUNT REPLICA EXPORT)
+app.get('/api/backup/json', (req, res) => {
+  try {
+    const user = getRequestUser(req);
+    if (!user) {
+      return res.status(401).json({ error: 'User session required. Please log in.' });
+    }
+
+    const store = getUserData(user.id);
+    const replicaPayload = {
+      schema: 'teleexpense_account_replica',
+      version: '5.0',
+      exportedAt: new Date().toISOString(),
+      sourceAccount: {
+        name: user.name || 'Account',
+      },
+      userSettings: {
+        trackingStartMonth: user.trackingStartMonth || undefined,
+      },
+      data: {
+        dataVersion: store.dataVersion || 1,
+        transactions: Array.isArray(store.transactions) ? store.transactions : [],
+        budgets: Array.isArray(store.budgets) ? store.budgets : [],
+        categories: Array.isArray(store.categories) ? store.categories : [],
+        deletedCategories: Array.isArray(store.deletedCategories) ? store.deletedCategories : [],
+        udhaars: Array.isArray(store.udhaars) ? store.udhaars : [],
+        cardEmis: Array.isArray(store.cardEmis) ? store.cardEmis : [],
+        savingsTransfers: Array.isArray(store.savingsTransfers) ? store.savingsTransfers : [],
+        investments: Array.isArray(store.investments) ? store.investments : [],
+        fuelLogs: Array.isArray(store.fuelLogs) ? store.fuelLogs : [],
+        dailyItemLimits: Array.isArray(store.dailyItemLimits) ? store.dailyItemLimits : [],
+        piggyBankFunds: Array.isArray(store.piggyBankFunds) ? store.piggyBankFunds : [],
+        goals: Array.isArray(store.goals) ? store.goals : [],
+        accountBaseBalances: store.accountBaseBalances || {},
+        accountBalanceSetTimestamps: store.accountBalanceSetTimestamps || {},
+        wifeBaseBalance: store.wifeBaseBalance ?? 0,
+        wifeBalanceSetTimestamp: store.wifeBalanceSetTimestamp || undefined,
+        cardCreditLimits: store.cardCreditLimits || {},
+        cardBillingStartDays: store.cardBillingStartDays || {},
+        cardBillingDays: store.cardBillingDays || {},
+        cardPaymentDueDays: store.cardPaymentDueDays || {},
+        customAccounts: Array.isArray(store.customAccounts) ? store.customAccounts : [],
+        deletedAccounts: Array.isArray(store.deletedAccounts) ? store.deletedAccounts : [],
+      },
+    };
+
+    const safeName = (user.name || 'Account').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 40) || 'Account';
+    const dateStr = new Date().toISOString().split('T')[0];
+    const fileName = `TeleExpense_Account_Replica_${safeName}_${dateStr}.json`;
+
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+    return res.send(JSON.stringify(replicaPayload, null, 2));
+  } catch (err: any) {
+    console.error('Error exporting JSON replica backup:', err);
+    return res.status(500).json({ error: err?.message || 'Failed to export JSON backup' });
+  }
+});
+
+// COMPLETE ACCOUNT JSON RESTORE (CLONE / MIGRATE INTO AUTHENTICATED ACCOUNT)
+app.post('/api/restore/json', (req, res) => {
+  try {
+    const user = getRequestUser(req);
+    if (!user) {
+      return res.status(401).json({ error: 'User session required. Please log in.' });
+    }
+
+    const rawBody = req.body;
+    if (!rawBody || typeof rawBody !== 'object') {
+      return res.status(400).json({ error: 'Valid JSON backup payload is required.' });
+    }
+
+    const mode: 'replace' | 'merge' = rawBody.mode === 'merge' ? 'merge' : 'replace';
+    const replaceExisting = mode === 'replace';
+    const rawBackup = rawBody.backup && typeof rawBody.backup === 'object' ? rawBody.backup : rawBody;
+    const cleanBackup = sanitizeUntrustedJson(rawBackup);
+    const dataBlock =
+      cleanBackup?.data && typeof cleanBackup.data === 'object' && !Array.isArray(cleanBackup.data)
+        ? cleanBackup.data
+        : cleanBackup;
+
+    if (!dataBlock || typeof dataBlock !== 'object') {
+      return res.status(400).json({ error: 'Invalid JSON backup structure.' });
+    }
+
+    const hasRecognizedModule = [
+      'transactions',
+      'budgets',
+      'categories',
+      'udhaars',
+      'cardEmis',
+      'savingsTransfers',
+      'investments',
+      'fuelLogs',
+      'dailyItemLimits',
+      'piggyBankFunds',
+      'accountBaseBalances',
+      'customAccounts',
+    ].some((k) => dataBlock[k] !== undefined);
+
+    if (!hasRecognizedModule) {
+      return res.status(400).json({ error: 'Uploaded JSON file valid TeleExpense backup nahi hai.' });
+    }
+
+    const store = getUserData(user.id);
+    const validAccountTypes = new Set(['rupay_card', 'credit_card', 'bank_account', 'cash']);
+
+    const stampArrayWithUser = <T extends Record<string, any>>(
+      incoming: any,
+      existing: T[],
+      idPrefix: string
+    ): { list: T[]; addedCount: number } => {
+      const target: T[] = replaceExisting ? [] : [...existing];
+      const seenIds = new Set(target.map((item) => item?.id).filter(Boolean));
+      let addedCount = 0;
+
+      if (Array.isArray(incoming)) {
+        for (const rawItem of incoming) {
+          if (!rawItem || typeof rawItem !== 'object') continue;
+          const itemId =
+            typeof rawItem.id === 'string' && rawItem.id.trim()
+              ? rawItem.id.trim()
+              : `${idPrefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+          if (!seenIds.has(itemId)) {
+            target.push({ ...rawItem, id: itemId, userId: user.id } as T);
+            seenIds.add(itemId);
+            addedCount++;
+          }
+        }
+      }
+      return { list: target, addedCount };
+    };
+
+    // 1. Categories & Deleted Categories
+    let categoriesCreated = 0;
+    if (Array.isArray(dataBlock.categories)) {
+      if (replaceExisting) {
+        store.categories = dataBlock.categories.filter((c: any) => c && typeof c.name === 'string' && c.name.trim());
+        categoriesCreated = store.categories.length;
+      } else {
+        for (const cat of dataBlock.categories) {
+          if (!cat || typeof cat.name !== 'string' || !cat.name.trim()) continue;
+          const idx = store.categories.findIndex((c) => c.name.toLowerCase() === cat.name.toLowerCase());
+          if (idx >= 0) {
+            store.categories[idx] = { ...store.categories[idx], ...cat };
+          } else {
+            store.categories.push(cat);
+            categoriesCreated++;
+          }
+        }
+      }
+    }
+    if (Array.isArray(dataBlock.deletedCategories)) {
+      const cleanDeleted = dataBlock.deletedCategories.filter((s: any) => typeof s === 'string');
+      store.deletedCategories = replaceExisting
+        ? cleanDeleted
+        : Array.from(new Set([...(store.deletedCategories || []), ...cleanDeleted]));
+    }
+
+    // 2. Budgets
+    if (Array.isArray(dataBlock.budgets)) {
+      if (replaceExisting) {
+        store.budgets = dataBlock.budgets
+          .filter((b: any) => b && typeof b.category === 'string' && b.category.trim())
+          .map((b: any) => ({ ...b, limit: Math.max(0, Number(b.limit) || 0) }));
+      } else {
+        for (const b of dataBlock.budgets) {
+          if (!b || typeof b.category !== 'string' || !b.category.trim()) continue;
+          const idx = store.budgets.findIndex((item) => item.category.toLowerCase() === b.category.toLowerCase());
+          const lim = Math.max(0, Number(b.limit) || 0);
+          if (idx >= 0) {
+            store.budgets[idx] = { ...store.budgets[idx], ...b, limit: lim };
+          } else {
+            store.budgets.push({ ...b, limit: lim });
+          }
+        }
+      }
+    }
+
+    // 3. Core User-Scoped Array Modules
+    const txRes = stampArrayWithUser(dataBlock.transactions, store.transactions || [], 'tx');
+    store.transactions = txRes.list;
+    store.transactions.sort((a, b) => {
+      const timeA = new Date(`${a.date}T${a.time || '00:00'}`).getTime();
+      const timeB = new Date(`${b.date}T${b.time || '00:00'}`).getTime();
+      return (isNaN(timeB) ? 0 : timeB) - (isNaN(timeA) ? 0 : timeA);
+    });
+
+    const udhRes = stampArrayWithUser(dataBlock.udhaars, store.udhaars || [], 'udh');
+    store.udhaars = udhRes.list;
+
+    const emiRes = stampArrayWithUser(dataBlock.cardEmis, store.cardEmis || [], 'emi');
+    store.cardEmis = emiRes.list;
+
+    const savRes = stampArrayWithUser(dataBlock.savingsTransfers, store.savingsTransfers || [], 'sav');
+    store.savingsTransfers = savRes.list;
+
+    const invRes = stampArrayWithUser(dataBlock.investments, store.investments || [], 'inv');
+    store.investments = invRes.list;
+
+    const fuelRes = stampArrayWithUser(dataBlock.fuelLogs, store.fuelLogs || [], 'fuel');
+    store.fuelLogs = fuelRes.list;
+
+    const dailyRes = stampArrayWithUser(dataBlock.dailyItemLimits, store.dailyItemLimits || [], 'lim');
+    store.dailyItemLimits = dailyRes.list;
+
+    const piggyRes = stampArrayWithUser(dataBlock.piggyBankFunds, store.piggyBankFunds || [], 'piggy');
+    store.piggyBankFunds = piggyRes.list;
+
+    if (Array.isArray(dataBlock.goals)) {
+      const goalRes = stampArrayWithUser(dataBlock.goals, store.goals || [], 'goal');
+      store.goals = goalRes.list;
+    }
+
+    // 4. Account Balances, Timestamps, Wife's Savings Base, Card Limits & Bill Cycles (Start/End/Due)
+    const cleanNumericMap = (raw: any, minVal: number, maxVal?: number): Record<string, number> => {
+      const out: Record<string, number> = {};
+      if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+        for (const [k, v] of Object.entries(raw)) {
+          const num = Number(v);
+          if (!isNaN(num) && num >= minVal && (maxVal === undefined || num <= maxVal)) {
+            out[k] = maxVal !== undefined ? Math.round(num) : num;
+          }
+        }
+      }
+      return out;
+    };
+
+    const cleanStringMap = (raw: any): Record<string, string> => {
+      const out: Record<string, string> = {};
+      if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+        for (const [k, v] of Object.entries(raw)) {
+          if (typeof v === 'string' && v.trim()) out[k] = v.trim();
+        }
+      }
+      return out;
+    };
+
+    if (dataBlock.accountBaseBalances && typeof dataBlock.accountBaseBalances === 'object') {
+      const cleaned = cleanNumericMap(dataBlock.accountBaseBalances, 0);
+      store.accountBaseBalances = replaceExisting ? cleaned : { ...(store.accountBaseBalances || {}), ...cleaned };
+    } else if (replaceExisting) {
+      store.accountBaseBalances = {};
+    }
+
+    if (dataBlock.accountBalanceSetTimestamps && typeof dataBlock.accountBalanceSetTimestamps === 'object') {
+      const cleaned = cleanStringMap(dataBlock.accountBalanceSetTimestamps);
+      store.accountBalanceSetTimestamps = replaceExisting
+        ? cleaned
+        : { ...(store.accountBalanceSetTimestamps || {}), ...cleaned };
+    } else if (replaceExisting) {
+      store.accountBalanceSetTimestamps = {};
+    }
+
+    if (dataBlock.wifeBaseBalance !== undefined) {
+      const wb = Number(dataBlock.wifeBaseBalance);
+      if (!isNaN(wb) && wb >= 0) {
+        store.wifeBaseBalance = wb;
+      }
+    } else if (replaceExisting) {
+      store.wifeBaseBalance = 0;
+    }
+
+    if (typeof dataBlock.wifeBalanceSetTimestamp === 'string' && dataBlock.wifeBalanceSetTimestamp.trim()) {
+      store.wifeBalanceSetTimestamp = dataBlock.wifeBalanceSetTimestamp.trim();
+    } else if (replaceExisting) {
+      store.wifeBalanceSetTimestamp = undefined;
+    }
+
+    if (dataBlock.cardCreditLimits && typeof dataBlock.cardCreditLimits === 'object') {
+      const cleaned = cleanNumericMap(dataBlock.cardCreditLimits, 1);
+      store.cardCreditLimits = replaceExisting ? cleaned : { ...(store.cardCreditLimits || {}), ...cleaned };
+    } else if (replaceExisting) {
+      store.cardCreditLimits = {};
+    }
+
+    if (dataBlock.cardBillingStartDays && typeof dataBlock.cardBillingStartDays === 'object') {
+      const cleaned = cleanNumericMap(dataBlock.cardBillingStartDays, 1, 31);
+      store.cardBillingStartDays = replaceExisting ? cleaned : { ...(store.cardBillingStartDays || {}), ...cleaned };
+    } else if (replaceExisting) {
+      store.cardBillingStartDays = {};
+    }
+
+    if (dataBlock.cardBillingDays && typeof dataBlock.cardBillingDays === 'object') {
+      const cleaned = cleanNumericMap(dataBlock.cardBillingDays, 1, 31);
+      store.cardBillingDays = replaceExisting ? cleaned : { ...(store.cardBillingDays || {}), ...cleaned };
+    } else if (replaceExisting) {
+      store.cardBillingDays = {};
+    }
+
+    if (dataBlock.cardPaymentDueDays && typeof dataBlock.cardPaymentDueDays === 'object') {
+      const cleaned = cleanNumericMap(dataBlock.cardPaymentDueDays, 1, 31);
+      store.cardPaymentDueDays = replaceExisting ? cleaned : { ...(store.cardPaymentDueDays || {}), ...cleaned };
+    } else if (replaceExisting) {
+      store.cardPaymentDueDays = {};
+    }
+
+    // 5. Custom Cards & Bank Accounts
+    let customAccountsCount = 0;
+    if (Array.isArray(dataBlock.customAccounts)) {
+      const sanitizedCustom = dataBlock.customAccounts
+        .filter((a: any) => a && typeof a.id === 'string' && a.id.trim() && validAccountTypes.has(a.type))
+        .map((a: any) => ({
+          id: String(a.id).trim(),
+          name: String(a.name || a.shortName || a.id).trim(),
+          shortName: String(a.shortName || a.id).trim(),
+          type: a.type as 'rupay_card' | 'credit_card' | 'bank_account' | 'cash',
+          badge: String(a.badge || a.shortName || a.id).trim(),
+          color: typeof a.color === 'string' && a.color.trim() ? a.color.trim() : '#6366f1',
+          isUpiCapable: Boolean(a.isUpiCapable),
+          creditLimit: Number(a.creditLimit) > 0 ? Number(a.creditLimit) : undefined,
+          billingStartDay:
+            Number(a.billingStartDay) >= 1 && Number(a.billingStartDay) <= 31
+              ? Math.round(Number(a.billingStartDay))
+              : undefined,
+          billingDay:
+            Number(a.billingDay) >= 1 && Number(a.billingDay) <= 31 ? Math.round(Number(a.billingDay)) : undefined,
+          paymentDueDay:
+            Number(a.paymentDueDay) >= 1 && Number(a.paymentDueDay) <= 31
+              ? Math.round(Number(a.paymentDueDay))
+              : undefined,
+          isWifeAccount: Boolean(a.isWifeAccount),
+          isCustom: true,
+        }));
+
+      if (replaceExisting) {
+        store.customAccounts = sanitizedCustom;
+        customAccountsCount = sanitizedCustom.length;
+      } else {
+        const merged = [...(store.customAccounts || [])];
+        for (const ca of sanitizedCustom) {
+          const idx = merged.findIndex((m) => m.id === ca.id);
+          if (idx >= 0) merged[idx] = ca;
+          else {
+            merged.push(ca);
+            customAccountsCount++;
+          }
+        }
+        store.customAccounts = merged;
+      }
+    } else if (replaceExisting) {
+      store.customAccounts = [];
+    }
+
+    if (Array.isArray(dataBlock.deletedAccounts)) {
+      const cleanDelAcc = dataBlock.deletedAccounts.filter((s: any) => typeof s === 'string' && s.trim());
+      store.deletedAccounts = replaceExisting
+        ? cleanDelAcc
+        : Array.from(new Set([...(store.deletedAccounts || []), ...cleanDelAcc]));
+    } else if (replaceExisting) {
+      store.deletedAccounts = [];
+    }
+
+    // 6. User Profile Financial Preferences (Non-secret settings only; destination credentials/identity stay intact)
+    const userSettings = cleanBackup.userSettings || cleanBackup.user;
+    let userUpdated = false;
+    if (userSettings && typeof userSettings === 'object') {
+      if (typeof userSettings.trackingStartMonth === 'string' && /^\d{4}-\d{2}$/.test(userSettings.trackingStartMonth)) {
+        user.trackingStartMonth = userSettings.trackingStartMonth;
+        userUpdated = true;
+      }
+    }
+    if (userUpdated) {
+      saveJson(USERS_FILE, users);
+      persistToPg('users', users).catch(() => {});
+    }
+
+    syncBudgetsWithCategories(store);
+    saveUserData(user.id, store);
+
+    return res.json({
+      success: true,
+      mode,
+      message: `Complete Account JSON Replica ${replaceExisting ? 'clone' : 'merge'} ho gaya! (${txRes.addedCount} transactions, ${udhRes.addedCount} udhaar, ${invRes.addedCount} investments, ${savRes.addedCount} transfers, ${emiRes.addedCount} EMIs, ${fuelRes.addedCount} fuel, ${dailyRes.addedCount} daily limits, ${piggyRes.addedCount} gullak pots, ${customAccountsCount} custom cards)`,
+      restoredCount: txRes.addedCount,
+      categoriesCreated,
+      udhaarsCount: udhRes.addedCount,
+      fuelLogsCount: fuelRes.addedCount,
+      investmentsCount: invRes.addedCount,
+      savingsTransfersCount: savRes.addedCount,
+      emisCount: emiRes.addedCount,
+      dailyLimitsCount: dailyRes.addedCount,
+      piggyBankCount: piggyRes.addedCount,
+      customAccountsCount,
+      transactions: store.transactions,
+      categories: store.categories,
+      budgets: store.budgets,
+      udhaars: store.udhaars,
+      fuelLogs: store.fuelLogs,
+      investments: store.investments,
+      savingsTransfers: store.savingsTransfers,
+      cardEmis: store.cardEmis,
+      customAccounts: store.customAccounts || [],
+      deletedAccounts: store.deletedAccounts || [],
+      cardBillingStartDays: store.cardBillingStartDays || {},
+      cardBillingDays: store.cardBillingDays || {},
+      cardPaymentDueDays: store.cardPaymentDueDays || {},
+      summary: calculateUserSummary(user.id),
+    });
+  } catch (err: any) {
+    console.error('Error restoring JSON replica backup:', err);
+    return res.status(500).json({ error: err?.message || 'Failed to restore JSON backup' });
   }
 });
 

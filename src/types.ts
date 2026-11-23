@@ -199,6 +199,7 @@ export interface AccountBalancesData {
   cardBillingDays?: Record<string, number>;
   cardPaymentDueDays?: Record<string, number>;
   customAccounts?: AccountMeta[];
+  deletedAccounts?: string[];
   accounts: Record<string, AccountBalanceInfo>;
   totalBankCashBalance: number;
   totalCardAvailableLimit: number;

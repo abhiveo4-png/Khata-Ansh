@@ -243,13 +243,20 @@ export default function App() {
       transactions?: Transaction[];
       summary?: FinancialSummary;
       customAccounts?: AccountMeta[];
+      deletedAccounts?: string[];
       cardBillingStartDays?: Record<string, number>;
       cardBillingDays?: Record<string, number>;
       cardPaymentDueDays?: Record<string, number>;
     }>('/api/transactions');
     
-    if (data?.customAccounts || data?.cardBillingDays || data?.cardPaymentDueDays || data?.cardBillingStartDays) {
-      syncCustomAccounts(data.customAccounts, data.cardBillingDays, data.cardPaymentDueDays, data.cardBillingStartDays);
+    if (data?.customAccounts || data?.deletedAccounts || data?.cardBillingDays || data?.cardPaymentDueDays || data?.cardBillingStartDays) {
+      syncCustomAccounts(
+        data.customAccounts,
+        data.cardBillingDays,
+        data.cardPaymentDueDays,
+        data.cardBillingStartDays,
+        data.deletedAccounts
+      );
     }
     if (data?.transactions) {
       setTransactions(data.transactions);

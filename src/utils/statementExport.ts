@@ -1,6 +1,6 @@
 import * as XLSX from 'xlsx';
 import { Transaction, AccountId, CardEmi } from '../types';
-import { ACCOUNTS_CONFIG, ALL_ACCOUNTS } from './accounts';
+import { ACCOUNTS_CONFIG, ALL_ACCOUNTS, canonicalizeAccountId } from './accounts';
 
 export interface StatementExportOptions {
   accountId: AccountId | 'all';
@@ -24,11 +24,23 @@ export function filterTransactionsForStatement(
   const currentYear = now.getFullYear();
   const currentMonth = now.getMonth(); // 0-indexed
 
-  return transactions.filter((t) => {
-    // 1. Account filter
-    if (accountId !== 'all' && t.account !== accountId) {
-      return false;
-    }
+  const isWifeTransferEntry = (t: Transaction) =>
+    Boolean(
+      t.isSavingsTransfer ||
+      t.isWifeTransfer ||
+      t.category === 'Wife Transfer' ||
+      t.category?.toLowerCase() === 'wife transfer'
+    );
+
+  return transactions
+    .filter((t) => {
+      // 1. Account filter
+      const resolvedAcc = canonicalizeAccountId(t.account);
+      if (accountId === 'Wife Account') {
+        if (resolvedAcc !== 'Wife Account' && !isWifeTransferEntry(t)) return false;
+      } else if (accountId !== 'all' && resolvedAcc !== accountId) {
+        return false;
+      }
 
     // 2. Date filter
     const tDateStr = t.date || '';
@@ -74,6 +86,15 @@ export function filterTransactionsForStatement(
     }
 
     return true;
+  }).map((t) => {
+    if (accountId === 'Wife Account' && isWifeTransferEntry(t) && t.account !== 'Wife Account') {
+      return {
+        ...t,
+        type: 'income' as const,
+        description: `${t.description || 'Wife Savings Transfer'} (From ${t.account || 'Bank'})`,
+      };
+    }
+    return t;
   }).sort((a, b) => {
     const dateComp = (b.date || '').localeCompare(a.date || '');
     if (dateComp !== 0) return dateComp;
