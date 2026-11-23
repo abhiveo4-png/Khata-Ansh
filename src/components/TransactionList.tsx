@@ -34,7 +34,8 @@ import {
 import { Transaction, TransactionType, CategoryDef, PaymentMethod, AccountId, UserRole } from '../types';
 import { getCategoryByNameOrKeyword } from '../utils/categories';
 import { formatCurrency, formatRelativeDate } from '../utils/formatters';
-import { ALL_ACCOUNTS, ACCOUNTS_CONFIG } from '../utils/accounts';
+import { ALL_ACCOUNTS, ACCOUNTS_CONFIG, canonicalizeAccountId } from '../utils/accounts';
+import { isCcPaymentCreditTx, isCcPaymentDebitTx } from '../utils/billingCycle';
 import { safeFetchJson } from '../utils/api';
 import { EditTransactionModal } from './EditTransactionModal';
 
@@ -172,6 +173,18 @@ export const TransactionList: React.FC<TransactionListProps> = ({
   const filteredTransactions = useMemo(() => {
     return transactions
       .filter((tx) => {
+        const isCcCredit = isCcPaymentCreditTx(tx);
+
+        // Paired CC Bill Settlement credit leg on card ledger is NOT income:
+        // Never show it under Income filter, and in All Accounts view keep it inside Card Ledger
+        // (unless the user explicitly filters by that Card, Category, or searches for it)
+        if (isCcCredit) {
+          if (selectedType === 'income' || selectedType === 'expense') return false;
+          if (selectedAccount === 'all' && selectedCategory === 'all' && !searchQuery.trim()) {
+            return false;
+          }
+        }
+
         // Type filter
         if (selectedType !== 'all' && tx.type !== selectedType) return false;
 
@@ -180,7 +193,7 @@ export const TransactionList: React.FC<TransactionListProps> = ({
 
         // Account filter
         if (selectedAccount !== 'all') {
-          const acc = tx.account || 'ICICI CC 0000';
+          const acc = canonicalizeAccountId(tx.account || 'ICICI CC 0000');
           if (acc !== selectedAccount) return false;
         }
 
@@ -243,6 +256,10 @@ export const TransactionList: React.FC<TransactionListProps> = ({
     let incomeCount = 0;
 
     filteredTransactions.forEach((tx) => {
+      // Paired CC bill settlement credit leg on card ledger is NOT income
+      if (isCcPaymentCreditTx(tx)) {
+        return;
+      }
       const isUdhaarLent = Boolean(
         tx.isUdhaarLent ||
         tx.category === 'Udhaar Given' ||
@@ -251,6 +268,9 @@ export const TransactionList: React.FC<TransactionListProps> = ({
         (tx.tags && tx.tags.includes('udhaar-lent'))
       );
       if (tx.type === 'expense') {
+        if (isCcPaymentDebitTx(tx)) {
+          return;
+        }
         if (isUdhaarLent) {
           totalUdhaarLent += tx.amount;
         } else {
@@ -877,11 +897,13 @@ export const TransactionList: React.FC<TransactionListProps> = ({
 
           {/* List Items */}
           {filteredTransactions.map((tx) => {
-            const isIncome = tx.type === 'income';
+            const isCcCredit = isCcPaymentCreditTx(tx);
+            const isCcDebit = isCcPaymentDebitTx(tx);
+            const isIncome = tx.type === 'income' && !isCcCredit;
             const catDef = getCategoryByNameOrKeyword(tx.category, isIncome, categories);
             const isUncategorized = tx.category === 'Uncategorized' || tx.category.toLowerCase() === 'undefined';
             const isSelected = selectedTxIds.includes(tx.id);
-            const currentAcc = (tx.account as AccountId) || 'ICICI CC 0000';
+            const currentAcc = (canonicalizeAccountId(tx.account) || 'ICICI CC 0000') as AccountId;
             const accMeta = ACCOUNTS_CONFIG[currentAcc] || ACCOUNTS_CONFIG['ICICI CC 0000'];
 
             const isFamily = userRole === 'family';
@@ -920,12 +942,16 @@ export const TransactionList: React.FC<TransactionListProps> = ({
                 <div className="md:col-span-4 flex items-center space-x-3">
                   <div
                     className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 transition-transform hover:scale-110 ${
-                      isIncome 
+                      isCcCredit || isCcDebit
+                        ? 'bg-sky-500/15 border border-sky-500/35 text-sky-400'
+                        : isIncome 
                         ? 'icon-badge-emerald' 
                         : 'icon-badge-rose'
                     }`}
                   >
-                    {isIncome ? (
+                    {isCcCredit || isCcDebit ? (
+                      <CreditCard className="w-4 h-4 text-sky-400" />
+                    ) : isIncome ? (
                       <ArrowUpRight className="w-4 h-4 text-emerald-400" />
                     ) : (
                       <ArrowDownRight className="w-4 h-4 text-rose-400" />
@@ -934,6 +960,16 @@ export const TransactionList: React.FC<TransactionListProps> = ({
                   <div className="min-w-0">
                     <div className="flex items-center space-x-2 flex-wrap gap-y-1">
                       <span className="font-semibold text-white truncate text-sm">{tx.description}</span>
+                      {isCcCredit && (
+                        <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-sky-500/20 text-sky-300 border border-sky-500/40">
+                          💳 Card Bill Credit (Not Income)
+                        </span>
+                      )}
+                      {isCcDebit && (
+                        <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/40">
+                          💳 CC Bill Transfer
+                        </span>
+                      )}
                       
                       {/* Reimbursement Badge with Clickable Status & Settlement Launcher */}
                       {Boolean(tx.isReimbursementInflow || (tx.type === 'income' && (tx.isReimbursement || tx.category === 'Reimbursement'))) ? (
@@ -1081,15 +1117,15 @@ export const TransactionList: React.FC<TransactionListProps> = ({
                     {isOwnTx ? (
                       <div
                         className={`text-sm font-extrabold tracking-tight font-mono ${
-                          isIncome ? 'text-emerald-400' : 'text-rose-400'
+                          isCcCredit || isCcDebit ? 'text-sky-400' : isIncome ? 'text-emerald-400' : 'text-rose-400'
                         }`}
                       >
-                        {isIncome ? '+₹' : '-₹'}{isPrivacyMode ? '••••••' : tx.amount.toLocaleString('en-IN')}
+                        {isCcCredit ? '₹' : isIncome ? '+₹' : '-₹'}{isPrivacyMode ? '••••••' : tx.amount.toLocaleString('en-IN')}
                       </div>
                     ) : (
                       <div className="flex flex-col items-start md:items-end">
                         <span className="text-sm font-bold font-mono tracking-widest text-slate-400 select-none">
-                          {isIncome ? '+₹' : '-₹'}••••••
+                          {isCcCredit ? '₹' : isIncome ? '+₹' : '-₹'}••••••
                         </span>
                         <span className="text-[9px] font-sans text-indigo-300/90 bg-indigo-950/60 px-1.5 py-0.5 rounded border border-indigo-500/30 mt-0.5">
                           🔒 Masked (Family)

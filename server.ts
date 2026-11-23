@@ -3798,9 +3798,11 @@ export function buildDateReportTelegramMessage(
   let totalExpense = 0;
 
   for (const t of matching) {
+    const isCcCredit = Boolean(t.isCardPaymentCredit || (t.type === 'income' && (t.isCcPayment || t.category === 'CC Payment Credit')));
+    if (isCcCredit) continue;
     if (t.type === 'income') {
       totalIncome += (Number(t.amount) || 0);
-    } else {
+    } else if (!t.isCcPayment && t.category !== 'CC Payment') {
       totalExpense += (Number(t.amount) || 0);
     }
   }
@@ -4209,17 +4211,19 @@ export function buildMonthComparisonReportTelegramMessage(
   const prevCutoffDate = `${prevMonthKey}-${String(prevCutoffDay).padStart(2, '0')}`;
   const currCutoffDate = nowInfo.date;
 
+  const isCcCreditTx = (t: Transaction) => Boolean(t.isCardPaymentCredit || (t.type === 'income' && (t.isCcPayment || t.category === 'CC Payment Credit')));
+
   // Current Month MTD (Day 1 to Today)
   const currMtdTxs = txs.filter(t => t.date.startsWith(currMonthKey) && t.date <= currCutoffDate);
-  const currMtdExpenses = currMtdTxs.filter(t => t.type === 'expense');
-  const currMtdIncomes = currMtdTxs.filter(t => t.type === 'income');
+  const currMtdExpenses = currMtdTxs.filter(t => t.type === 'expense' && !t.isCcPayment && t.category !== 'CC Payment');
+  const currMtdIncomes = currMtdTxs.filter(t => t.type === 'income' && !isCcCreditTx(t));
   const currMtdSpent = currMtdExpenses.reduce((s, t) => s + (Number(t.amount) || 0), 0);
   const currMtdIncome = currMtdIncomes.reduce((s, t) => s + (Number(t.amount) || 0), 0);
 
   // Previous Month MTD (Day 1 to Same Day)
   const prevMtdTxs = txs.filter(t => t.date.startsWith(prevMonthKey) && t.date <= prevCutoffDate);
-  const prevMtdExpenses = prevMtdTxs.filter(t => t.type === 'expense');
-  const prevMtdIncomes = prevMtdTxs.filter(t => t.type === 'income');
+  const prevMtdExpenses = prevMtdTxs.filter(t => t.type === 'expense' && !t.isCcPayment && t.category !== 'CC Payment');
+  const prevMtdIncomes = prevMtdTxs.filter(t => t.type === 'income' && !isCcCreditTx(t));
   const prevMtdSpent = prevMtdExpenses.reduce((s, t) => s + (Number(t.amount) || 0), 0);
   const prevMtdIncome = prevMtdIncomes.reduce((s, t) => s + (Number(t.amount) || 0), 0);
 
@@ -4420,8 +4424,8 @@ export function buildSearchReportTelegramMessage(
     };
   }
 
-  const expenses = filtered.filter(t => t.type === 'expense');
-  const incomes = filtered.filter(t => t.type === 'income');
+  const expenses = filtered.filter(t => t.type === 'expense' && !t.isCcPayment && t.category !== 'CC Payment');
+  const incomes = filtered.filter(t => t.type === 'income' && !t.isCardPaymentCredit && !t.isCcPayment && t.category !== 'CC Payment Credit');
   const totalExpense = expenses.reduce((s, t) => s + (Number(t.amount) || 0), 0);
   const totalIncome = incomes.reduce((s, t) => s + (Number(t.amount) || 0), 0);
 
@@ -13345,9 +13349,12 @@ export async function answerAiFinancialQuestion(
     const amt = Number(t.amount) || 0;
     mData.transactionCount++;
 
+    const isCcCredit = Boolean(t.isCardPaymentCredit || (t.type === 'income' && (t.isCcPayment || t.category === 'CC Payment Credit')));
+    if (isCcCredit) continue;
+
     if (t.type === 'income') {
       mData.income += amt;
-    } else {
+    } else if (!t.isCcPayment && t.category !== 'CC Payment') {
       mData.totalExpense += amt;
       const isRim = Boolean(t.isReimbursement || t.category === 'Reimbursement');
       if (isRim) {
@@ -14581,8 +14588,8 @@ async function sendDailyTelegramDigest(type: 'morning' | 'evening') {
     const [currY, currM, currD] = todayDate.split('-').map(Number);
 
     const todayTxs = (store.transactions || []).filter(t => t.date === todayDate);
-    const todayExpense = todayTxs.filter(t => t.type === 'expense').reduce((a, b) => a + (Number(b.amount) || 0), 0);
-    const todayIncome = todayTxs.filter(t => t.type === 'income').reduce((a, b) => a + (Number(b.amount) || 0), 0);
+    const todayExpense = todayTxs.filter(t => t.type === 'expense' && !t.isCcPayment && t.category !== 'CC Payment').reduce((a, b) => a + (Number(b.amount) || 0), 0);
+    const todayIncome = todayTxs.filter(t => t.type === 'income' && !t.isCardPaymentCredit && !t.isCcPayment && t.category !== 'CC Payment Credit').reduce((a, b) => a + (Number(b.amount) || 0), 0);
 
     // Days remaining in current month
     const totalDaysInMonth = new Date(currY, currM, 0).getDate();

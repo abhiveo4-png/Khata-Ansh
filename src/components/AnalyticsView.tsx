@@ -50,7 +50,8 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({ transactions }) =>
         (tx.category && tx.category.toLowerCase().includes('udhaar') && tx.type === 'expense') ||
         (tx.tags && tx.tags.includes('udhaar-lent'))
       );
-      if (tx.type === 'expense' && !isUdhaarLent) {
+      const isCcPayment = Boolean(tx.isCcPayment || tx.category === 'CC Payment' || tx.category === 'CC Payment Credit');
+      if (tx.type === 'expense' && !isUdhaarLent && !isCcPayment) {
         map[tx.category] = (map[tx.category] || 0) + tx.amount;
         totalExpense += tx.amount;
       }
