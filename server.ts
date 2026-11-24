@@ -3428,7 +3428,7 @@ export function calculateAccountsBalances(userId: string) {
         return k;
       }
       const digits = k.match(/\b(\d{4})\b/);
-      if (digits && desc.includes(digits[1])) {
+      if (digits && new RegExp(`(?<![\\d.])${digits[1]}(?!\\d)`).test(desc)) {
         return k;
       }
     }
@@ -3483,6 +3483,14 @@ export function calculateAccountsBalances(userId: string) {
     }
     return txDate.substring(0, 7);
   };
+
+  // Current & Next payment months in IST — Credit Card Outstanding = Current Month Reserve + Next Month Reserve (+ optional base)
+  const nowIstDate = new Date(Date.now() + 5.5 * 60 * 60 * 1000);
+  const istCurYear = nowIstDate.getUTCFullYear();
+  const istCurMonth = nowIstDate.getUTCMonth() + 1;
+  const currentCycleMonth = `${istCurYear}-${pad2Num(istCurMonth)}`;
+  const nextCycleYM = shiftYearMonth(istCurYear, istCurMonth, 1);
+  const nextCycleMonth = `${nextCycleYM.year}-${pad2Num(nextCycleYM.month)}`;
 
   for (const [accId, meta] of Object.entries(combinedAccountsMeta)) {
     const isCard = meta.type === 'credit_card' || meta.type === 'rupay_card';
@@ -3540,7 +3548,15 @@ export function calculateAccountsBalances(userId: string) {
       let isCardBillPaymentCredit = false;
       if (tAcc === accId) {
         if (t.type === 'income') {
-          deltaCredit = amt;
+          // Skip legacy paired card-side payment credit leg so it is never double-counted with bank-side CC payment
+          const isPairedCardCreditLeg =
+            isCard &&
+            (Boolean(t.isCardPaymentCredit) ||
+              t.category === 'CC Payment Credit' ||
+              (Array.isArray(t.tags) && t.tags.includes('cc-payment-credit')));
+          if (!isPairedCardCreditLeg) {
+            deltaCredit = amt;
+          }
         } else {
           deltaDebit = amt;
         }
@@ -3616,28 +3632,19 @@ export function calculateAccountsBalances(userId: string) {
       const customLimit = Number(cardLimits[accId]);
       const creditLimit = (customLimit && customLimit > 0) ? customLimit : (meta.creditLimit || 100000);
 
-      // Compute Current Outstanding chronologically cycle-by-cycle:
-      // Each cycle settles against (earlier unpaid tracked cycles + current cycle spends - refunds).
-      // Clamping at 0 after each cycle's payment guarantees a payment for an older pre-app bill
-      // NEVER carries forward as a negative credit to wipe out newer unsettled spends!
-      const sortedCycles = Object.keys(cardCycleBuckets).sort();
-      let runningOutstanding = base;
-      let preTrackingPaymentsExcluded = 0;
-      for (const pm of sortedCycles) {
-        const b = cardCycleBuckets[pm];
-        const cycleNetSpends = Math.max(0, b.spends - b.refunds);
-        const beforePay = runningOutstanding + cycleNetSpends;
-        if (b.payments > beforePay) {
-          preTrackingPaymentsExcluded += b.payments - beforePay;
-          runningOutstanding = 0;
-        } else {
-          runningOutstanding = beforePay - b.payments;
-        }
-      }
+      // Credit Card Outstanding = Current Month Bill-Cycle Pending + Next Month Bill-Cycle Pending (+ optional Base Due)
+      // Matches Bill-Cycle Reserve (Current Month) + Next Month Reserve to the exact rupee!
+      const curBucket = cardCycleBuckets[currentCycleMonth] || { spends: 0, refunds: 0, payments: 0 };
+      const nextBucket = cardCycleBuckets[nextCycleMonth] || { spends: 0, refunds: 0, payments: 0 };
+      const curCycleBill = Math.max(0, Math.round((curBucket.spends - curBucket.refunds) * 100) / 100);
+      const nextCycleBill = Math.max(0, Math.round((nextBucket.spends - nextBucket.refunds) * 100) / 100);
+      const currentCyclePending = Math.max(0, Math.round((curCycleBill - curBucket.payments) * 100) / 100);
+      const nextCyclePending = Math.max(0, Math.round((nextCycleBill - nextBucket.payments) * 100) / 100);
 
-      const currentOutstanding = Math.round((Math.max(0, runningOutstanding) + Number.EPSILON) * 100) / 100;
+      const currentOutstanding = Math.round((Math.max(0, base + currentCyclePending + nextCyclePending) + Number.EPSILON) * 100) / 100;
       const availableLimit = Math.round((Math.max(0, creditLimit - currentOutstanding) + Number.EPSILON) * 100) / 100;
-      const effectiveCredits = Math.max(0, Math.round((credits - preTrackingPaymentsExcluded + Number.EPSILON) * 100) / 100);
+      const activeTwoCycleSpends = Math.round((curBucket.spends + nextBucket.spends + Number.EPSILON) * 100) / 100;
+      const activeTwoCycleCredits = Math.round((curBucket.payments + nextBucket.payments + curBucket.refunds + nextBucket.refunds + Number.EPSILON) * 100) / 100;
 
       accounts[accId] = {
         accountId: accId,
@@ -3647,15 +3654,18 @@ export function calculateAccountsBalances(userId: string) {
         badge: meta.badge,
         color: meta.color,
         baseBalance: base,
-        credits: effectiveCredits,
-        debits: Math.round((debits + Number.EPSILON) * 100) / 100,
+        credits: activeTwoCycleCredits,
+        debits: activeTwoCycleSpends,
         allTimeCredits: Math.round((allTimeCredits + Number.EPSILON) * 100) / 100,
         allTimeDebits: Math.round((allTimeDebits + Number.EPSILON) * 100) / 100,
         skippedBeforeBaseCount,
         skippedBeforeBaseDebits: Math.round((skippedBeforeBaseDebits + Number.EPSILON) * 100) / 100,
         skippedBeforeBaseCredits: Math.round((skippedBeforeBaseCredits + Number.EPSILON) * 100) / 100,
         balanceSetTimestamp: setTimeMs > 0 ? setTimeStr : null,
-        preTrackingPaymentsExcluded: Math.round((preTrackingPaymentsExcluded + Number.EPSILON) * 100) / 100,
+        currentCycleMonth,
+        currentCyclePending,
+        nextCycleMonth,
+        nextCyclePending,
         currentBalance: availableLimit,
         creditLimit,
         availableLimit,

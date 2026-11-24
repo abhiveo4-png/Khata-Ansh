@@ -194,6 +194,10 @@ export interface AccountBalanceInfo {
   skippedBeforeBaseCredits?: number;
   balanceSetTimestamp?: string | null;
   preTrackingPaymentsExcluded?: number;
+  currentCycleMonth?: string;
+  currentCyclePending?: number;
+  nextCycleMonth?: string;
+  nextCyclePending?: number;
 }
 
 export interface AccountBalancesData {

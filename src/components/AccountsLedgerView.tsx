@@ -1384,7 +1384,22 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
             </div>
           </div>
 
-          {(selectedMeta.type === 'credit_card' || selectedMeta.type === 'rupay_card') ? (
+          {(selectedMeta.type === 'credit_card' || selectedMeta.type === 'rupay_card') ? (() => {
+            const accBal = balancesData?.accounts[selectedAccountId];
+            const baseVal = accBal?.baseBalance || 0;
+            const curMonthPending = selectedCardCycleInfo?.totalCardCyclePending ?? accBal?.currentCyclePending ?? 0;
+            const nextMonthPending = selectedCardNextCycleInfo?.totalCardCyclePending ?? accBal?.nextCyclePending ?? 0;
+            const combinedOutstanding = Math.round((Math.max(0, baseVal + curMonthPending + nextMonthPending) + Number.EPSILON) * 100) / 100;
+            const totalLimitVal =
+              accBal?.creditLimit ||
+              balancesData?.cardCreditLimits?.[selectedAccountId] ||
+              selectedMeta.creditLimit ||
+              100000;
+            const computedAvailableLimit = Math.max(0, Math.round((totalLimitVal - combinedOutstanding + Number.EPSILON) * 100) / 100);
+            const skippedDeb = accBal?.skippedBeforeBaseDebits || 0;
+            const skippedCrd = accBal?.skippedBeforeBaseCredits || 0;
+            const skippedCnt = accBal?.skippedBeforeBaseCount || 0;
+            return (
             <>
               <div className="bg-gradient-to-br from-sky-950/40 to-slate-900/80 border border-sky-500/30 rounded-2xl p-4">
                 <div className="text-xs text-sky-300 font-medium flex items-center justify-between">
@@ -1394,10 +1409,10 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
                 <div className="text-xl font-bold text-sky-300 font-mono mt-1">
                   {isFamily || isPrivacyMode 
                     ? '••••••' 
-                    : `₹${(balancesData?.accounts[selectedAccountId]?.availableLimit ?? Math.max(0, (balancesData?.cardCreditLimits?.[selectedAccountId] || selectedMeta.creditLimit || 100000) - currentMonthExpense)).toLocaleString('en-IN')}`}
+                    : `₹${computedAvailableLimit.toLocaleString('en-IN')}`}
                 </div>
                 <div className="text-[11px] text-slate-400 mt-1 flex items-center justify-between">
-                  <span>Total Limit: ₹{(balancesData?.accounts[selectedAccountId]?.creditLimit || balancesData?.cardCreditLimits?.[selectedAccountId] || selectedMeta.creditLimit || 100000).toLocaleString('en-IN')}</span>
+                  <span>Total Limit: ₹{totalLimitVal.toLocaleString('en-IN')}</span>
                   <button
                     onClick={() => handleOpenSingleAccountModal(selectedMeta)}
                     className="text-sky-400 hover:text-sky-300 text-[10px] font-semibold underline cursor-pointer"
@@ -1420,59 +1435,44 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
                 <div className="text-xl font-bold text-rose-400 font-mono mt-1">
                   {isFamily || isPrivacyMode 
                     ? '••••••' 
-                    : `₹${(balancesData?.accounts[selectedAccountId]?.currentOutstanding ?? currentMonthExpense).toLocaleString('en-IN')}`}
+                    : `₹${combinedOutstanding.toLocaleString('en-IN')}`}
                 </div>
                 {isFamily ? (
                   <div className="text-[11px] text-slate-400 mt-1">🔒 Master Card Spends Masked</div>
-                ) : (() => {
-                  const accBal = balancesData?.accounts[selectedAccountId];
-                  const baseVal = accBal?.baseBalance || 0;
-                  const debVal = accBal?.debits || 0;
-                  const crdVal = accBal?.credits || 0;
-                  const preTrackPaid = accBal?.preTrackingPaymentsExcluded || 0;
-                  const skippedDeb = accBal?.skippedBeforeBaseDebits || 0;
-                  const skippedCrd = accBal?.skippedBeforeBaseCredits || 0;
-                  const skippedCnt = accBal?.skippedBeforeBaseCount || 0;
-                  return (
-                    <div className="mt-1 space-y-1">
-                      <div className="text-[10px] text-slate-400 font-mono">
-                        {baseVal > 0 && <span>Base: ₹{baseVal.toLocaleString('en-IN')} + </span>}
-                        <span>Spends: ₹{debVal.toLocaleString('en-IN')}</span>
-                        {crdVal > 0 && <span className="text-emerald-400"> − Settled: ₹{crdVal.toLocaleString('en-IN')}</span>}
-                      </div>
-                      {preTrackPaid > 0 && (
-                        <div className="text-[9.5px] text-slate-500">
-                          Purane pre-app bill payment (₹{preTrackPaid.toLocaleString('en-IN')}) pichle cycle me adjust hua
-                        </div>
-                      )}
-                      {(skippedDeb > 0 || skippedCrd > 0) && (
-                        <div className="bg-amber-950/50 border border-amber-500/35 rounded-lg p-1.5 text-[10px] text-amber-200 space-y-1">
-                          <div>
-                            ⚠️ {skippedCnt} purani entries Base cutoff se skip hui
-                            {skippedDeb > 0 && ` (Spends ₹${skippedDeb.toLocaleString('en-IN')})`}
-                            {skippedCrd > 0 && ` (Paid ₹${skippedCrd.toLocaleString('en-IN')})`}
-                          </div>
-                          <div className="flex flex-wrap gap-1.5">
-                            <button
-                              type="button"
-                              onClick={() => handleIncludeAllCardSpends(selectedAccountId, true)}
-                              className="px-2 py-0.5 rounded bg-amber-500/25 hover:bg-amber-500/40 text-amber-100 border border-amber-400/40 font-semibold cursor-pointer"
-                            >
-                              Sab Include Karein (Base ₹0)
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => handleIncludeAllCardSpends(selectedAccountId, false)}
-                              className="px-2 py-0.5 rounded bg-white/10 hover:bg-white/20 text-slate-200 border border-white/15 font-semibold cursor-pointer"
-                            >
-                              Base + Sab Entries
-                            </button>
-                          </div>
-                        </div>
-                      )}
+                ) : (
+                  <div className="mt-1 space-y-1">
+                    <div className="text-[10px] text-slate-400 font-mono">
+                      {baseVal > 0 && <span>Base: ₹{baseVal.toLocaleString('en-IN')} + </span>}
+                      <span>{defaultCycleMonth}: ₹{curMonthPending.toLocaleString('en-IN')}</span>
+                      <span className="text-cyan-300"> + {nextCycleMonth}: ₹{nextMonthPending.toLocaleString('en-IN')}</span>
                     </div>
-                  );
-                })()}
+                    {(skippedDeb > 0 || skippedCrd > 0) && (
+                      <div className="bg-amber-950/50 border border-amber-500/35 rounded-lg p-1.5 text-[10px] text-amber-200 space-y-1">
+                        <div>
+                          ⚠️ {skippedCnt} purani entries Base cutoff se skip hui
+                          {skippedDeb > 0 && ` (Spends ₹${skippedDeb.toLocaleString('en-IN')})`}
+                          {skippedCrd > 0 && ` (Paid ₹${skippedCrd.toLocaleString('en-IN')})`}
+                        </div>
+                        <div className="flex flex-wrap gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => handleIncludeAllCardSpends(selectedAccountId, true)}
+                            className="px-2 py-0.5 rounded bg-amber-500/25 hover:bg-amber-500/40 text-amber-100 border border-amber-400/40 font-semibold cursor-pointer"
+                          >
+                            Sab Include Karein (Base ₹0)
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleIncludeAllCardSpends(selectedAccountId, false)}
+                            className="px-2 py-0.5 rounded bg-white/10 hover:bg-white/20 text-slate-200 border border-white/15 font-semibold cursor-pointer"
+                          >
+                            Base + Sab Entries
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
 
               <div className="bg-gradient-to-br from-amber-950/40 to-indigo-950/40 border border-amber-500/35 rounded-2xl p-4">
@@ -1531,7 +1531,8 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
                 </div>
               </div>
             </>
-          ) : (
+            );
+          })() : (
             <>
               <div className="bg-gradient-to-br from-emerald-950/40 to-slate-900/80 border border-emerald-500/30 rounded-2xl p-4">
                 <div className="text-xs text-emerald-300 font-medium flex items-center justify-between">

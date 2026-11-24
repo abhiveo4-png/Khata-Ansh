@@ -168,7 +168,7 @@ export function resolveTargetCardFromCcPayment(tx: Transaction): string | null {
       return card.id;
     }
     const digits = card.id.match(/\b(\d{4})\b/);
-    if (digits && desc.includes(digits[1])) {
+    if (digits && new RegExp(`(?<![\\d.])${digits[1]}(?!\\d)`).test(desc)) {
       return card.id;
     }
   }
