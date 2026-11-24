@@ -3435,6 +3435,32 @@ export function calculateAccountsBalances(userId: string) {
     return null;
   };
 
+  const isCcBillPaymentTx = (t: Transaction): boolean => {
+    if (t.type !== 'expense' || t.isCardPaymentCredit) return false;
+    const lowerCat = (t.category || '').toLowerCase();
+    const lowerDesc = (t.description || '').toLowerCase();
+    if (
+      t.isCcPayment ||
+      lowerCat === 'cc payment' ||
+      lowerCat.includes('cc payment') ||
+      lowerCat.includes('credit card payment') ||
+      lowerCat.includes('cc bill') ||
+      lowerCat.includes('card payment') ||
+      lowerCat.includes('card bill') ||
+      (Array.isArray(t.tags) &&
+        (t.tags.includes('cc-payment') || t.tags.includes('credit-card-bill') || t.tags.includes('cc-settlement')))
+    ) {
+      return true;
+    }
+    // Also detect manual/Telegram CC payment entries like "5733 cc pay 8657" or "0000 card payment"
+    const looksLikeCcBillDesc =
+      /\b(cc\s*pay|cc\s*payment|cc\s*bill|card\s*pay|card\s*payment|card\s*bill|credit\s*card\s*bill|bill\s*pay(?:ment)?)\b/i.test(lowerDesc);
+    if (looksLikeCcBillDesc && resolveCcPaymentTarget(t)) {
+      return true;
+    }
+    return false;
+  };
+
   for (const [accId, meta] of Object.entries(combinedAccountsMeta)) {
     const isCard = meta.type === 'credit_card' || meta.type === 'rupay_card';
     const base = Number(baseBalances[accId]) || 0;
@@ -3451,6 +3477,10 @@ export function calculateAccountsBalances(userId: string) {
     }
 
     const setTimeMs = base > 0 && setTimeStr ? new Date(setTimeStr).getTime() : 0;
+    const setDateIst =
+      setTimeMs > 0
+        ? new Date(setTimeMs + 5.5 * 60 * 60 * 1000).toISOString().split('T')[0]
+        : '';
 
     let credits = 0;
     let debits = 0;
@@ -3473,7 +3503,7 @@ export function calculateAccountsBalances(userId: string) {
         } else {
           deltaDebit = amt;
         }
-      } else if (isCard && t.type === 'expense' && (t.isCcPayment || t.category === 'CC Payment')) {
+      } else if (isCard && isCcBillPaymentTx(t)) {
         // Single-entry CC bill payment from a bank/cash account directly credits the target card
         const targetCard = resolveCcPaymentTarget(t);
         if (targetCard === accId) {
@@ -3486,8 +3516,14 @@ export function calculateAccountsBalances(userId: string) {
       allTimeCredits += deltaCredit;
       allTimeDebits += deltaDebit;
 
-      // Only apply timestamp cutoff when a non-zero opening balance was explicitly set with a cutoff timestamp
-      if (setTimeMs > 0 && txTimeMs > 0 && txTimeMs < setTimeMs) {
+      // Only apply timestamp/date cutoff when a non-zero opening balance was explicitly set with a cutoff timestamp.
+      // For backdated entries (e.g. re-entering a 7 Nov bill payment after setting AX Bank balance on 20 Nov),
+      // compare the transaction's calendar date (`t.date < setDateIst`) so it never double-deducts from the bank!
+      const isBeforeBaseCutoff =
+        setTimeMs > 0 &&
+        ((Boolean(t.date && setDateIst) && t.date < setDateIst) || (txTimeMs > 0 && txTimeMs < setTimeMs));
+
+      if (isBeforeBaseCutoff) {
         skippedBeforeBaseCount += 1;
         skippedBeforeBaseDebits += deltaDebit;
         skippedBeforeBaseCredits += deltaCredit;

@@ -182,14 +182,23 @@ export function isCcPaymentDebitTx(tx: Transaction): boolean {
   if (tx.type !== 'expense') return false;
   if (tx.isCardPaymentCredit) return false;
   const lowerCat = (tx.category || '').toLowerCase();
-  return Boolean(
+  if (
     tx.isCcPayment ||
     lowerCat === 'cc payment' ||
     lowerCat.includes('cc payment') ||
     lowerCat.includes('credit card payment') ||
     lowerCat.includes('cc bill') ||
-    (Array.isArray(tx.tags) && (tx.tags.includes('credit-card-bill') || tx.tags.includes('cc-settlement')))
-  );
+    lowerCat.includes('card payment') ||
+    lowerCat.includes('card bill') ||
+    (Array.isArray(tx.tags) &&
+      (tx.tags.includes('cc-payment') || tx.tags.includes('credit-card-bill') || tx.tags.includes('cc-settlement')))
+  ) {
+    return true;
+  }
+  const lowerDesc = (tx.description || '').toLowerCase();
+  const looksLikeCcBillDesc =
+    /\b(cc\s*pay|cc\s*payment|cc\s*bill|card\s*pay|card\s*payment|card\s*bill|credit\s*card\s*bill|bill\s*pay(?:ment)?)\b/i.test(lowerDesc);
+  return Boolean(looksLikeCcBillDesc && resolveTargetCardFromCcPayment(tx));
 }
 
 /**

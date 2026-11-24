@@ -1430,6 +1430,7 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
                   const debVal = accBal?.debits || 0;
                   const crdVal = accBal?.credits || 0;
                   const skippedDeb = accBal?.skippedBeforeBaseDebits || 0;
+                  const skippedCrd = accBal?.skippedBeforeBaseCredits || 0;
                   const skippedCnt = accBal?.skippedBeforeBaseCount || 0;
                   return (
                     <div className="mt-1 space-y-1">
@@ -1438,10 +1439,12 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
                         <span>Spends: ₹{debVal.toLocaleString('en-IN')}</span>
                         {crdVal > 0 && <span className="text-emerald-400"> − Paid: ₹{crdVal.toLocaleString('en-IN')}</span>}
                       </div>
-                      {skippedDeb > 0 && (
+                      {(skippedDeb > 0 || skippedCrd > 0) && (
                         <div className="bg-amber-950/50 border border-amber-500/35 rounded-lg p-1.5 text-[10px] text-amber-200 space-y-1">
                           <div>
-                            ⚠️ ₹{skippedDeb.toLocaleString('en-IN')} ({skippedCnt} purane spends) Base cutoff se skip hue
+                            ⚠️ {skippedCnt} purani entries Base cutoff se skip hui
+                            {skippedDeb > 0 && ` (Spends ₹${skippedDeb.toLocaleString('en-IN')})`}
+                            {skippedCrd > 0 && ` (Paid ₹${skippedCrd.toLocaleString('en-IN')})`}
                           </div>
                           <div className="flex flex-wrap gap-1.5">
                             <button
@@ -1456,7 +1459,7 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
                               onClick={() => handleIncludeAllCardSpends(selectedAccountId, false)}
                               className="px-2 py-0.5 rounded bg-white/10 hover:bg-white/20 text-slate-200 border border-white/15 font-semibold cursor-pointer"
                             >
-                              Base + Sab Spends
+                              Base + Sab Entries
                             </button>
                           </div>
                         </div>
@@ -1539,9 +1542,31 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
                     ? '••••••' 
                     : `₹${(balancesData?.accounts[selectedAccountId]?.currentBalance ?? (totalAccountIncome - totalAccountExpense)).toLocaleString('en-IN')}`}
                 </div>
-                <div className="text-[11px] text-slate-400 mt-1">
-                  Base: ₹{(balancesData?.accounts[selectedAccountId]?.baseBalance || 0).toLocaleString('en-IN')} | Real-time synced
-                </div>
+                {(() => {
+                  const bankInfo = balancesData?.accounts[selectedAccountId];
+                  const baseVal = bankInfo?.baseBalance || 0;
+                  const crdVal = bankInfo?.credits || 0;
+                  const debVal = bankInfo?.debits || 0;
+                  const ts = bankInfo?.balanceSetTimestamp;
+                  const baseDateLabel = ts
+                    ? new Date(new Date(ts).getTime() + 5.5 * 60 * 60 * 1000).toISOString().split('T')[0]
+                    : null;
+                  return (
+                    <div className="text-[10px] text-slate-400 mt-1 space-y-0.5 font-mono">
+                      <div>
+                        Base: ₹{baseVal.toLocaleString('en-IN')}
+                        {baseDateLabel && <span className="text-slate-500"> (from {baseDateLabel})</span>}
+                        {crdVal > 0 && <span className="text-emerald-400"> + ₹{crdVal.toLocaleString('en-IN')}</span>}
+                        {debVal > 0 && <span className="text-rose-400"> − ₹{debVal.toLocaleString('en-IN')}</span>}
+                      </div>
+                      {baseDateLabel && (bankInfo?.skippedBeforeBaseCount || 0) > 0 && (
+                        <div className="text-[9.5px] text-slate-500 font-sans">
+                          {baseDateLabel} se pehle ki entries Base Balance me already adjusted hain
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
               </div>
 
               <div className="bg-slate-900/50 border border-white/[0.08] rounded-2xl p-4">
@@ -2695,6 +2720,22 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
                   />
                 </div>
               </div>
+
+              {(() => {
+                const srcInfo = balancesData?.accounts?.[billFromAccount];
+                const srcTs = srcInfo?.balanceSetTimestamp;
+                const srcBaseDate = srcTs
+                  ? new Date(new Date(srcTs).getTime() + 5.5 * 60 * 60 * 1000).toISOString().split('T')[0]
+                  : '';
+                if (srcBaseDate && billDate && billDate < srcBaseDate) {
+                  return (
+                    <div className="p-2.5 rounded-xl bg-sky-950/40 border border-sky-500/30 text-[10.5px] text-sky-200 leading-relaxed">
+                      ℹ️ Date <strong className="font-mono">{billDate}</strong>, <strong>{billFromAccount}</strong> ke Base Balance date (<strong className="font-mono">{srcBaseDate}</strong>) se pehle ki hai — isliye <strong>{billFromAccount}</strong> se dobara minus nahi hoga, sirf <strong>{billTargetCard}</strong> ka bill/limit settle hoga.
+                    </div>
+                  );
+                }
+                return null;
+              })()}
 
               <div className="pt-2 border-t border-white/[0.08] flex items-center justify-end gap-2">
                 <button
