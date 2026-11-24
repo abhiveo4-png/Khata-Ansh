@@ -320,13 +320,13 @@ export function canonicalizeAccountId(accountId?: string): string {
   for (const key of Object.keys(ACCOUNTS_CONFIG)) {
     if (key.toLowerCase() === lower) return key;
   }
-  if (/\b2904\b/i.test(raw) && ACCOUNTS_CONFIG['AX CC 2904']) return 'AX CC 2904';
-  if (/\b0000\b/i.test(raw) && ACCOUNTS_CONFIG['ICICI CC 0000']) return 'ICICI CC 0000';
-  if (/\b5733\b/i.test(raw) && ACCOUNTS_CONFIG['SBI CC 5733']) return 'SBI CC 5733';
-  if (/\b6526\b/i.test(raw) && ACCOUNTS_CONFIG['SBI CC 6526']) return 'SBI CC 6526';
-  if (/\b8210\b/i.test(raw) && ACCOUNTS_CONFIG['AX CC 8210']) return 'AX CC 8210';
-  if (/\b5376\b/i.test(raw) && ACCOUNTS_CONFIG['AX CC 5376']) return 'AX CC 5376';
-  if (/\b2005\b/i.test(raw) && ACCOUNTS_CONFIG['IC Bank 2005']) return 'IC Bank 2005';
+  if (/(?<!\d)2904(?!\d)/.test(raw) && ACCOUNTS_CONFIG['AX CC 2904']) return 'AX CC 2904';
+  if (/(?<!\d)0000(?!\d)/.test(raw) && ACCOUNTS_CONFIG['ICICI CC 0000']) return 'ICICI CC 0000';
+  if (/(?<!\d)5733(?!\d)/.test(raw) && ACCOUNTS_CONFIG['SBI CC 5733']) return 'SBI CC 5733';
+  if (/(?<!\d)6526(?!\d)/.test(raw) && ACCOUNTS_CONFIG['SBI CC 6526']) return 'SBI CC 6526';
+  if (/(?<!\d)8210(?!\d)/.test(raw) && ACCOUNTS_CONFIG['AX CC 8210']) return 'AX CC 8210';
+  if (/(?<!\d)5376(?!\d)/.test(raw) && ACCOUNTS_CONFIG['AX CC 5376']) return 'AX CC 5376';
+  if (/(?<!\d)2005(?!\d)/.test(raw) && ACCOUNTS_CONFIG['IC Bank 2005']) return 'IC Bank 2005';
   if ((lower === 'wife savings' || lower === "wife's savings" || lower === "wife's account") && ACCOUNTS_CONFIG['Wife Account']) {
     return 'Wife Account';
   }

@@ -485,6 +485,39 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
     }
   };
 
+  const handleIncludeAllCardSpends = async (accountId: string, resetBaseToZero: boolean) => {
+    try {
+      const payload: Record<string, any> = {
+        clearBalanceTimestamps: [accountId],
+      };
+      if (resetBaseToZero) {
+        payload.accountBaseBalances = { [accountId]: 0 };
+      }
+      const { data } = await safeFetchJson<AccountBalancesData>('/api/accounts/balances', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (data) {
+        setBalancesData(data);
+        if (resetBaseToZero) {
+          setEditBaseBalances((prev) => ({ ...prev, [accountId]: '0' }));
+          setInitialEditBaseBalances((prev) => ({ ...prev, [accountId]: '0' }));
+        }
+        setToastMessage(
+          resetBaseToZero
+            ? `✅ ${accountId}: Sab logged spends Outstanding me include ho gaye (Opening Due ₹0)`
+            : `✅ ${accountId}: Sab purane spends bhi Outstanding me include ho gaye!`
+        );
+        setTimeout(() => setToastMessage(null), 4000);
+      }
+    } catch (err) {
+      console.error(err);
+      setToastMessage('⚠️ Cutoff clear karne me error aaya');
+      setTimeout(() => setToastMessage(null), 3000);
+    }
+  };
+
   const handleSaveBalances = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsSavingBalances(true);
@@ -1389,9 +1422,48 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
                     ? '••••••' 
                     : `₹${(balancesData?.accounts[selectedAccountId]?.currentOutstanding ?? currentMonthExpense).toLocaleString('en-IN')}`}
                 </div>
-                <div className="text-[11px] text-slate-400 mt-1">
-                  {isFamily ? '🔒 Master Card Spends Masked' : 'Debits, Spends & Active EMIs'}
-                </div>
+                {isFamily ? (
+                  <div className="text-[11px] text-slate-400 mt-1">🔒 Master Card Spends Masked</div>
+                ) : (() => {
+                  const accBal = balancesData?.accounts[selectedAccountId];
+                  const baseVal = accBal?.baseBalance || 0;
+                  const debVal = accBal?.debits || 0;
+                  const crdVal = accBal?.credits || 0;
+                  const skippedDeb = accBal?.skippedBeforeBaseDebits || 0;
+                  const skippedCnt = accBal?.skippedBeforeBaseCount || 0;
+                  return (
+                    <div className="mt-1 space-y-1">
+                      <div className="text-[10px] text-slate-400 font-mono">
+                        {baseVal > 0 && <span>Base: ₹{baseVal.toLocaleString('en-IN')} + </span>}
+                        <span>Spends: ₹{debVal.toLocaleString('en-IN')}</span>
+                        {crdVal > 0 && <span className="text-emerald-400"> − Paid: ₹{crdVal.toLocaleString('en-IN')}</span>}
+                      </div>
+                      {skippedDeb > 0 && (
+                        <div className="bg-amber-950/50 border border-amber-500/35 rounded-lg p-1.5 text-[10px] text-amber-200 space-y-1">
+                          <div>
+                            ⚠️ ₹{skippedDeb.toLocaleString('en-IN')} ({skippedCnt} purane spends) Base cutoff se skip hue
+                          </div>
+                          <div className="flex flex-wrap gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => handleIncludeAllCardSpends(selectedAccountId, true)}
+                              className="px-2 py-0.5 rounded bg-amber-500/25 hover:bg-amber-500/40 text-amber-100 border border-amber-400/40 font-semibold cursor-pointer"
+                            >
+                              Sab Include Karein (Base ₹0)
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleIncludeAllCardSpends(selectedAccountId, false)}
+                              className="px-2 py-0.5 rounded bg-white/10 hover:bg-white/20 text-slate-200 border border-white/15 font-semibold cursor-pointer"
+                            >
+                              Base + Sab Spends
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
               </div>
 
               <div className="bg-gradient-to-br from-amber-950/40 to-indigo-950/40 border border-amber-500/35 rounded-2xl p-4">
@@ -3337,7 +3409,7 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
                   </div>
                   <div>
                     <label className="block text-rose-300 font-semibold mb-1">
-                      🔴 Aaj Ka Running Due / Unpaid Spends (₹)
+                      🔴 Purana / Opening Due (App se pehle ka unpaid bill) (₹)
                     </label>
                     <input
                       type="number"
@@ -3347,9 +3419,28 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
                       onChange={(e) => setSingleBaseInput(e.target.value)}
                       className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white font-mono text-sm focus:border-rose-500 focus:outline-hidden"
                     />
-                    <p className="text-[10px] text-slate-400 mt-1">
-                      Available Limit: <strong className="text-emerald-400 font-mono">₹{Math.max(0, (parseFloat(singleLimitInput) || 0) - (parseFloat(singleBaseInput) || 0)).toLocaleString('en-IN')}</strong>
-                    </p>
+                    {(() => {
+                      const liveInfo = balancesData?.accounts?.[editingSingleAccount.id];
+                      const allSpends = liveInfo?.allTimeDebits ?? liveInfo?.debits ?? 0;
+                      const allPaid = liveInfo?.allTimeCredits ?? liveInfo?.credits ?? 0;
+                      const openingVal = parseFloat(singleBaseInput) || 0;
+                      const projectedOut = Math.max(0, Math.round((openingVal + allSpends - allPaid) * 100) / 100);
+                      const projectedAvl = Math.max(0, Math.round(((parseFloat(singleLimitInput) || 0) - projectedOut) * 100) / 100);
+                      return (
+                        <div className="text-[10px] text-slate-400 mt-1 space-y-0.5">
+                          <div>
+                            Agar saare kharche app me logged hain to isko <strong className="text-white">0</strong> rakhein.
+                          </div>
+                          <div className="font-mono text-slate-300">
+                            Total Due: <strong className="text-rose-300">₹{projectedOut.toLocaleString('en-IN')}</strong>{' '}
+                            (Base ₹{openingVal.toLocaleString('en-IN')} + Spends ₹{allSpends.toLocaleString('en-IN')} − Paid ₹{allPaid.toLocaleString('en-IN')})
+                          </div>
+                          <div>
+                            Available Limit: <strong className="text-emerald-400 font-mono">₹{projectedAvl.toLocaleString('en-IN')}</strong>
+                          </div>
+                        </div>
+                      );
+                    })()}
                   </div>
 
                   {(() => {

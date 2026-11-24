@@ -1249,7 +1249,7 @@ export function getUserData(userId: string): UserDataStore {
       if (!raw) return raw;
       const trimmed = raw.trim();
       if (trimmed === 'AX CC 2904' || customAccountIds.has(trimmed)) return raw;
-      if (/\b2904\b/i.test(trimmed)) return 'AX CC 2904';
+      if (/(?<!\d)2904(?!\d)/.test(trimmed)) return 'AX CC 2904';
       return raw;
     };
     for (const tx of store.transactions) {
@@ -3405,13 +3405,13 @@ export function calculateAccountsBalances(userId: string) {
     for (const key of Object.keys(combinedAccountsMeta)) {
       if (key.toLowerCase() === lower) return key;
     }
-    if (/\b2904\b/i.test(raw) && combinedAccountsMeta['AX CC 2904']) return 'AX CC 2904';
-    if (/\b0000\b/i.test(raw) && combinedAccountsMeta['ICICI CC 0000']) return 'ICICI CC 0000';
-    if (/\b5733\b/i.test(raw) && combinedAccountsMeta['SBI CC 5733']) return 'SBI CC 5733';
-    if (/\b6526\b/i.test(raw) && combinedAccountsMeta['SBI CC 6526']) return 'SBI CC 6526';
-    if (/\b8210\b/i.test(raw) && combinedAccountsMeta['AX CC 8210']) return 'AX CC 8210';
-    if (/\b5376\b/i.test(raw) && combinedAccountsMeta['AX CC 5376']) return 'AX CC 5376';
-    if (/\b2005\b/i.test(raw) && combinedAccountsMeta['IC Bank 2005']) return 'IC Bank 2005';
+    if (/(?<!\d)2904(?!\d)/.test(raw) && combinedAccountsMeta['AX CC 2904']) return 'AX CC 2904';
+    if (/(?<!\d)0000(?!\d)/.test(raw) && combinedAccountsMeta['ICICI CC 0000']) return 'ICICI CC 0000';
+    if (/(?<!\d)5733(?!\d)/.test(raw) && combinedAccountsMeta['SBI CC 5733']) return 'SBI CC 5733';
+    if (/(?<!\d)6526(?!\d)/.test(raw) && combinedAccountsMeta['SBI CC 6526']) return 'SBI CC 6526';
+    if (/(?<!\d)8210(?!\d)/.test(raw) && combinedAccountsMeta['AX CC 8210']) return 'AX CC 8210';
+    if (/(?<!\d)5376(?!\d)/.test(raw) && combinedAccountsMeta['AX CC 5376']) return 'AX CC 5376';
+    if (/(?<!\d)2005(?!\d)/.test(raw) && combinedAccountsMeta['IC Bank 2005']) return 'IC Bank 2005';
     return raw;
   };
 
@@ -3440,10 +3440,10 @@ export function calculateAccountsBalances(userId: string) {
     const base = Number(baseBalances[accId]) || 0;
     let setTimeStr = baseTimestamps[accId];
 
-    // If an account has a positive base balance set (> 0) with no timestamp recorded yet,
-    // initialize timestamp to now so historical transactions are not double-counted on top of today's balance.
-    // If base === 0, never cut off historical transactions — count all recorded transactions for this card/account!
-    if (base > 0 && !setTimeStr && baseBalances[accId] !== undefined) {
+    // For bank/cash accounts with a positive base balance set (> 0) and no timestamp yet,
+    // initialize timestamp to now so historical bank transactions aren't double-counted on top of today's live bank balance.
+    // For Credit Cards, never auto-invent a "now" cutoff timestamp — if no cutoff timestamp exists, count all recorded card spends & payments!
+    if (!isCard && base > 0 && !setTimeStr && baseBalances[accId] !== undefined) {
       setTimeStr = new Date().toISOString();
       if (!store.accountBalanceSetTimestamps) store.accountBalanceSetTimestamps = {};
       store.accountBalanceSetTimestamps[accId] = setTimeStr;
@@ -3454,29 +3454,48 @@ export function calculateAccountsBalances(userId: string) {
 
     let credits = 0;
     let debits = 0;
+    let allTimeCredits = 0;
+    let allTimeDebits = 0;
+    let skippedBeforeBaseCount = 0;
+    let skippedBeforeBaseDebits = 0;
+    let skippedBeforeBaseCredits = 0;
 
     for (const t of txs) {
       const txTimeMs = t.createdAt ? new Date(t.createdAt).getTime() : (t.date ? new Date(t.date).getTime() : 0);
-      // Only apply timestamp cutoff when a non-zero opening balance was explicitly set
-      if (setTimeMs > 0 && txTimeMs > 0 && txTimeMs < setTimeMs) {
-        continue;
-      }
-
       const tAcc = canonicalizeAcc(t.account);
       const amt = Number(t.amount) || 0;
+
+      let deltaCredit = 0;
+      let deltaDebit = 0;
       if (tAcc === accId) {
         if (t.type === 'income') {
-          credits += amt;
+          deltaCredit = amt;
         } else {
-          debits += amt;
+          deltaDebit = amt;
         }
       } else if (isCard && t.type === 'expense' && (t.isCcPayment || t.category === 'CC Payment')) {
         // Single-entry CC bill payment from a bank/cash account directly credits the target card
         const targetCard = resolveCcPaymentTarget(t);
         if (targetCard === accId) {
-          credits += amt;
+          deltaCredit = amt;
         }
       }
+
+      if (deltaCredit === 0 && deltaDebit === 0) continue;
+
+      allTimeCredits += deltaCredit;
+      allTimeDebits += deltaDebit;
+
+      // Only apply timestamp cutoff when a non-zero opening balance was explicitly set with a cutoff timestamp
+      if (setTimeMs > 0 && txTimeMs > 0 && txTimeMs < setTimeMs) {
+        skippedBeforeBaseCount += 1;
+        skippedBeforeBaseDebits += deltaDebit;
+        skippedBeforeBaseCredits += deltaCredit;
+        continue;
+      }
+
+      credits += deltaCredit;
+      debits += deltaDebit;
     }
 
     // For bank/cash accounts, also subtract any dedicated savings transfers sent from this account
@@ -3484,10 +3503,6 @@ export function calculateAccountsBalances(userId: string) {
       for (const s of savingsTransfers) {
         if (canonicalizeAcc(s.fromAccount) === accId) {
           const sTimeMs = s.createdAt ? new Date(s.createdAt).getTime() : (s.date ? new Date(s.date).getTime() : 0);
-          if (setTimeMs > 0 && sTimeMs > 0 && sTimeMs < setTimeMs) {
-            continue;
-          }
-
           const sAmt = Number(s.amount) || 0;
           const isDupe = txs.some(
             t => t.account === accId &&
@@ -3496,6 +3511,12 @@ export function calculateAccountsBalances(userId: string) {
                  t.date === s.date
           );
           if (!isDupe) {
+            allTimeDebits += sAmt;
+            if (setTimeMs > 0 && sTimeMs > 0 && sTimeMs < setTimeMs) {
+              skippedBeforeBaseCount += 1;
+              skippedBeforeBaseDebits += sAmt;
+              continue;
+            }
             debits += sAmt;
           }
         }
@@ -3525,6 +3546,12 @@ export function calculateAccountsBalances(userId: string) {
         baseBalance: base,
         credits: Math.round((credits + Number.EPSILON) * 100) / 100,
         debits: Math.round((debits + Number.EPSILON) * 100) / 100,
+        allTimeCredits: Math.round((allTimeCredits + Number.EPSILON) * 100) / 100,
+        allTimeDebits: Math.round((allTimeDebits + Number.EPSILON) * 100) / 100,
+        skippedBeforeBaseCount,
+        skippedBeforeBaseDebits: Math.round((skippedBeforeBaseDebits + Number.EPSILON) * 100) / 100,
+        skippedBeforeBaseCredits: Math.round((skippedBeforeBaseCredits + Number.EPSILON) * 100) / 100,
+        balanceSetTimestamp: setTimeMs > 0 ? setTimeStr : null,
         currentBalance: availableLimit,
         creditLimit,
         availableLimit,
@@ -3550,6 +3577,12 @@ export function calculateAccountsBalances(userId: string) {
         baseBalance: base,
         credits: Math.round((credits + Number.EPSILON) * 100) / 100,
         debits: Math.round((debits + Number.EPSILON) * 100) / 100,
+        allTimeCredits: Math.round((allTimeCredits + Number.EPSILON) * 100) / 100,
+        allTimeDebits: Math.round((allTimeDebits + Number.EPSILON) * 100) / 100,
+        skippedBeforeBaseCount,
+        skippedBeforeBaseDebits: Math.round((skippedBeforeBaseDebits + Number.EPSILON) * 100) / 100,
+        skippedBeforeBaseCredits: Math.round((skippedBeforeBaseCredits + Number.EPSILON) * 100) / 100,
+        balanceSetTimestamp: setTimeMs > 0 ? setTimeStr : null,
         currentBalance,
         isWifeAccount: Boolean(meta.isWifeAccount),
       };
@@ -9972,7 +10005,16 @@ app.post('/api/accounts/balances', (req, res) => {
   const user = getRequestUser(req);
   if (!user) return res.status(401).json({ error: 'User session required' });
   const store = getUserData(user.id);
-  const { accountBaseBalances, wifeBaseBalance, cardCreditLimits, cardBillingStartDays, cardBillingDays, cardPaymentDueDays } = req.body;
+  const {
+    accountBaseBalances,
+    wifeBaseBalance,
+    cardCreditLimits,
+    cardBillingStartDays,
+    cardBillingDays,
+    cardPaymentDueDays,
+    clearBalanceTimestamps,
+    applyTimestampCutoff,
+  } = req.body;
   const nowIso = new Date().toISOString();
 
   if (accountBaseBalances && typeof accountBaseBalances === 'object') {
@@ -9983,7 +10025,14 @@ app.post('/api/accounts/balances', (req, res) => {
       if (!isNaN(num)) {
         const cleanVal = Math.max(0, num);
         store.accountBaseBalances[acc] = cleanVal;
-        if (cleanVal > 0) {
+        const isCardAcc =
+          ACCOUNTS_META[acc]?.type === 'credit_card' ||
+          ACCOUNTS_META[acc]?.type === 'rupay_card' ||
+          (store.customAccounts || []).some((c) => c.id === acc && (c.type === 'credit_card' || c.type === 'rupay_card'));
+        // By default for credit cards, Opening Due adds onto all logged transactions (no silent cutoff) unless applyTimestampCutoff === true
+        const shouldSetCutoff =
+          cleanVal > 0 && (applyTimestampCutoff === true || (!isCardAcc && applyTimestampCutoff !== false));
+        if (shouldSetCutoff) {
           store.accountBalanceSetTimestamps[acc] = nowIso;
         } else {
           delete store.accountBalanceSetTimestamps[acc];
@@ -9992,6 +10041,14 @@ app.post('/api/accounts/balances', (req, res) => {
           store.wifeBaseBalance = cleanVal;
           store.wifeBalanceSetTimestamp = nowIso;
         }
+      }
+    }
+  }
+
+  if (Array.isArray(clearBalanceTimestamps) && store.accountBalanceSetTimestamps) {
+    for (const acc of clearBalanceTimestamps) {
+      if (typeof acc === 'string') {
+        delete store.accountBalanceSetTimestamps[acc];
       }
     }
   }

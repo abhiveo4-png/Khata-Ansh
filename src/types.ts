@@ -187,6 +187,12 @@ export interface AccountBalanceInfo {
   billingDay?: number;
   paymentDueDay?: number;
   isWifeAccount?: boolean;
+  allTimeDebits?: number;
+  allTimeCredits?: number;
+  skippedBeforeBaseCount?: number;
+  skippedBeforeBaseDebits?: number;
+  skippedBeforeBaseCredits?: number;
+  balanceSetTimestamp?: string | null;
 }
 
 export interface AccountBalancesData {
