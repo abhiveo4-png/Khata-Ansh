@@ -193,6 +193,7 @@ export interface AccountBalanceInfo {
   skippedBeforeBaseDebits?: number;
   skippedBeforeBaseCredits?: number;
   balanceSetTimestamp?: string | null;
+  preTrackingPaymentsExcluded?: number;
 }
 
 export interface AccountBalancesData {

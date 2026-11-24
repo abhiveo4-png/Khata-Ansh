@@ -1429,6 +1429,7 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
                   const baseVal = accBal?.baseBalance || 0;
                   const debVal = accBal?.debits || 0;
                   const crdVal = accBal?.credits || 0;
+                  const preTrackPaid = accBal?.preTrackingPaymentsExcluded || 0;
                   const skippedDeb = accBal?.skippedBeforeBaseDebits || 0;
                   const skippedCrd = accBal?.skippedBeforeBaseCredits || 0;
                   const skippedCnt = accBal?.skippedBeforeBaseCount || 0;
@@ -1437,8 +1438,13 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
                       <div className="text-[10px] text-slate-400 font-mono">
                         {baseVal > 0 && <span>Base: ₹{baseVal.toLocaleString('en-IN')} + </span>}
                         <span>Spends: ₹{debVal.toLocaleString('en-IN')}</span>
-                        {crdVal > 0 && <span className="text-emerald-400"> − Paid: ₹{crdVal.toLocaleString('en-IN')}</span>}
+                        {crdVal > 0 && <span className="text-emerald-400"> − Settled: ₹{crdVal.toLocaleString('en-IN')}</span>}
                       </div>
+                      {preTrackPaid > 0 && (
+                        <div className="text-[9.5px] text-slate-500">
+                          Purane pre-app bill payment (₹{preTrackPaid.toLocaleString('en-IN')}) pichle cycle me adjust hua
+                        </div>
+                      )}
                       {(skippedDeb > 0 || skippedCrd > 0) && (
                         <div className="bg-amber-950/50 border border-amber-500/35 rounded-lg p-1.5 text-[10px] text-amber-200 space-y-1">
                           <div>

@@ -3461,10 +3461,42 @@ export function calculateAccountsBalances(userId: string) {
     return false;
   };
 
+  const pad2Num = (n: number) => String(n).padStart(2, '0');
+  const shiftYearMonth = (year: number, month1: number, delta: number) => {
+    const d = new Date(year, month1 - 1 + delta, 1);
+    return { year: d.getFullYear(), month: d.getMonth() + 1 };
+  };
+  const daysInYearMonth = (year: number, month1: number) => new Date(year, month1, 0).getDate();
+  const resolveCardTxPaymentMonth = (txDate: string | undefined, bDay: number, dDay: number, sDay: number): string => {
+    if (!txDate || !/^\d{4}-\d{2}-\d{2}$/.test(txDate)) return '1970-01';
+    const [y, m] = txDate.split('-').map(Number);
+    for (const delta of [-1, 0, 1, 2]) {
+      const cand = shiftYearMonth(y, m, delta);
+      const pm = `${cand.year}-${pad2Num(cand.month)}`;
+      const endYM = dDay > bDay ? { year: cand.year, month: cand.month } : shiftYearMonth(cand.year, cand.month, -1);
+      const startYM = sDay < bDay ? endYM : shiftYearMonth(endYM.year, endYM.month, -1);
+      const startDate = `${startYM.year}-${pad2Num(startYM.month)}-${pad2Num(Math.min(sDay, daysInYearMonth(startYM.year, startYM.month)))}`;
+      const endDate = `${endYM.year}-${pad2Num(endYM.month)}-${pad2Num(Math.min(bDay, daysInYearMonth(endYM.year, endYM.month)))}`;
+      const exclusiveStart = sDay === bDay;
+      const afterStart = exclusiveStart ? txDate > startDate : txDate >= startDate;
+      if (afterStart && txDate <= endDate) return pm;
+    }
+    return txDate.substring(0, 7);
+  };
+
   for (const [accId, meta] of Object.entries(combinedAccountsMeta)) {
     const isCard = meta.type === 'credit_card' || meta.type === 'rupay_card';
     const base = Number(baseBalances[accId]) || 0;
     let setTimeStr = baseTimestamps[accId];
+
+    // Resolve card billing cycle days up front so cycle-based outstanding calculation uses the exact configured cycle
+    const overrideBilling = Math.round(Number(cardBillingDays[accId]));
+    const billingDay = (!isNaN(overrideBilling) && overrideBilling >= 1 && overrideBilling <= 31) ? overrideBilling : (meta.billingDay || 15);
+    const overrideStart = Math.round(Number(cardBillingStartDays[accId]));
+    const fallbackStart = billingDay ? (billingDay >= 31 ? 1 : billingDay + 1) : 16;
+    const billingStartDay = (!isNaN(overrideStart) && overrideStart >= 1 && overrideStart <= 31) ? overrideStart : (meta.billingStartDay ?? fallbackStart);
+    const overrideDue = Math.round(Number(cardPaymentDueDays[accId]));
+    const paymentDueDay = (!isNaN(overrideDue) && overrideDue >= 1 && overrideDue <= 31) ? overrideDue : (meta.paymentDueDay || 5);
 
     // For bank/cash accounts with a positive base balance set (> 0) and no timestamp yet,
     // initialize timestamp to now so historical bank transactions aren't double-counted on top of today's live bank balance.
@@ -3490,6 +3522,14 @@ export function calculateAccountsBalances(userId: string) {
     let skippedBeforeBaseDebits = 0;
     let skippedBeforeBaseCredits = 0;
 
+    // Cycle-wise buckets for Credit Cards so pre-tracking bill payments (e.g. Oct bill whose spends weren't in app)
+    // settle that older cycle to ₹0 without creating a fake negative credit that erases newer unsettled spends!
+    const cardCycleBuckets: Record<string, { spends: number; refunds: number; payments: number }> = {};
+    const ensureCardCycle = (pm: string) => {
+      if (!cardCycleBuckets[pm]) cardCycleBuckets[pm] = { spends: 0, refunds: 0, payments: 0 };
+      return cardCycleBuckets[pm];
+    };
+
     for (const t of txs) {
       const txTimeMs = t.createdAt ? new Date(t.createdAt).getTime() : (t.date ? new Date(t.date).getTime() : 0);
       const tAcc = canonicalizeAcc(t.account);
@@ -3497,6 +3537,7 @@ export function calculateAccountsBalances(userId: string) {
 
       let deltaCredit = 0;
       let deltaDebit = 0;
+      let isCardBillPaymentCredit = false;
       if (tAcc === accId) {
         if (t.type === 'income') {
           deltaCredit = amt;
@@ -3508,6 +3549,7 @@ export function calculateAccountsBalances(userId: string) {
         const targetCard = resolveCcPaymentTarget(t);
         if (targetCard === accId) {
           deltaCredit = amt;
+          isCardBillPaymentCredit = true;
         }
       }
 
@@ -3532,6 +3574,17 @@ export function calculateAccountsBalances(userId: string) {
 
       credits += deltaCredit;
       debits += deltaDebit;
+
+      if (isCard) {
+        if (isCardBillPaymentCredit) {
+          const pm = t.ccSettlementCycleMonth || (t.date ? t.date.substring(0, 7) : '1970-01');
+          ensureCardCycle(pm).payments += deltaCredit;
+        } else {
+          const pm = resolveCardTxPaymentMonth(t.date, billingDay, paymentDueDay, billingStartDay);
+          if (deltaDebit > 0) ensureCardCycle(pm).spends += deltaDebit;
+          if (deltaCredit > 0) ensureCardCycle(pm).refunds += deltaCredit;
+        }
+      }
     }
 
     // For bank/cash accounts, also subtract any dedicated savings transfers sent from this account
@@ -3562,15 +3615,29 @@ export function calculateAccountsBalances(userId: string) {
     if (isCard) {
       const customLimit = Number(cardLimits[accId]);
       const creditLimit = (customLimit && customLimit > 0) ? customLimit : (meta.creditLimit || 100000);
-      const overrideBilling = Math.round(Number(cardBillingDays[accId]));
-      const billingDay = (!isNaN(overrideBilling) && overrideBilling >= 1 && overrideBilling <= 31) ? overrideBilling : meta.billingDay;
-      const overrideStart = Math.round(Number(cardBillingStartDays[accId]));
-      const fallbackStart = billingDay ? (billingDay >= 31 ? 1 : billingDay + 1) : 16;
-      const billingStartDay = (!isNaN(overrideStart) && overrideStart >= 1 && overrideStart <= 31) ? overrideStart : (meta.billingStartDay ?? fallbackStart);
-      const overrideDue = Math.round(Number(cardPaymentDueDays[accId]));
-      const paymentDueDay = (!isNaN(overrideDue) && overrideDue >= 1 && overrideDue <= 31) ? overrideDue : meta.paymentDueDay;
-      const currentOutstanding = Math.round((Math.max(0, base + debits - credits) + Number.EPSILON) * 100) / 100;
+
+      // Compute Current Outstanding chronologically cycle-by-cycle:
+      // Each cycle settles against (earlier unpaid tracked cycles + current cycle spends - refunds).
+      // Clamping at 0 after each cycle's payment guarantees a payment for an older pre-app bill
+      // NEVER carries forward as a negative credit to wipe out newer unsettled spends!
+      const sortedCycles = Object.keys(cardCycleBuckets).sort();
+      let runningOutstanding = base;
+      let preTrackingPaymentsExcluded = 0;
+      for (const pm of sortedCycles) {
+        const b = cardCycleBuckets[pm];
+        const cycleNetSpends = Math.max(0, b.spends - b.refunds);
+        const beforePay = runningOutstanding + cycleNetSpends;
+        if (b.payments > beforePay) {
+          preTrackingPaymentsExcluded += b.payments - beforePay;
+          runningOutstanding = 0;
+        } else {
+          runningOutstanding = beforePay - b.payments;
+        }
+      }
+
+      const currentOutstanding = Math.round((Math.max(0, runningOutstanding) + Number.EPSILON) * 100) / 100;
       const availableLimit = Math.round((Math.max(0, creditLimit - currentOutstanding) + Number.EPSILON) * 100) / 100;
+      const effectiveCredits = Math.max(0, Math.round((credits - preTrackingPaymentsExcluded + Number.EPSILON) * 100) / 100);
 
       accounts[accId] = {
         accountId: accId,
@@ -3580,7 +3647,7 @@ export function calculateAccountsBalances(userId: string) {
         badge: meta.badge,
         color: meta.color,
         baseBalance: base,
-        credits: Math.round((credits + Number.EPSILON) * 100) / 100,
+        credits: effectiveCredits,
         debits: Math.round((debits + Number.EPSILON) * 100) / 100,
         allTimeCredits: Math.round((allTimeCredits + Number.EPSILON) * 100) / 100,
         allTimeDebits: Math.round((allTimeDebits + Number.EPSILON) * 100) / 100,
@@ -3588,6 +3655,7 @@ export function calculateAccountsBalances(userId: string) {
         skippedBeforeBaseDebits: Math.round((skippedBeforeBaseDebits + Number.EPSILON) * 100) / 100,
         skippedBeforeBaseCredits: Math.round((skippedBeforeBaseCredits + Number.EPSILON) * 100) / 100,
         balanceSetTimestamp: setTimeMs > 0 ? setTimeStr : null,
+        preTrackingPaymentsExcluded: Math.round((preTrackingPaymentsExcluded + Number.EPSILON) * 100) / 100,
         currentBalance: availableLimit,
         creditLimit,
         availableLimit,
