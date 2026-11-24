@@ -1,6 +1,7 @@
 import * as XLSX from 'xlsx';
 import { Transaction, AccountId, CardEmi } from '../types';
-import { ACCOUNTS_CONFIG, ALL_ACCOUNTS, canonicalizeAccountId } from './accounts';
+import { ACCOUNTS_CONFIG, ALL_ACCOUNTS, canonicalizeAccountId, isCreditCardAccount } from './accounts';
+import { isCcPaymentDebitTx, resolveTargetCardFromCcPayment } from './billingCycle';
 
 export interface StatementExportOptions {
   accountId: AccountId | 'all';
@@ -32,12 +33,17 @@ export function filterTransactionsForStatement(
       t.category?.toLowerCase() === 'wife transfer'
     );
 
+  const isTargetCard = accountId !== 'all' && isCreditCardAccount(accountId);
+
   return transactions
     .filter((t) => {
       // 1. Account filter
       const resolvedAcc = canonicalizeAccountId(t.account);
       if (accountId === 'Wife Account') {
         if (resolvedAcc !== 'Wife Account' && !isWifeTransferEntry(t)) return false;
+      } else if (isTargetCard) {
+        const isIncomingCcPay = isCcPaymentDebitTx(t) && resolveTargetCardFromCcPayment(t) === accountId;
+        if (resolvedAcc !== accountId && !isIncomingCcPay) return false;
       } else if (accountId !== 'all' && resolvedAcc !== accountId) {
         return false;
       }
@@ -92,6 +98,13 @@ export function filterTransactionsForStatement(
         ...t,
         type: 'income' as const,
         description: `${t.description || 'Wife Savings Transfer'} (From ${t.account || 'Bank'})`,
+      };
+    }
+    if (isTargetCard && isCcPaymentDebitTx(t) && resolveTargetCardFromCcPayment(t) === accountId) {
+      return {
+        ...t,
+        type: 'income' as const,
+        description: `${t.description || 'Card Bill Payment'} (From ${t.account || 'Bank'})`,
       };
     }
     return t;

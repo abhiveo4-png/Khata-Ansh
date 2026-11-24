@@ -151,13 +151,13 @@ export function getCardBillCycleForPaymentMonth(
  * Helper: Extract target card ID from a CC Payment transaction (supports both new `targetCardAccount` and legacy descriptions/tags)
  */
 export function resolveTargetCardFromCcPayment(tx: Transaction): string | null {
-  if (tx.targetCardAccount) return tx.targetCardAccount;
+  if (tx.targetCardAccount) return canonicalizeAccountId(tx.targetCardAccount);
   if (tx.isCardPaymentCredit && tx.account && isCreditCardAccount(tx.account)) {
-    return tx.account;
+    return canonicalizeAccountId(tx.account);
   }
   if (Array.isArray(tx.tags)) {
-    const cardTag = tx.tags.find((tg) => tg.startsWith('card:'));
-    if (cardTag) return cardTag.slice(5);
+    const cardTag = tx.tags.find((tg) => tg.startsWith('cc-target:') || tg.startsWith('card:'));
+    if (cardTag) return canonicalizeAccountId(cardTag.replace(/^(cc-target:|card:)/, ''));
   }
   const desc = (tx.description || '').toLowerCase();
   for (const card of CREDIT_CARDS) {

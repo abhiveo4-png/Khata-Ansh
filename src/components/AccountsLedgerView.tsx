@@ -43,6 +43,8 @@ import {
   getCardBillCycleForPaymentMonth,
   getDefaultBillingStartDay,
   getNextMonthKey,
+  isCcPaymentDebitTx,
+  resolveTargetCardFromCcPayment,
 } from '../utils/billingCycle';
 import { safeFetchJson } from '../utils/api';
 import { DEFAULT_CATEGORIES } from '../utils/categories';
@@ -824,6 +826,14 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
       t.category?.toLowerCase() === 'wife transfer'
     );
 
+  const selectedMeta = selectedAccountId !== 'all' ? ACCOUNTS_CONFIG[selectedAccountId] : null;
+  const isSelectedCard = Boolean(selectedMeta && (selectedMeta.type === 'credit_card' || selectedMeta.type === 'rupay_card'));
+
+  const isIncomingCardBillPayment = (t: Transaction, targetAccId: string) => {
+    if (!isCcPaymentDebitTx(t)) return false;
+    return resolveTargetCardFromCcPayment(t) === targetAccId;
+  };
+
   // Filter transactions for main view (resolving legacy aliases like "Axis 2904" -> "AX CC 2904")
   const currentMonthStr = new Date().toISOString().substring(0, 7);
   const filteredTxs = transactions.filter((t) => {
@@ -832,15 +842,17 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
     if (selectedAccountId === 'Wife Account') {
       return resolvedAcc === 'Wife Account' || isWifeTransferEntry(t);
     }
+    if (isSelectedCard && isIncomingCardBillPayment(t, selectedAccountId)) {
+      return true;
+    }
     return resolvedAcc === selectedAccountId;
   });
 
-  const selectedMeta = selectedAccountId !== 'all' ? ACCOUNTS_CONFIG[selectedAccountId] : null;
-
-  // Account stats (for Wife Account, incoming Wife Transfers count as Inflow/Credit, not Outflow)
+  // Account stats
   const totalAccountExpense = filteredTxs
     .filter((t) => {
       if (selectedAccountId === 'Wife Account' && isWifeTransferEntry(t)) return false;
+      if (isSelectedCard && isIncomingCardBillPayment(t, selectedAccountId)) return false;
       return t.type === 'expense';
     })
     .reduce((sum, t) => sum + (t.amount || 0), 0);
@@ -848,6 +860,7 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
   const totalAccountIncome = filteredTxs
     .filter((t) => {
       if (selectedAccountId === 'Wife Account' && isWifeTransferEntry(t)) return true;
+      if (isSelectedCard && isIncomingCardBillPayment(t, selectedAccountId)) return true;
       return t.type === 'income';
     })
     .reduce((sum, t) => sum + (t.amount || 0), 0);
@@ -855,6 +868,7 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
   const currentMonthExpense = filteredTxs
     .filter((t) => {
       if (selectedAccountId === 'Wife Account' && isWifeTransferEntry(t)) return false;
+      if (isSelectedCard && isIncomingCardBillPayment(t, selectedAccountId)) return false;
       return t.type === 'expense' && t.date?.startsWith(currentMonthStr);
     })
     .reduce((sum, t) => sum + (t.amount || 0), 0);
@@ -1077,9 +1091,12 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
 
           {ALL_ACCOUNTS.map((acc) => {
             const isSelected = selectedAccountId === acc.id;
+            const isCardAcc = acc.type === 'credit_card' || acc.type === 'rupay_card';
             const count =
               acc.id === 'Wife Account'
                 ? transactions.filter((t) => canonicalizeAccountId(t.account) === 'Wife Account' || isWifeTransferEntry(t)).length
+                : isCardAcc
+                ? transactions.filter((t) => canonicalizeAccountId(t.account) === acc.id || isIncomingCardBillPayment(t, acc.id)).length
                 : transactions.filter((t) => canonicalizeAccountId(t.account) === acc.id).length;
             const isRuPay = acc.type === 'rupay_card';
             const isCC = acc.type === 'credit_card';
@@ -1731,8 +1748,9 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
               <tbody className="divide-y divide-white/[0.04]">
                 {filteredTxs.map((t) => {
                   const isIncomingWifeTransfer = selectedAccountId === 'Wife Account' && isWifeTransferEntry(t);
-                  const isInc = isIncomingWifeTransfer ? true : t.type === 'income';
-                  const currentAcc = (t.account as AccountId) || 'ICICI CC 0000';
+                  const isCardPaymentIn = isSelectedCard && isIncomingCardBillPayment(t, selectedAccountId);
+                  const isInc = isIncomingWifeTransfer || isCardPaymentIn ? true : t.type === 'income';
+                  const currentAcc = (canonicalizeAccountId(t.account) || 'ICICI CC 0000') as AccountId;
                   const isOwnTx = !isFamily || Boolean(
                     (activeFamilyMemberName && (
                       (t.telegramUser && (
@@ -1757,6 +1775,11 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
                               Transfer In from {currentAcc}
                             </span>
                           )}
+                          {isCardPaymentIn && (
+                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-sky-500/20 text-sky-300 border border-sky-500/30 font-semibold">
+                              Bill Paid from {currentAcc}
+                            </span>
+                          )}
                         </div>
                         {t.rawMessage && (
                           <div className="text-[10px] text-slate-500 truncate max-w-xs">{t.rawMessage}</div>
@@ -1772,6 +1795,10 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
                           <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-pink-950/50 border border-pink-500/30 text-[11px] text-pink-200 font-medium">
                             {currentAcc} → Wife's Savings
                           </span>
+                        ) : isCardPaymentIn ? (
+                          <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-sky-950/50 border border-sky-500/30 text-[11px] text-sky-200 font-medium">
+                            {currentAcc} → {selectedAccountId}
+                          </span>
                         ) : (
                           <select
                             value={currentAcc}
@@ -1786,7 +1813,7 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
                           </select>
                         )}
                       </td>
-                      <td className={`py-3 px-4 text-right font-mono font-bold ${isInc ? 'text-emerald-400' : 'text-slate-100'}`}>
+                      <td className={`py-3 px-4 text-right font-mono font-bold ${isCardPaymentIn ? 'text-sky-400' : isInc ? 'text-emerald-400' : 'text-slate-100'}`}>
                         {isOwnTx ? (
                           <span>{isInc ? '+' : '-'}₹{isPrivacyMode ? '•••' : t.amount.toLocaleString('en-IN')}</span>
                         ) : (
@@ -2385,22 +2412,13 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
           }}
         >
           <div
-            className="bg-slate-900 border border-emerald-500/40 rounded-2xl max-w-lg w-full shadow-2xl animate-in fade-in zoom-in duration-150 max-h-[92dvh] flex flex-col overflow-hidden my-auto"
+            className="bg-slate-900 border border-emerald-500/40 rounded-2xl max-w-md w-full shadow-2xl animate-in fade-in zoom-in duration-150 max-h-[92dvh] flex flex-col overflow-hidden my-auto"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="px-5 py-4 border-b border-white/[0.08] flex items-center justify-between bg-slate-900/95 shrink-0">
-              <div className="flex items-center gap-2.5">
-                <div className="w-9 h-9 rounded-xl bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center text-emerald-400">
-                  <CheckCircle2 className="w-5 h-5" />
-                </div>
-                <div>
-                  <h3 className="font-bold text-sm sm:text-base text-white">
-                    Credit Card Bill Settlement
-                  </h3>
-                  <p className="text-[11px] text-slate-400">
-                    Partial ya Full settle karein • Account route & funding source chunein
-                  </p>
-                </div>
+            <div className="px-5 py-3.5 border-b border-white/[0.08] flex items-center justify-between bg-slate-900/95 shrink-0">
+              <div className="flex items-center gap-2">
+                <CheckCircle2 className="w-5 h-5 text-emerald-400" />
+                <h3 className="font-bold text-sm sm:text-base text-white">Pay Credit Card Bill</h3>
               </div>
               <button
                 type="button"
@@ -2412,132 +2430,69 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
             </div>
 
             <form onSubmit={handleRecordBillPayment} className="overflow-y-auto p-5 space-y-4 text-xs">
-              {/* Account Route: From Account -> To Credit Card */}
-              <div className="bg-slate-950/70 border border-indigo-500/25 rounded-xl p-3.5 space-y-3">
-                <div className="text-[11px] font-bold uppercase tracking-wider text-indigo-300">
-                  1. Kis Account Se → Kis Card Me Settle Ho Raha Hai
-                </div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-slate-300 font-semibold mb-1">
-                      🏦 Kis Account Se (From)
-                    </label>
-                    <select
-                      value={billFromAccount}
-                      onChange={(e) => setBillFromAccount(e.target.value as AccountId)}
-                      className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-white focus:outline-hidden focus:border-emerald-500 text-xs font-medium"
-                    >
-                      {ALL_ACCOUNTS.filter((a) => a.type === 'bank_account' || a.type === 'cash').map((acc) => {
-                        const liveBal = balancesData?.accounts?.[acc.id]?.currentBalance;
-                        return (
-                          <option key={acc.id} value={acc.id}>
-                            {isWifeOwnedAccount(acc.id) ? '👩 ' : acc.type === 'cash' ? '💵 ' : '🏦 '}
-                            {acc.shortName}
-                            {liveBal !== undefined ? ` (₹${liveBal.toLocaleString('en-IN')})` : ''}
-                          </option>
-                        );
-                      })}
-                    </select>
-                  </div>
-
-                  <div>
-                    <label className="block text-slate-300 font-semibold mb-1">
-                      💳 Kis Card Me (To Card)
-                    </label>
-                    <select
-                      value={billTargetCard}
-                      onChange={(e) => {
-                        const nextCard = e.target.value as AccountId;
-                        setBillTargetCard(nextCard);
-                        const nextRes = calculateMonthlyCardReserves(transactions, billCycleMonth).items.find(
-                          (i) => i.cardId === nextCard
-                        );
-                        const nextOut = balancesData?.accounts?.[nextCard]?.currentOutstanding ?? 0;
-                        const sug = nextRes && nextRes.pendingReserve > 0 ? nextRes.pendingReserve : nextOut;
-                        if (sug > 0) setBillAmount(String(sug));
-                      }}
-                      className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-white focus:outline-hidden focus:border-emerald-500 text-xs font-medium"
-                    >
-                      {CREDIT_CARDS.map((c) => {
-                        const out = balancesData?.accounts?.[c.id]?.currentOutstanding ?? 0;
-                        return (
-                          <option key={c.id} value={c.id}>
-                            {isWifeOwnedAccount(c.id) ? '👩 ' : '💳 '}
-                            {c.shortName} (Due ₹{out.toLocaleString('en-IN')})
-                          </option>
-                        );
-                      })}
-                    </select>
-                  </div>
+              {/* 1. From Account -> To Card */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-slate-400 font-semibold mb-1">From Account</label>
+                  <select
+                    value={billFromAccount}
+                    onChange={(e) => setBillFromAccount(e.target.value as AccountId)}
+                    className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white focus:outline-hidden focus:border-emerald-500 text-xs font-medium"
+                  >
+                    {ALL_ACCOUNTS.filter((a) => a.type === 'bank_account' || a.type === 'cash').map((acc) => {
+                      const liveBal = balancesData?.accounts?.[acc.id]?.currentBalance;
+                      return (
+                        <option key={acc.id} value={acc.id}>
+                          {acc.shortName}{liveBal !== undefined ? ` (₹${liveBal.toLocaleString('en-IN')})` : ''}
+                        </option>
+                      );
+                    })}
+                  </select>
                 </div>
 
-                {/* Live Cycle Snapshot for Target Card */}
-                <div className="bg-amber-950/25 border border-amber-500/25 rounded-lg p-2.5 flex flex-wrap items-center justify-between gap-2 text-[11px]">
-                  <div>
-                    <div className="text-amber-300 font-semibold">
-                      📅 Bill Cycle ({billCycleMonth}): {modalCardCycleInfo.cycle.cycleLabel}
-                    </div>
-                    <div className="text-[10px] text-slate-400">
-                      Due Date: {modalCardCycleInfo.cycle.dueLabel} · Already Settled: ₹{modalCardCycleInfo.totalSettled.toLocaleString('en-IN')}
-                    </div>
-                  </div>
-                  <div className="text-right font-mono">
-                    <div className="text-amber-300 font-bold">
-                      Cycle Pending: ₹{modalCardCycleInfo.pendingReserve.toLocaleString('en-IN')}
-                    </div>
-                    <div className="text-[10px] text-rose-300">
-                      Total Outstanding: ₹{(balancesData?.accounts?.[billTargetCard]?.currentOutstanding ?? 0).toLocaleString('en-IN')}
-                    </div>
-                  </div>
+                <div>
+                  <label className="block text-slate-400 font-semibold mb-1">To Card</label>
+                  <select
+                    value={billTargetCard}
+                    onChange={(e) => {
+                      const nextCard = e.target.value as AccountId;
+                      setBillTargetCard(nextCard);
+                      const nextRes = calculateMonthlyCardReserves(transactions, billCycleMonth).items.find(
+                        (i) => i.cardId === nextCard
+                      );
+                      const nextOut = balancesData?.accounts?.[nextCard]?.currentOutstanding ?? 0;
+                      const sug = nextRes && nextRes.pendingReserve > 0 ? nextRes.pendingReserve : nextOut;
+                      if (sug > 0) setBillAmount(String(sug));
+                    }}
+                    className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white focus:outline-hidden focus:border-emerald-500 text-xs font-medium"
+                  >
+                    {CREDIT_CARDS.map((c) => {
+                      const out = balancesData?.accounts?.[c.id]?.currentOutstanding ?? 0;
+                      return (
+                        <option key={c.id} value={c.id}>
+                          {c.shortName} (Due ₹{out.toLocaleString('en-IN')})
+                        </option>
+                      );
+                    })}
+                  </select>
                 </div>
               </div>
 
-              {/* Settlement Mode: Full vs Partial + Amount */}
-              <div className="space-y-2.5">
+              {/* 2. Amount + Quick Fill */}
+              <div className="space-y-2">
                 <div className="flex items-center justify-between">
-                  <label className="text-slate-300 font-semibold">
-                    2. Full ya Partial Settlement
-                  </label>
-                  <div className="inline-flex bg-slate-950 border border-slate-700 rounded-lg p-0.5">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setBillSettlementMode('full');
-                        const fullAmt =
-                          modalCardCycleInfo.pendingReserve > 0
-                            ? modalCardCycleInfo.pendingReserve
-                            : balancesData?.accounts?.[billTargetCard]?.currentOutstanding ?? 0;
-                        if (fullAmt > 0) setBillAmount(String(fullAmt));
-                      }}
-                      className={`px-2.5 py-1 rounded-md text-[11px] font-bold cursor-pointer transition-all ${
-                        billSettlementMode === 'full'
-                          ? 'bg-emerald-600 text-white'
-                          : 'text-slate-400 hover:text-white'
-                      }`}
-                    >
-                      ✅ Full Settle
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setBillSettlementMode('partial')}
-                      className={`px-2.5 py-1 rounded-md text-[11px] font-bold cursor-pointer transition-all ${
-                        billSettlementMode === 'partial'
-                          ? 'bg-amber-600 text-white'
-                          : 'text-slate-400 hover:text-white'
-                      }`}
-                    >
-                      ✂️ Partial Settle
-                    </button>
-                  </div>
+                  <label className="text-slate-400 font-semibold">Amount (Full ya Partial)</label>
+                  <span className="text-[11px] font-mono text-amber-300">
+                    Cycle Due: ₹{modalCardCycleInfo.pendingReserve.toLocaleString('en-IN')}
+                  </span>
                 </div>
-
                 <div className="relative">
                   <span className="absolute left-3.5 top-2.5 text-emerald-400 font-bold text-sm">₹</span>
                   <input
                     type="number"
                     step="any"
                     min="1"
-                    placeholder="Kitna amount pay karna hai (e.g. 12500)"
+                    placeholder="Amount dalein"
                     value={billAmount}
                     onChange={(e) => {
                       const val = e.target.value;
@@ -2547,42 +2502,24 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
                         modalCardCycleInfo.pendingReserve > 0
                           ? modalCardCycleInfo.pendingReserve
                           : balancesData?.accounts?.[billTargetCard]?.currentOutstanding ?? 0;
-                      if (refBill > 0 && num > 0 && num < refBill) {
-                        setBillSettlementMode('partial');
-                      } else if (refBill > 0 && num >= refBill) {
-                        setBillSettlementMode('full');
-                      }
+                      setBillSettlementMode(refBill > 0 && num > 0 && num < refBill ? 'partial' : 'full');
                     }}
                     className="w-full bg-slate-950 border border-slate-700 rounded-xl pl-8 pr-3 py-2.5 text-white font-mono text-sm font-bold focus:outline-hidden focus:border-emerald-500"
                     required
                   />
                 </div>
-
-                {/* Quick Amount Chips */}
                 <div className="flex flex-wrap gap-1.5">
                   {modalCardCycleInfo.pendingReserve > 0 && (
-                    <>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setBillAmount(String(modalCardCycleInfo.pendingReserve));
-                          setBillSettlementMode('full');
-                        }}
-                        className="px-2.5 py-1 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/35 text-emerald-300 text-[10px] font-mono font-semibold cursor-pointer"
-                      >
-                        Full Cycle Bill (₹{modalCardCycleInfo.pendingReserve.toLocaleString('en-IN')})
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setBillAmount(String(Math.round(modalCardCycleInfo.pendingReserve / 2)));
-                          setBillSettlementMode('partial');
-                        }}
-                        className="px-2.5 py-1 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/35 text-amber-300 text-[10px] font-mono font-semibold cursor-pointer"
-                      >
-                        50% Partial (₹{Math.round(modalCardCycleInfo.pendingReserve / 2).toLocaleString('en-IN')})
-                      </button>
-                    </>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setBillAmount(String(modalCardCycleInfo.pendingReserve));
+                        setBillSettlementMode('full');
+                      }}
+                      className="px-2.5 py-1 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/30 text-emerald-300 text-[10px] font-mono font-semibold cursor-pointer"
+                    >
+                      Cycle Bill (₹{modalCardCycleInfo.pendingReserve.toLocaleString('en-IN')})
+                    </button>
                   )}
                   {(balancesData?.accounts?.[billTargetCard]?.currentOutstanding ?? 0) > 0 && (
                     <button
@@ -2592,89 +2529,72 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
                         setBillAmount(String(out));
                         setBillSettlementMode('full');
                       }}
-                      className="px-2.5 py-1 rounded-lg bg-sky-500/15 hover:bg-sky-500/25 border border-sky-500/35 text-sky-300 text-[10px] font-mono font-semibold cursor-pointer"
+                      className="px-2.5 py-1 rounded-lg bg-sky-500/15 hover:bg-sky-500/25 border border-sky-500/30 text-sky-300 text-[10px] font-mono font-semibold cursor-pointer"
                     >
-                      Full Outstanding (₹{(balancesData?.accounts?.[billTargetCard]?.currentOutstanding ?? 0).toLocaleString('en-IN')})
+                      Total Due (₹{(balancesData?.accounts?.[billTargetCard]?.currentOutstanding ?? 0).toLocaleString('en-IN')})
                     </button>
                   )}
                 </div>
               </div>
 
-              {/* Funding Source Toggle: Current Month Income vs Previous Bank Savings */}
-              <div className="space-y-2">
-                <label className="block text-slate-300 font-semibold">
-                  3. Yeh Payment Kahan Se Minus Karna Hai? (Toggle)
-                </label>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+              {/* 3. Funding Toggle: Current Income vs Previous Savings */}
+              <div className="space-y-1.5">
+                <label className="block text-slate-400 font-semibold">Kahan Se Minus Karna Hai?</label>
+                <div className="grid grid-cols-2 gap-2">
                   <button
                     type="button"
                     onClick={() => setBillFundingSource('current_income')}
-                    className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
+                    className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer ${
                       billFundingSource === 'current_income'
-                        ? 'bg-emerald-950/50 border-emerald-400 text-white ring-1 ring-emerald-400/50 shadow-md'
-                        : 'bg-slate-950/70 border-slate-800 text-slate-400 hover:border-slate-600'
+                        ? 'bg-emerald-950/50 border-emerald-400 text-white'
+                        : 'bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-600'
                     }`}
                   >
-                    <div className="font-bold text-xs flex items-center gap-1.5 text-emerald-300">
-                      <span>💰 Current Month Income se</span>
-                    </div>
-                    <p className="text-[10px] text-slate-300/90 mt-1 leading-relaxed">
-                      Is mahine ki income se katega. Bank balance aur Card Reserve dono clear honge (no double-count).
-                    </p>
+                    <div className="font-bold text-xs text-emerald-300">Current Income</div>
+                    <div className="text-[10px] text-slate-400 mt-0.5">Is mahine ki kamai se</div>
                   </button>
-
                   <button
                     type="button"
                     onClick={() => setBillFundingSource('previous_savings')}
-                    className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
+                    className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer ${
                       billFundingSource === 'previous_savings'
-                        ? 'bg-cyan-950/50 border-cyan-400 text-white ring-1 ring-cyan-400/50 shadow-md'
-                        : 'bg-slate-950/70 border-slate-800 text-slate-400 hover:border-slate-600'
+                        ? 'bg-cyan-950/50 border-cyan-400 text-white'
+                        : 'bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-600'
                     }`}
                   >
-                    <div className="font-bold text-xs flex items-center gap-1.5 text-cyan-300">
-                      <span>🏦 Pehle Ki Bank Savings se</span>
-                    </div>
-                    <p className="text-[10px] text-slate-300/90 mt-1 leading-relaxed">
-                      Purani bank savings se deduct hoga. Current month ki income untouched rahegi!
-                    </p>
+                    <div className="font-bold text-xs text-cyan-300">Previous Savings</div>
+                    <div className="text-[10px] text-slate-400 mt-0.5">Purani bank bachat se</div>
                   </button>
                 </div>
               </div>
 
-              {/* Date, Cycle Month & Notes */}
+              {/* 4. Date + Note */}
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-slate-300 font-semibold mb-1">Payment Date</label>
+                  <label className="block text-slate-400 font-semibold mb-1">Date</label>
                   <input
                     type="date"
                     value={billDate}
-                    onChange={(e) => setBillDate(e.target.value)}
+                    onChange={(e) => {
+                      setBillDate(e.target.value);
+                      if (e.target.value.length >= 7) {
+                        setBillCycleMonth(e.target.value.slice(0, 7));
+                      }
+                    }}
                     className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white focus:outline-hidden focus:border-emerald-500 text-xs font-mono"
                     required
                   />
                 </div>
                 <div>
-                  <label className="block text-slate-300 font-semibold mb-1">Bill Cycle Month</label>
+                  <label className="block text-slate-400 font-semibold mb-1">Note (Optional)</label>
                   <input
-                    type="month"
-                    value={billCycleMonth}
-                    onChange={(e) => setBillCycleMonth(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white focus:outline-hidden focus:border-emerald-500 text-xs font-mono"
-                    required
+                    type="text"
+                    placeholder="e.g. CRED UPI"
+                    value={billNotes}
+                    onChange={(e) => setBillNotes(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white focus:outline-hidden focus:border-emerald-500 text-xs"
                   />
                 </div>
-              </div>
-
-              <div>
-                <label className="block text-slate-300 font-semibold mb-1">Note / Reference (Optional)</label>
-                <input
-                  type="text"
-                  placeholder="e.g. CRED UPI / Nov Statement Paid"
-                  value={billNotes}
-                  onChange={(e) => setBillNotes(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white focus:outline-hidden focus:border-emerald-500 text-xs"
-                />
               </div>
 
               <div className="pt-2 border-t border-white/[0.08] flex items-center justify-end gap-2">
@@ -2688,11 +2608,11 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
                 <button
                   type="submit"
                   disabled={isSettlingCard}
-                  className="px-5 py-2 rounded-xl bg-gradient-to-r from-emerald-600 to-cyan-600 hover:from-emerald-500 hover:to-cyan-500 text-white font-bold cursor-pointer shadow-md disabled:opacity-50"
+                  className="px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold cursor-pointer shadow-md disabled:opacity-50"
                 >
                   {isSettlingCard
-                    ? 'Settling...'
-                    : `✅ Confirm ${billSettlementMode === 'partial' ? 'Partial' : 'Full'} Settle`}
+                    ? 'Saving...'
+                    : `Pay ₹${(Number(billAmount) || 0).toLocaleString('en-IN')} Bill`}
                 </button>
               </div>
             </form>

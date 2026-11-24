@@ -1262,7 +1262,33 @@ export function getUserData(userId: string): UserDataStore {
       }
     }
 
-    if (synced || timeAdjusted || descAdjusted || savingsSynced || accountAliasNormalized) {
+    // Auto-clean legacy paired "CC Payment Credit" fake-income entries (bill settlement is now a single clean CC Payment entry)
+    let ccCreditCleaned = false;
+    const beforeLen = store.transactions.length;
+    const debitIds = new Set(
+      store.transactions
+        .filter((t) => t.type === 'expense' && (t.isCcPayment || t.category === 'CC Payment'))
+        .map((t) => t.id)
+    );
+    store.transactions = store.transactions.filter((t) => {
+      const isLegacyCcCredit = Boolean(
+        t.isCardPaymentCredit || (t.type === 'income' && t.category === 'CC Payment Credit')
+      );
+      if (isLegacyCcCredit && (!t.linkedTransferId || debitIds.has(t.linkedTransferId))) {
+        return false;
+      }
+      return true;
+    });
+    if (store.transactions.length !== beforeLen) {
+      ccCreditCleaned = true;
+      for (const tx of store.transactions) {
+        if (tx.isCcPayment && tx.linkedTransferId) {
+          delete tx.linkedTransferId;
+        }
+      }
+    }
+
+    if (synced || timeAdjusted || descAdjusted || savingsSynced || accountAliasNormalized || ccCreditCleaned) {
       saveJson(filePath, store);
       persistToPg(`user_data:${userId}`, store).catch(() => {});
     }
@@ -3311,6 +3337,26 @@ export function calculateAccountsBalances(userId: string) {
     return raw;
   };
 
+  const resolveCcPaymentTarget = (t: Transaction): string | null => {
+    if (t.targetCardAccount) return canonicalizeAcc(t.targetCardAccount);
+    if (Array.isArray(t.tags)) {
+      const targetTag = t.tags.find((tg) => tg.startsWith('cc-target:') || tg.startsWith('card:'));
+      if (targetTag) return canonicalizeAcc(targetTag.replace(/^(cc-target:|card:)/, ''));
+    }
+    const desc = (t.description || '').toLowerCase();
+    for (const [k, m] of Object.entries(combinedAccountsMeta)) {
+      if (m.type !== 'credit_card' && m.type !== 'rupay_card') continue;
+      if (desc.includes(k.toLowerCase()) || desc.includes(m.shortName.toLowerCase())) {
+        return k;
+      }
+      const digits = k.match(/\b(\d{4})\b/);
+      if (digits && desc.includes(digits[1])) {
+        return k;
+      }
+    }
+    return null;
+  };
+
   for (const [accId, meta] of Object.entries(combinedAccountsMeta)) {
     const isCard = meta.type === 'credit_card' || meta.type === 'rupay_card';
     const base = Number(baseBalances[accId]) || 0;
@@ -3331,19 +3377,25 @@ export function calculateAccountsBalances(userId: string) {
     let debits = 0;
 
     for (const t of txs) {
-      const tAcc = canonicalizeAcc(t.account);
-      if (tAcc === accId) {
-        const txTimeMs = t.createdAt ? new Date(t.createdAt).getTime() : (t.date ? new Date(t.date).getTime() : 0);
-        // Only apply transactions occurring on or after opening balance was set
-        if (setTimeMs > 0 && txTimeMs > 0 && txTimeMs < setTimeMs) {
-          continue;
-        }
+      const txTimeMs = t.createdAt ? new Date(t.createdAt).getTime() : (t.date ? new Date(t.date).getTime() : 0);
+      // Only apply transactions occurring on or after opening balance was set
+      if (setTimeMs > 0 && txTimeMs > 0 && txTimeMs < setTimeMs) {
+        continue;
+      }
 
-        const amt = Number(t.amount) || 0;
+      const tAcc = canonicalizeAcc(t.account);
+      const amt = Number(t.amount) || 0;
+      if (tAcc === accId) {
         if (t.type === 'income') {
           credits += amt;
         } else {
           debits += amt;
+        }
+      } else if (isCard && t.type === 'expense' && (t.isCcPayment || t.category === 'CC Payment')) {
+        // Single-entry CC bill payment from a bank/cash account directly credits the target card
+        const targetCard = resolveCcPaymentTarget(t);
+        if (targetCard === accId) {
+          credits += amt;
         }
       }
     }
@@ -10068,10 +10120,6 @@ app.post('/api/accounts/settle-card', (req, res) => {
   const suffix = Math.random().toString(36).slice(2, 7);
 
   const debitId = `tx_cc_pay_${Date.now()}_${suffix}`;
-  const creditId = `tx_cc_crd_${Date.now()}_${suffix}`;
-
-  const fundingTag = validFunding === 'previous_savings' ? 'Previous Savings' : 'Current Income';
-  const modeLabel = validMode === 'partial' ? 'Partial' : 'Full';
 
   const debitTx: Transaction = {
     id: debitId,
@@ -10079,7 +10127,7 @@ app.post('/api/accounts/settle-card', (req, res) => {
     type: 'expense',
     amount: roundedAmount,
     category: 'CC Payment',
-    description: `💳 ${targetCard} Bill Settle (${modeLabel} • ${fundingTag})${cleanNote ? ` - ${cleanNote}` : ''}`,
+    description: `${targetCard} Bill Payment${cleanNote ? ` - ${cleanNote}` : ''}`,
     date: txDate,
     time: istNow.time,
     paymentMethod: sourceAcc === 'Cash' ? 'Cash' : 'Bank Transfer',
@@ -10092,7 +10140,6 @@ app.post('/api/accounts/settle-card', (req, res) => {
     ccPaymentFundingSource: validFunding,
     ccSettlementMode: validMode,
     ccSettlementCycleMonth: effectiveCycleMonth,
-    linkedTransferId: creditId,
     tags: [
       'cc-payment',
       `cc-target:${targetCard}`,
@@ -10102,45 +10149,13 @@ app.post('/api/accounts/settle-card', (req, res) => {
     ],
   };
 
-  const creditTx: Transaction = {
-    id: creditId,
-    userId: user.id,
-    type: 'income',
-    amount: roundedAmount,
-    category: 'CC Payment Credit',
-    description: `✅ Bill Settled from ${sourceAcc} (${modeLabel} • ${fundingTag})${cleanNote ? ` - ${cleanNote}` : ''}`,
-    date: txDate,
-    time: istNow.time,
-    paymentMethod: sourceAcc === 'Cash' ? 'Cash' : 'Bank Transfer',
-    account: targetCard,
-    source: 'manual',
-    createdAt: nowIso,
-    isCcPayment: true,
-    isCardPaymentCredit: true,
-    targetCardAccount: targetCard,
-    sourceAccount: sourceAcc,
-    ccPaymentFundingSource: validFunding,
-    ccSettlementMode: validMode,
-    ccSettlementCycleMonth: effectiveCycleMonth,
-    linkedTransferId: debitId,
-    tags: [
-      'cc-payment-credit',
-      `cc-from:${sourceAcc}`,
-      `cc-funding:${validFunding}`,
-      `cc-mode:${validMode}`,
-      `cc-cycle:${effectiveCycleMonth}`,
-    ],
-  };
-
   if (!store.transactions) store.transactions = [];
-  store.transactions.unshift(creditTx);
   store.transactions.unshift(debitTx);
 
   saveUserData(user.id, store);
   res.json({
     success: true,
     debitTransaction: debitTx,
-    creditTransaction: creditTx,
     transactions: store.transactions,
     balances: calculateAccountsBalances(user.id),
     summary: calculateUserSummary(user.id),
