@@ -709,8 +709,8 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
     const cardReserveItem = cycleReserves.items.find((i) => i.cardId === resolvedCard);
     const liveOutstanding = balancesData?.accounts?.[resolvedCard]?.currentOutstanding ?? 0;
     const suggestedAmt =
-      cardReserveItem && cardReserveItem.pendingReserve > 0
-        ? cardReserveItem.pendingReserve
+      cardReserveItem && cardReserveItem.totalCardCyclePending > 0
+        ? cardReserveItem.totalCardCyclePending
         : liveOutstanding > 0
         ? liveOutstanding
         : 0;
@@ -918,6 +918,9 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
       totalSettled: 0,
       pendingReserve: 0,
       excludedWifeUdhaar: 0,
+      totalCardCycleSpends: 0,
+      totalCardCycleBill: 0,
+      totalCardCyclePending: 0,
     };
   }, [activeCycleReserves, selectedMeta, balancesData, defaultCycleMonth]);
 
@@ -944,6 +947,9 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
       totalSettled: 0,
       pendingReserve: 0,
       excludedWifeUdhaar: 0,
+      totalCardCycleSpends: 0,
+      totalCardCycleBill: 0,
+      totalCardCyclePending: 0,
     };
   }, [nextMonthCycleReserves, selectedMeta, balancesData, nextCycleMonth]);
 
@@ -971,6 +977,9 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
       totalSettled: 0,
       pendingReserve: 0,
       excludedWifeUdhaar: 0,
+      totalCardCycleSpends: 0,
+      totalCardCycleBill: 0,
+      totalCardCyclePending: 0,
     };
   }, [transactions, billCycleMonth, billTargetCard, balancesData]);
 
@@ -1401,7 +1410,7 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
                 <div className="text-xl font-extrabold text-amber-300 font-mono mt-1">
                   {isFamily || isPrivacyMode
                     ? '••••••'
-                    : `₹${(selectedCardCycleInfo?.pendingReserve ?? totalCardObligation).toLocaleString('en-IN')}`}
+                    : `₹${(selectedCardCycleInfo?.totalCardCyclePending ?? totalCardObligation).toLocaleString('en-IN')}`}
                 </div>
                 <div className="text-[11px] text-indigo-200/85 mt-1 space-y-0.5">
                   {isFamily ? (
@@ -1413,16 +1422,22 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
                         <strong className="text-amber-300">{selectedCardCycleInfo.cycle.dueLabel}</strong>
                       </div>
                       <div className="text-[10px] text-slate-300 font-mono">
-                        Cycle Bill: ₹{selectedCardCycleInfo.cycleBillAmount.toLocaleString('en-IN')}
+                        Cycle Bill: ₹{selectedCardCycleInfo.totalCardCycleBill.toLocaleString('en-IN')}
                         {selectedCardCycleInfo.totalSettled > 0 && (
                           <span className="text-emerald-300 ml-1.5">
                             · Settled: ₹{selectedCardCycleInfo.totalSettled.toLocaleString('en-IN')}
                           </span>
                         )}
                       </div>
-                      {selectedCardNextCycleInfo && selectedCardNextCycleInfo.pendingReserve > 0 && (
+                      {selectedCardCycleInfo.excludedWifeUdhaar > 0 && (
+                        <div className="text-[10px] text-pink-300/95 font-mono">
+                          Personal: ₹{selectedCardCycleInfo.cycleBillAmount.toLocaleString('en-IN')} + Udhaar: ₹{selectedCardCycleInfo.excludedWifeUdhaar.toLocaleString('en-IN')}
+                          <span className="text-slate-400 font-sans ml-1">(Udhaar outflow se excluded)</span>
+                        </div>
+                      )}
+                      {selectedCardNextCycleInfo && selectedCardNextCycleInfo.totalCardCyclePending > 0 && (
                         <div className="text-[10px] text-cyan-300 font-mono pt-1 mt-1 border-t border-white/10">
-                          ⏭️ Next Month ({nextCycleMonth}): ₹{selectedCardNextCycleInfo.pendingReserve.toLocaleString('en-IN')}{' '}
+                          ⏭️ Next Month ({nextCycleMonth}): ₹{selectedCardNextCycleInfo.totalCardCyclePending.toLocaleString('en-IN')}{' '}
                           <span className="text-slate-400">
                             ({selectedCardNextCycleInfo.cycle.cycleLabel} · Due {selectedCardNextCycleInfo.cycle.dueLabel})
                           </span>
@@ -2461,7 +2476,7 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
                         (i) => i.cardId === nextCard
                       );
                       const nextOut = balancesData?.accounts?.[nextCard]?.currentOutstanding ?? 0;
-                      const sug = nextRes && nextRes.pendingReserve > 0 ? nextRes.pendingReserve : nextOut;
+                      const sug = nextRes && nextRes.totalCardCyclePending > 0 ? nextRes.totalCardCyclePending : nextOut;
                       if (sug > 0) setBillAmount(String(sug));
                     }}
                     className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white focus:outline-hidden focus:border-emerald-500 text-xs font-medium"
@@ -2483,7 +2498,7 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
                 <div className="flex items-center justify-between">
                   <label className="text-slate-400 font-semibold">Amount (Full ya Partial)</label>
                   <span className="text-[11px] font-mono text-amber-300">
-                    Cycle Due: ₹{modalCardCycleInfo.pendingReserve.toLocaleString('en-IN')}
+                    Cycle Due: ₹{modalCardCycleInfo.totalCardCyclePending.toLocaleString('en-IN')}
                   </span>
                 </div>
                 <div className="relative">
@@ -2499,8 +2514,8 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
                       setBillAmount(val);
                       const num = Number(val) || 0;
                       const refBill =
-                        modalCardCycleInfo.pendingReserve > 0
-                          ? modalCardCycleInfo.pendingReserve
+                        modalCardCycleInfo.totalCardCyclePending > 0
+                          ? modalCardCycleInfo.totalCardCyclePending
                           : balancesData?.accounts?.[billTargetCard]?.currentOutstanding ?? 0;
                       setBillSettlementMode(refBill > 0 && num > 0 && num < refBill ? 'partial' : 'full');
                     }}
@@ -2509,16 +2524,28 @@ export const AccountsLedgerView: React.FC<AccountsLedgerViewProps> = ({
                   />
                 </div>
                 <div className="flex flex-wrap gap-1.5">
-                  {modalCardCycleInfo.pendingReserve > 0 && (
+                  {modalCardCycleInfo.totalCardCyclePending > 0 && (
                     <button
                       type="button"
                       onClick={() => {
-                        setBillAmount(String(modalCardCycleInfo.pendingReserve));
+                        setBillAmount(String(modalCardCycleInfo.totalCardCyclePending));
                         setBillSettlementMode('full');
                       }}
                       className="px-2.5 py-1 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/30 text-emerald-300 text-[10px] font-mono font-semibold cursor-pointer"
                     >
-                      Cycle Bill (₹{modalCardCycleInfo.pendingReserve.toLocaleString('en-IN')})
+                      Cycle Bill (₹{modalCardCycleInfo.totalCardCyclePending.toLocaleString('en-IN')})
+                    </button>
+                  )}
+                  {modalCardCycleInfo.excludedWifeUdhaar > 0 && modalCardCycleInfo.pendingReserve > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setBillAmount(String(modalCardCycleInfo.pendingReserve));
+                        setBillSettlementMode('partial');
+                      }}
+                      className="px-2.5 py-1 rounded-lg bg-pink-500/15 hover:bg-pink-500/25 border border-pink-500/30 text-pink-300 text-[10px] font-mono font-semibold cursor-pointer"
+                    >
+                      Personal Only (₹{modalCardCycleInfo.pendingReserve.toLocaleString('en-IN')})
                     </button>
                   )}
                   {(balancesData?.accounts?.[billTargetCard]?.currentOutstanding ?? 0) > 0 && (

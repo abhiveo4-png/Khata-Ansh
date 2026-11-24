@@ -865,17 +865,26 @@ export const OverviewCards: React.FC<OverviewCardsProps> = ({
                           <span className="truncate font-semibold text-amber-100">
                             {item.isWifeCard ? '👩 ' : ''}{item.shortName}
                           </span>
-                          <span className={`font-mono font-bold ${item.pendingReserve === 0 ? 'text-emerald-400' : 'text-amber-300'}`}>
-                            {item.pendingReserve === 0 ? '✅ Paid' : `₹${displayAmount(item.pendingReserve)}`}
+                          <span className={`font-mono font-bold ${item.totalCardCyclePending === 0 ? 'text-emerald-400' : 'text-amber-300'}`}>
+                            {item.totalCardCyclePending === 0
+                              ? '✅ Paid'
+                              : item.pendingReserve === 0 && item.excludedWifeUdhaar > 0
+                              ? '₹0 (Excl.)'
+                              : `₹${displayAmount(item.pendingReserve)}`}
                           </span>
                         </div>
                         <div className="flex items-center justify-between text-[9px] text-amber-300/75 mt-0.5">
                           <span>{item.cycle.cycleLabel}</span>
                           <span>Due {item.cycle.dueLabel}</span>
                         </div>
+                        {item.excludedWifeUdhaar > 0 && (
+                          <div className="text-[9px] text-pink-300/90 mt-0.5 font-mono">
+                            + Udhaar ₹{displayAmount(item.excludedWifeUdhaar)} · Card Bill ₹{displayAmount(item.totalCardCycleBill)}
+                          </div>
+                        )}
                         {item.totalSettled > 0 && (
                           <div className="text-[9px] text-emerald-300/90 mt-0.5">
-                            Bill ₹{displayAmount(item.cycleBillAmount)} • Settled ₹{displayAmount(item.totalSettled)}
+                            Bill ₹{displayAmount(item.totalCardCycleBill)} • Settled ₹{displayAmount(item.totalSettled)}
                           </div>
                         )}
                       </div>

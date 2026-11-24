@@ -1242,22 +1242,100 @@ export function getUserData(userId: string): UserDataStore {
       }
     }
 
-    // Auto-normalize legacy Axis 2904 aliases (e.g. "Axis 2904" -> "AX CC 2904") so card limit & ledger always match
+    // Auto-normalize legacy Axis 2904 aliases (e.g. "Axis 2904", "Axis Bank CC 2904", "Wife Card 2904" -> "AX CC 2904") so card limit & ledger always match
     let accountAliasNormalized = false;
-    const hasCustomAxis2904 = (store.customAccounts || []).some((a) => a.id === 'Axis 2904');
-    if (!hasCustomAxis2904) {
-      for (const tx of store.transactions) {
-        if (tx.account && /^axis\s*(?:cc\s*)?2904$/i.test(tx.account.trim()) && tx.account !== 'AX CC 2904') {
-          tx.account = 'AX CC 2904';
+    const customAccountIds = new Set((store.customAccounts || []).map((a) => a.id));
+    const normalize2904Alias = (raw?: string): string | undefined => {
+      if (!raw) return raw;
+      const trimmed = raw.trim();
+      if (trimmed === 'AX CC 2904' || customAccountIds.has(trimmed)) return raw;
+      if (/\b2904\b/i.test(trimmed)) return 'AX CC 2904';
+      return raw;
+    };
+    for (const tx of store.transactions) {
+      const normalized = normalize2904Alias(tx.account);
+      if (normalized && normalized !== tx.account) {
+        tx.account = normalized;
+        accountAliasNormalized = true;
+      }
+    }
+    if (Array.isArray(store.udhaars)) {
+      for (const u of store.udhaars) {
+        const normalized = normalize2904Alias(u.account);
+        if (normalized && normalized !== u.account) {
+          u.account = normalized;
           accountAliasNormalized = true;
         }
       }
-      if (Array.isArray(store.udhaars)) {
-        for (const u of store.udhaars) {
-          if (u.account && /^axis\s*(?:cc\s*)?2904$/i.test(u.account.trim()) && u.account !== 'AX CC 2904') {
-            u.account = 'AX CC 2904';
-            accountAliasNormalized = true;
+    }
+
+    // Auto-sync lent Udhaar records into store.transactions so card outstanding, available limit & bill cycle never miss imported/edited Udhaars
+    let udhaarsSynced = false;
+    if (Array.isArray(store.udhaars) && store.udhaars.length > 0) {
+      for (const u of store.udhaars) {
+        if (!u || u.type !== 'lent' || !(Number(u.amount) > 0)) continue;
+        const uAccount = normalize2904Alias(u.account) || u.account || 'AX Bank';
+        const uAmt = Number(u.amount) || 0;
+        const uPersonLower = (u.personName || '').trim().toLowerCase();
+
+        const existingTx = store.transactions.find(
+          (t) =>
+            (u.linkedTransactionId && t.id === u.linkedTransactionId) ||
+            (t.linkedUdhaarId && t.linkedUdhaarId === u.id && t.type === 'expense') ||
+            (t.type === 'expense' &&
+              (t.isUdhaarLent || t.category === 'Udhaar Given' || (t.category || '').toLowerCase().includes('udhaar')) &&
+              Math.abs((Number(t.amount) || 0) - uAmt) < 0.01 &&
+              t.date === u.date &&
+              (!uPersonLower ||
+                (t.udhaarPersonName || '').toLowerCase() === uPersonLower ||
+                (t.description || '').toLowerCase().includes(uPersonLower)))
+        );
+
+        if (existingTx) {
+          if (!u.linkedTransactionId) {
+            u.linkedTransactionId = existingTx.id;
+            udhaarsSynced = true;
           }
+          if (!existingTx.linkedUdhaarId) {
+            existingTx.linkedUdhaarId = u.id;
+            udhaarsSynced = true;
+          }
+          if (!existingTx.isUdhaarLent) {
+            existingTx.isUdhaarLent = true;
+            udhaarsSynced = true;
+          }
+          if (uAccount && existingTx.account !== uAccount) {
+            existingTx.account = uAccount;
+            udhaarsSynced = true;
+          }
+        } else {
+          const isCc =
+            /\bcc\b|credit card|2005|0000|5733|6526|8210|5376|2904/i.test(uAccount) ||
+            (store.customAccounts || []).some(
+              (a) => a.id === uAccount && (a.type === 'credit_card' || a.type === 'rupay_card')
+            );
+          const linkedTxId = u.linkedTransactionId || `tx_udh_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+          const linkedTx: Transaction = {
+            id: linkedTxId,
+            userId,
+            type: 'expense',
+            amount: uAmt,
+            category: 'Udhaar Given',
+            description: `Udhaar diya: ${u.personName}${u.description ? ` (${u.description})` : ''}`,
+            date: u.date || getAppDateTime().date,
+            time: u.time || '12:00',
+            paymentMethod: isCc ? 'Card' : uAccount === 'Cash' ? 'Cash' : 'UPI',
+            account: uAccount,
+            source: 'manual',
+            createdAt: u.createdAt || `${u.date || getAppDateTime().date}T${u.time || '12:00'}:00.000Z`,
+            tags: ['udhaar', uPersonLower || 'person', 'udhaar-lent'],
+            isUdhaarLent: true,
+            linkedUdhaarId: u.id,
+            udhaarPersonName: u.personName,
+          };
+          u.linkedTransactionId = linkedTxId;
+          store.transactions.unshift(linkedTx);
+          udhaarsSynced = true;
         }
       }
     }
@@ -1288,7 +1366,7 @@ export function getUserData(userId: string): UserDataStore {
       }
     }
 
-    if (synced || timeAdjusted || descAdjusted || savingsSynced || accountAliasNormalized || ccCreditCleaned) {
+    if (synced || timeAdjusted || descAdjusted || savingsSynced || accountAliasNormalized || udhaarsSynced || ccCreditCleaned) {
       saveJson(filePath, store);
       persistToPg(`user_data:${userId}`, store).catch(() => {});
     }
@@ -3362,23 +3440,24 @@ export function calculateAccountsBalances(userId: string) {
     const base = Number(baseBalances[accId]) || 0;
     let setTimeStr = baseTimestamps[accId];
 
-    // If an account has a base balance set but no timestamp recorded yet,
-    // initialize timestamp to now so historical transactions are not double-counted on top of today's balance!
-    if (!setTimeStr && baseBalances[accId] !== undefined) {
+    // If an account has a positive base balance set (> 0) with no timestamp recorded yet,
+    // initialize timestamp to now so historical transactions are not double-counted on top of today's balance.
+    // If base === 0, never cut off historical transactions — count all recorded transactions for this card/account!
+    if (base > 0 && !setTimeStr && baseBalances[accId] !== undefined) {
       setTimeStr = new Date().toISOString();
       if (!store.accountBalanceSetTimestamps) store.accountBalanceSetTimestamps = {};
       store.accountBalanceSetTimestamps[accId] = setTimeStr;
       needsSave = true;
     }
 
-    const setTimeMs = setTimeStr ? new Date(setTimeStr).getTime() : 0;
+    const setTimeMs = base > 0 && setTimeStr ? new Date(setTimeStr).getTime() : 0;
 
     let credits = 0;
     let debits = 0;
 
     for (const t of txs) {
       const txTimeMs = t.createdAt ? new Date(t.createdAt).getTime() : (t.date ? new Date(t.date).getTime() : 0);
-      // Only apply transactions occurring on or after opening balance was set
+      // Only apply timestamp cutoff when a non-zero opening balance was explicitly set
       if (setTimeMs > 0 && txTimeMs > 0 && txTimeMs < setTimeMs) {
         continue;
       }
@@ -9904,7 +9983,11 @@ app.post('/api/accounts/balances', (req, res) => {
       if (!isNaN(num)) {
         const cleanVal = Math.max(0, num);
         store.accountBaseBalances[acc] = cleanVal;
-        store.accountBalanceSetTimestamps[acc] = nowIso;
+        if (cleanVal > 0) {
+          store.accountBalanceSetTimestamps[acc] = nowIso;
+        } else {
+          delete store.accountBalanceSetTimestamps[acc];
+        }
         if (acc === 'Wife Account') {
           store.wifeBaseBalance = cleanVal;
           store.wifeBalanceSetTimestamp = nowIso;
@@ -14458,6 +14541,30 @@ app.put('/api/udhaar/:id', (req, res) => {
   if (updates.description !== undefined) existing.description = updates.description;
   if (updates.date) existing.date = updates.date;
   if (updates.account !== undefined) existing.account = updates.account;
+
+  // Keep linked Udhaar Given transaction in sync whenever account / amount / date / person changes
+  if (existing.type === 'lent' && Array.isArray(store.transactions)) {
+    const linkedTx = store.transactions.find(
+      (t) =>
+        (existing.linkedTransactionId && t.id === existing.linkedTransactionId) ||
+        (t.linkedUdhaarId === existing.id && t.type === 'expense' && (t.isUdhaarLent || t.category === 'Udhaar Given'))
+    );
+    if (linkedTx) {
+      if (existing.account) {
+        linkedTx.account = existing.account;
+        const isCc =
+          /\bcc\b|credit card|2005|0000|5733|6526|8210|5376|2904/i.test(existing.account) ||
+          (store.customAccounts || []).some(
+            (a) => a.id === existing.account && (a.type === 'credit_card' || a.type === 'rupay_card')
+          );
+        linkedTx.paymentMethod = isCc ? 'Card' : existing.account === 'Cash' ? 'Cash' : 'UPI';
+      }
+      linkedTx.amount = existing.amount;
+      if (existing.date) linkedTx.date = existing.date;
+      linkedTx.udhaarPersonName = existing.personName;
+      linkedTx.description = `Udhaar diya: ${existing.personName}${existing.description ? ` (${existing.description})` : ''}`;
+    }
+  }
 
   saveUserData(user.id, store);
   res.json({ success: true, udhaar: existing, udhaars: store.udhaars, transactions: store.transactions, summary: calculateUserSummary(user.id) });

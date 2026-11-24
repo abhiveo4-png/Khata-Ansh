@@ -28,12 +28,15 @@ export interface CardCycleReserveItem {
   cycle: CardBillCycleWindow;
   cycleSpends: number;
   cycleRefunds: number;
-  cycleBillAmount: number; // Math.max(0, cycleSpends - cycleRefunds)
+  cycleBillAmount: number; // Math.max(0, cycleSpends - cycleRefunds) — owner's reserve share (excludes Wife Card Udhaar)
   paidFromCurrentIncome: number;
   paidFromPreviousSavings: number;
   totalSettled: number;
-  pendingReserve: number; // Math.max(0, cycleBillAmount - totalSettled)
+  pendingReserve: number; // Math.max(0, cycleBillAmount - totalSettled) — owner's monthly reserve share
   excludedWifeUdhaar: number;
+  totalCardCycleSpends: number; // Full card spends in cycle (personal + Udhaar)
+  totalCardCycleBill: number; // Math.max(0, totalCardCycleSpends - cycleRefunds) — true bank statement bill
+  totalCardCyclePending: number; // Math.max(0, totalCardCycleBill - totalSettled) — true remaining bank bill
 }
 
 export interface MonthlyCardReserveSummary {
@@ -286,8 +289,11 @@ export function calculateMonthlyCardReserves(
     }
 
     const cycleBillAmount = Math.max(0, Math.round((cycleSpends - cycleRefunds) * 100) / 100);
+    const totalCardCycleSpends = Math.round((cycleSpends + excludedWifeUdhaar) * 100) / 100;
+    const totalCardCycleBill = Math.max(0, Math.round((totalCardCycleSpends - cycleRefunds) * 100) / 100);
     const cardTotalSettled = Math.round((paidFromCurrentIncome + paidFromPreviousSavings) * 100) / 100;
     const pendingReserve = Math.max(0, Math.round((cycleBillAmount - cardTotalSettled) * 100) / 100);
+    const totalCardCyclePending = Math.max(0, Math.round((totalCardCycleBill - cardTotalSettled) * 100) / 100);
 
     if (cycleBillAmount > 0 || cardTotalSettled > 0 || excludedWifeUdhaar > 0) {
       items.push({
@@ -303,6 +309,9 @@ export function calculateMonthlyCardReserves(
         totalSettled: cardTotalSettled,
         pendingReserve,
         excludedWifeUdhaar,
+        totalCardCycleSpends,
+        totalCardCycleBill,
+        totalCardCyclePending,
       });
     }
 
